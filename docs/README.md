@@ -150,6 +150,7 @@ FastAPI app on `127.0.0.1:8080`. Endpoints:
 | GET    | `/api/v1/payment/{id}/methods`    | none            | Per-currency addresses + amounts     |
 | GET    | `/api/v1/payment/{id}/status`     | none            | Poll for settlement                  |
 | POST   | `/api/v1/payment/webhook`         | BTCPay HMAC     | Settlement notifications             |
+| GET    | `/api/v1/regions`                 | none            | Regions with at least one active node |
 | GET    | `/api/v1/trial/challenge`         | none            | Proof-of-work challenge for a free trial |
 | POST   | `/api/v1/trial`                   | solved stamp    | Redeem it for a 1-month trial account |
 | GET    | `/api/v1/devices`                 | X-Account-Token | List devices on the account          |

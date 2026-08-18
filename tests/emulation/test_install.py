@@ -11,7 +11,7 @@ nginx 1.24 that Ubuntu 24.04 ships got through the first time.
 
 Skips (77) if nginx is not installed.
 """
-import os, shutil, subprocess, sys, tempfile
+import os, re, shutil, subprocess, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -174,6 +174,42 @@ try:
               [l for l in body.splitlines() if "$DOMAIN" in l or "$WEBROOT" in l][:3])
     check("[prod] the domain was substituted",
           "example.com" in globals().get("body_prod", ""))
+    print("\n[7] every systemd unit's dependencies are actually installed")
+    # A unit that references a script or env file nothing places is a timer
+    # that fails nightly on a real box and never in a test. Both the backup
+    # script and its env file went missing this way.
+    import glob as _glob
+    installer = open(INSTALL).read()
+    units = sorted(_glob.glob(os.path.join(H.REPO, "systemd", "*.service")))
+    check("systemd units found", bool(units))
+    for unit_path in units:
+        unit = os.path.basename(unit_path)
+        text = open(unit_path).read()
+
+        # Every EnvironmentFile needs a committed .example next to it.
+        for ef in re.findall(r"EnvironmentFile=-?(\S+)", text):
+            name = os.path.basename(ef).replace(".env", ".env.example")
+            check(f"{unit}: {os.path.basename(ef)} has an example",
+                  os.path.exists(os.path.join(H.REPO, "systemd", name)),
+                  f"expected systemd/{name}")
+
+        # Every executable it runs from /opt must be something we install.
+        for exe in re.findall(r"ExecStart=(\S+)", text):
+            if not exe.startswith("/opt/0trust"):
+                continue
+            rel = exe.replace("/opt/0trust/", "")
+            if rel.startswith("api/.venv/"):
+                continue  # created by the venv step
+            check(f"{unit}: installer places {rel}",
+                  os.path.basename(rel) in installer,
+                  f"{exe} is run by the unit but never installed")
+
+    # Units the installer knows about should exist in the repo.
+    for unit in re.findall(r"(0trust-[a-z]+\.(?:service|timer))", installer):
+        check(f"installer references a real unit: {unit}",
+              os.path.exists(os.path.join(H.REPO, "systemd", unit)),
+              f"systemd/{unit} missing")
+
 finally:
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL: print("  failures: " + ", ".join(FAIL))

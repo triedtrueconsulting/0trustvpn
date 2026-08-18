@@ -220,6 +220,30 @@ check nginx-anonymizes-ip "Access log uses anonymized client IP" -- bash -c "
     fi
 "
 
+check db-no-abandoned-signups "No unpaid signups retained past 7 days" -- bash -c "
+    [[ -f '$DB_PATH' ]] || exit 77
+    stale=\$(sqlite3 '$DB_PATH' \"
+        SELECT COUNT(*) FROM accounts
+        WHERE status = 'pending_payment'
+          AND created_at < strftime('%s','now') - 7*86400
+          AND id NOT IN (SELECT account_id FROM invoices WHERE status='settled');
+    \")
+    [[ \"\$stale\" == '0' ]] || {
+        echo \"\$stale abandoned signups kept past 7 days - is the sweeper running?\"
+        exit 1
+    }
+"
+
+check db-no-stale-trial-nonces "No trial nonces retained past 24h" -- bash -c "
+    [[ -f '$DB_PATH' ]] || exit 77
+    sqlite3 '$DB_PATH' 'SELECT 1 FROM trial_grants LIMIT 1;' >/dev/null 2>&1 || exit 0
+    stale=\$(sqlite3 '$DB_PATH' \"
+        SELECT COUNT(*) FROM trial_grants
+        WHERE redeemed_at < strftime('%s','now') - 86400;
+    \")
+    [[ \"\$stale\" == '0' ]] || { echo \"\$stale trial nonces kept past 24h\"; exit 1; }
+"
+
 check nginx-log-retention "Access log retention ≤ 7 days" -- bash -c "
     if [[ -f '$NGINX_LOG' ]]; then
         cnt=\$(ls /var/log/nginx/0trust-access.log* 2>/dev/null | wc -l)

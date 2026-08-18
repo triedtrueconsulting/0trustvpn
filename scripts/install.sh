@@ -127,6 +127,12 @@ if [[ $DRY_RUN -eq 0 ]]; then
         "$REPO_DIR/proxy/rewrite.py" \
         "$PREFIX/proxy/"
 
+    # 0trust-backup.service runs $PREFIX/scripts/backup.sh. Installing the
+    # unit without the script it invokes leaves a timer that fails nightly.
+    mkdir -p "$PREFIX/scripts"
+    install -o 0trust -g 0trust -m 0755 \
+        "$REPO_DIR/scripts/backup.sh" "$PREFIX/scripts/backup.sh"
+
     [[ -d "$VENV" ]] || sudo -u 0trust python3 -m venv "$VENV"
     sudo -u 0trust "$VENV/bin/pip" install --quiet --disable-pip-version-check \
         -r "$PREFIX/api/requirements.txt"
@@ -191,6 +197,14 @@ if [[ $DRY_RUN -eq 0 && ! -f "$ETC/proxy.env" ]]; then
     install -m 0640 -o root -g 0trust "$REPO_DIR/systemd/proxy.env.example" \
         "$ETC/proxy.env"
     ok "wrote $ETC/proxy.env"
+fi
+
+# 0trust-backup.service reads this unconditionally, so it has to exist even
+# though the timer stays disabled until an age key is generated.
+if [[ $DRY_RUN -eq 0 && ! -f "$ETC/backup.env" ]]; then
+    install -m 0640 -o root -g 0trust "$REPO_DIR/systemd/backup.env.example" \
+        "$ETC/backup.env"
+    ok "wrote $ETC/backup.env (timer stays disabled until you make an age key)"
 fi
 
 # ----------------------------------------------------------------------------

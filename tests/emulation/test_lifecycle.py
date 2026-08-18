@@ -179,12 +179,61 @@ try:
               (dev, int(time.time()), int(time.time()) + 86400))
     c.commit(); c.close()
 
+    # Things that used to grow without bound.
+    c = sqlite3.connect(DB)
+    old_ts = int(time.time()) - 30 * 86400
+    # An abandoned signup, and a paid one of the same age that must survive.
+    c.execute("INSERT INTO accounts (token_hash, created_at, status) "
+              "VALUES ('abandoned-hash', ?, 'pending_payment')", (old_ts,))
+    c.execute("INSERT INTO accounts (token_hash, created_at, expires_at, status) "
+              "VALUES ('paid-hash', ?, ?, 'active')",
+              (old_ts, int(time.time()) + 86400))
+    paid_id = c.execute("SELECT id FROM accounts WHERE token_hash='paid-hash'").fetchone()[0]
+    c.execute("INSERT INTO invoices (id, account_id, months, amount_usd, currency,"
+              " status, created_at) VALUES ('inv-paid', ?, 1, 5.0, 'USD', 'settled', ?)",
+              (paid_id, old_ts))
+    # A pending signup that is still fresh must also survive.
+    c.execute("INSERT INTO accounts (token_hash, created_at, status) "
+              "VALUES ('fresh-hash', ?, 'pending_payment')", (int(time.time()),))
+    c.execute("INSERT INTO trial_grants (nonce, issued_at, redeemed_at, source) "
+              "VALUES ('old-nonce', ?, ?, 'web')", (old_ts, old_ts))
+    c.execute("INSERT INTO trial_grants (nonce, issued_at, redeemed_at, source) "
+              "VALUES ('new-nonce', ?, ?, 'web')",
+              (int(time.time()), int(time.time())))
+    c.execute("INSERT INTO provision_tokens (token_hash, region, role, created_at,"
+              " expires_at, used_at) VALUES ('spent', 'zur', 'both', ?, ?, ?)",
+              (old_ts, old_ts + 3600, old_ts))
+    c.commit(); c.close()
+
     env = H.env_for_api(DB)
     sw = subprocess.run([sys.executable, os.path.join(H.REPO, "api", "sweep.py")],
                         env=env, capture_output=True, text=True, timeout=60)
     check("sweeper survives a dead node that still has a live hop_pair",
           sw.returncode == 0,
           f"exit={sw.returncode}\n{(sw.stderr or sw.stdout)[-700:]}")
+
+    c = sqlite3.connect(DB)
+    def has(sql, *a):
+        return c.execute(sql, a).fetchone() is not None
+    check("abandoned signup removed",
+          not has("SELECT 1 FROM accounts WHERE token_hash='abandoned-hash'"))
+    check("a PAID account of the same age is kept",
+          has("SELECT 1 FROM accounts WHERE token_hash='paid-hash'"))
+    check("a fresh pending signup is kept",
+          has("SELECT 1 FROM accounts WHERE token_hash='fresh-hash'"))
+    check("stale trial stamp pruned",
+          not has("SELECT 1 FROM trial_grants WHERE nonce='old-nonce'"))
+    check("recent trial stamp kept — it can still be replayed",
+          has("SELECT 1 FROM trial_grants WHERE nonce='new-nonce'"))
+    check("spent provisioning token pruned",
+          not has("SELECT 1 FROM provision_tokens WHERE token_hash='spent'"))
+    c.close()
+
+    # Idempotent: a second run must be a clean no-op, not a crash.
+    sw2 = subprocess.run([sys.executable, os.path.join(H.REPO, "api", "sweep.py")],
+                         env=env, capture_output=True, text=True, timeout=60)
+    check("a second sweep run is a clean no-op", sw2.returncode == 0,
+          (sw2.stderr or sw2.stdout)[-500:])
 
     print()
 finally:
