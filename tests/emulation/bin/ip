@@ -1,0 +1,8 @@
+#!/bin/bash
+echo "ip $*" >> "${STUB_LOG:-/dev/null}"
+S="${STUB_STATE:-/tmp}"
+if [ "$1" = "link" ] && [ "$2" = "show" ]; then
+  [ -f "$S/iface-$3.exists" ] && exit 0 || exit 1
+fi
+if [ "$1" = "link" ] && [ "$2" = "add" ]; then touch "$S/iface-$3.exists"; fi
+exit 0

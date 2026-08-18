@@ -149,6 +149,8 @@ FastAPI app on `127.0.0.1:8080`. Endpoints:
 | GET    | `/api/v1/payment/{id}/methods`    | none            | Per-currency addresses + amounts     |
 | GET    | `/api/v1/payment/{id}/status`     | none            | Poll for settlement                  |
 | POST   | `/api/v1/payment/webhook`         | BTCPay HMAC     | Settlement notifications             |
+| GET    | `/api/v1/devices`                 | X-Account-Token | List devices on the account          |
+| DELETE | `/api/v1/devices/{pubkey}`        | X-Account-Token | Deregister a device, free its slot   |
 | POST   | `/api/v1/wg/register`             | X-Account-Token | Register device, get peers (single- or multi-hop) |
 | POST   | `/api/v1/wg/rotate`               | X-Account-Token | Atomically swap to a fresh entry/exit pair        |
 | GET    | `/api/v1/wg/peers`                | X-Node-Psk      | Exit-node peer manifest              |
@@ -171,6 +173,19 @@ We don't roll our own. **BTCPay Server** on a separate host handles:
 
 - **Bitcoin** (watching-only via xpub — private keys never on the BTCPay box)
 - **Monero** (hot wallet — operator sweeps weekly to cold storage)
+
+Two idempotency rules hold the money and device paths together:
+
+- **`wg/register` is idempotent on the pubkey.** Clients persist their keypair,
+  so every reconnect presents the same key. That returns the device's existing
+  config and keeps its mesh IP rather than creating a second device.
+- **Each invoice is credited once.** BTCPay retries deliveries it didn't get a
+  2xx for, and the HMAC on a captured delivery stays valid indefinitely, so
+  settlement is guarded on `invoices.status` rather than on the signature.
+
+Devices are capped at 8 per account. `GET /api/v1/devices` shows what's
+registered and `DELETE /api/v1/devices/{pubkey}` releases a slot along with its
+mesh IP and any hop pair — from the CLI, `0trust devices` and `0trust remove`.
 
 BTCPay sends HMAC-signed webhooks to `/api/v1/payment/webhook`. On
 `InvoiceSettled` we mark the account active and extend `expires_at` by the
@@ -337,6 +352,23 @@ $ sudo 0trust rotate
   new pair:  entry=zur-07  exit=buc-04
   endpoint:  185.180.143.31:54219
   expires:   2026-05-26 04:00 UTC
+
+# See what's registered, free a slot
+$ 0trust devices
+3 of 8 device slots used
+
+* laptop               10.64.0.2        multi-hop zur-04 → buc-02
+    kZ8Q...w4A=
+    last seen 2026-05-24 09:12
+  phone                10.64.0.3        single-hop
+    b2Vh...T1E=
+  old-laptop           10.64.0.4        single-hop
+    9xQm...Lp0=
+
+* = this device
+
+$ 0trust remove 9xQm...Lp0=
+✓ removed 9xQm...Lp0=
 
 # Launch the GUI
 $ sudo 0trust gui

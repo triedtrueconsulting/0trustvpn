@@ -4,12 +4,28 @@
 
 Endpoints:
   POST   /api/v1/account            Create a new account (returns token + invoice)
-  GET    /api/v1/account/status     Check subscription status (auth: X-Token header)
+  GET    /api/v1/account/status     Check subscription status
   POST   /api/v1/account/topup      Extend existing subscription
   POST   /api/v1/payment/webhook    BTCPay Server webhook (HMAC-signed)
+  GET    /api/v1/devices            List devices on this account
+  DELETE /api/v1/devices/{pubkey}   Deregister a device, freeing its slot
   POST   /api/v1/wg/register        Register a device, get WireGuard config
-  GET    /api/v1/wg/peers           Mesh peer manifest (for nodes only, mTLS)
+  POST   /api/v1/wg/rotate          Rotate the entry/exit pair
+  GET    /api/v1/wg/peers           Mesh peer manifest (nodes only)
+  GET    /api/v1/wg/forwards        DNAT table for one entry node (nodes only)
+  POST   /api/v1/node/provision     One-shot ephemeral node registration
+  POST   /api/v1/node/heartbeat     Node liveness
+  GET    /api/v1/regions            Public region list
+  GET    /api/v1/status/public      Public, sanitized service health
   GET    /api/v1/health             Liveness probe
+
+Idempotency:
+  - wg/register is idempotent on the device pubkey. A client keeps its
+    keypair, so every reconnect re-presents the same key; that returns the
+    device's current config rather than trying to create a second row.
+  - The payment webhook credits each invoice exactly once. BTCPay retries
+    deliveries, and a captured delivery stays HMAC-valid forever, so the
+    settled marker is what makes crediting single-shot.
 
 Auth model:
   - The 16-character account token IS the credential.
@@ -52,6 +68,8 @@ BTCPAY_API_KEY = os.environ.get("BTCPAY_API_KEY", "")
 BTCPAY_WEBHOOK_SECRET = os.environ.get("BTCPAY_WEBHOOK_SECRET", "")
 MESH_NETWORK = os.environ.get("MESH_NETWORK", "10.64.0.0/10")  # ~4M addresses
 NODE_API_PSK = os.environ.get("NODE_API_PSK", "")  # mesh nodes auth with this
+DB_TIMEOUT_SECS = float(os.environ.get("ZTV_DB_TIMEOUT", "30"))
+MAX_DEVICES_PER_ACCOUNT = int(os.environ.get("ZTV_MAX_DEVICES", "8"))
 
 # Crockford-ish base32 alphabet: drops 0/O/1/I/L for unambiguous reading
 TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -144,8 +162,12 @@ CREATE TABLE IF NOT EXISTS provision_tokens (
 CREATE TABLE IF NOT EXISTS hop_pairs (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   device_id       INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-  entry_node      TEXT NOT NULL REFERENCES mesh_nodes(id),
-  exit_node       TEXT NOT NULL REFERENCES mesh_nodes(id),
+  -- ON DELETE CASCADE on the node refs too: when the sweeper reaps a dead
+  -- ephemeral node, any pair still pointing at it is already unroutable.
+  -- Without the cascade that DELETE raises FOREIGN KEY constraint failed and
+  -- takes the whole sweep run down with it.
+  entry_node      TEXT NOT NULL REFERENCES mesh_nodes(id) ON DELETE CASCADE,
+  exit_node       TEXT NOT NULL REFERENCES mesh_nodes(id) ON DELETE CASCADE,
   entry_port      INTEGER NOT NULL,
   created_at      INTEGER NOT NULL,
   expires_at      INTEGER NOT NULL,
@@ -160,13 +182,35 @@ CREATE INDEX IF NOT EXISTS idx_hop_pairs_expires ON hop_pairs(expires_at);
 
 
 @contextmanager
-def db():
-    conn = sqlite3.connect(DB_PATH, isolation_level=None)
+def db(write: bool = False):
+    """
+    Open a connection. Pass write=True for anything that allocates a scarce
+    resource (a mesh IP, an entry port, a node id) and then inserts it.
+
+    Those are read-then-write sequences, and SQLite's default deferred
+    transaction lets two workers read the same free slot and race to claim it.
+    The loser hits a UNIQUE constraint and the customer gets a 500. BEGIN
+    IMMEDIATE takes the write lock up front so the sequence is serialized;
+    busy_timeout makes the other worker wait for it instead of erroring.
+    """
+    conn = sqlite3.connect(DB_PATH, isolation_level=None, timeout=DB_TIMEOUT_SECS)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(f"PRAGMA busy_timeout={int(DB_TIMEOUT_SECS * 1000)}")
     conn.row_factory = sqlite3.Row
     try:
+        if write:
+            conn.execute("BEGIN IMMEDIATE")
         yield conn
+        if write:
+            conn.execute("COMMIT")
+    except BaseException:
+        if write:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+        raise
     finally:
         conn.close()
 
@@ -351,25 +395,29 @@ def require_active_account(account: dict = Depends(require_account)) -> dict:
 # MESH NODE AUTH (used by node-only endpoints below)
 # ----------------------------------------------------------------------------
 
-def require_node(x_node_psk: str = Header(...)) -> bool:
+def require_node(x_node_psk: str = Header(...)) -> Optional[str]:
     """
     Mesh nodes authenticate with X-Node-Psk. We accept two kinds:
       1. The global NODE_API_PSK env var (legacy / non-ephemeral nodes)
       2. A per-node PSK matching psk_hash in the mesh_nodes table (ephemeral)
-    Both end up authorizing a node call; the per-node form is preferred so
-    rotating one node's PSK doesn't require restarting the others.
+    The per-node form is preferred so rotating one node's PSK doesn't require
+    restarting the others.
+
+    Returns the node id when the credential identifies one, else None for the
+    shared PSK. Callers use that to scope a response to the calling node.
     """
-    if NODE_API_PSK and hmac.compare_digest(x_node_psk, NODE_API_PSK):
-        return True
-    # Match against per-node PSKs
+    # Match per-node PSKs first, so a node presenting its own credential is
+    # identified even if it also happens to equal the shared one.
     h = hashlib.sha256(x_node_psk.encode()).hexdigest()
     with db() as conn:
         row = conn.execute(
-            "SELECT 1 FROM mesh_nodes WHERE psk_hash = ? AND active = 1",
+            "SELECT id FROM mesh_nodes WHERE psk_hash = ? AND active = 1",
             (h,),
         ).fetchone()
     if row:
-        return True
+        return row["id"]
+    if NODE_API_PSK and hmac.compare_digest(x_node_psk, NODE_API_PSK):
+        return None
     raise HTTPException(401, "Invalid node credential")
 
 
@@ -480,15 +528,26 @@ def create_account(req: AccountCreateRequest):
     now = int(time.time())
     amount = PRICING[req.months]
 
-    with db() as conn:
+    with db(write=True) as conn:
         cur = conn.execute(
             "INSERT INTO accounts (token_hash, created_at, status) VALUES (?, ?, 'pending_payment')",
             (token_hash, now),
         )
         account_id = cur.lastrowid
 
+    # BTCPay is a network call — deliberately outside the transaction, since
+    # holding SQLite's write lock across a 10s HTTP timeout would stall every
+    # other writer. If it fails, take the account row back out rather than
+    # leaving an unreachable pending_payment row behind on every outage; the
+    # customer never received the token, so nothing is lost by removing it.
+    try:
         invoice = btcpay_create_invoice(account_id, req.months, amount)
+    except BaseException:
+        with db(write=True) as conn:
+            conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+        raise
 
+    with db(write=True) as conn:
         conn.execute(
             """INSERT INTO invoices
                  (id, account_id, months, amount_usd, currency, status, created_at)
@@ -528,7 +587,7 @@ def topup(req: AccountCreateRequest, account: dict = Depends(require_account)):
     invoice = btcpay_create_invoice(account["id"], req.months, amount)
     now = int(time.time())
 
-    with db() as conn:
+    with db(write=True) as conn:
         conn.execute(
             """INSERT INTO invoices
                  (id, account_id, months, amount_usd, currency, status, created_at)
@@ -537,7 +596,9 @@ def topup(req: AccountCreateRequest, account: dict = Depends(require_account)):
         )
 
     return AccountCreateResponse(
-        token="(existing)",
+        # No new token is minted on a top-up; the caller already holds theirs
+        # and we never store it in a form we could echo back.
+        token="",
         invoice_id=invoice["id"],
         checkout_url=invoice["checkoutLink"],
         amount_usd=amount,
@@ -629,7 +690,7 @@ async def btcpay_webhook(request: Request):
     if not invoice_id or not event_type:
         return {"ok": False}
 
-    with db() as conn:
+    with db(write=True) as conn:
         inv = conn.execute(
             "SELECT * FROM invoices WHERE id = ?", (invoice_id,)
         ).fetchone()
@@ -637,25 +698,43 @@ async def btcpay_webhook(request: Request):
             return {"ok": False, "reason": "unknown invoice"}
 
         if event_type == "InvoiceSettled":
+            # Credit each invoice EXACTLY once. BTCPay retries a delivery it
+            # didn't get a 2xx for, and re-sends on redelivery, so this handler
+            # sees duplicates in normal operation — and anyone who captured one
+            # signed delivery could otherwise replay it for unlimited free
+            # months, since the HMAC stays valid forever. The settled_at
+            # marker, not the signature, is what makes crediting single-shot.
+            if inv["status"] == "Settled":
+                return {"ok": True, "duplicate": True}
+
             now = int(time.time())
             acc = conn.execute(
                 "SELECT * FROM accounts WHERE id = ?", (inv["account_id"],)
             ).fetchone()
+            if not acc:
+                return {"ok": False, "reason": "unknown account"}
             base = max(acc["expires_at"], now)
             new_expiry = base + inv["months"] * 30 * 86400
+            # Guard the credit on the invoice still being uncredited, so two
+            # concurrent deliveries of the same invoice can't both apply.
+            cur = conn.execute(
+                """UPDATE invoices SET status = 'Settled', settled_at = ?
+                   WHERE id = ? AND status != 'Settled'""",
+                (now, invoice_id),
+            )
+            if cur.rowcount == 0:
+                return {"ok": True, "duplicate": True}
             conn.execute(
                 """UPDATE accounts
                    SET status = 'active', expires_at = ?
                    WHERE id = ?""",
                 (new_expiry, acc["id"]),
             )
-            conn.execute(
-                "UPDATE invoices SET status = 'Settled', settled_at = ? WHERE id = ?",
-                (now, invoice_id),
-            )
         elif event_type in ("InvoiceExpired", "InvoiceInvalid"):
+            # Never walk a settled invoice backwards — BTCPay can emit an
+            # Expired event for an invoice that settled late.
             conn.execute(
-                "UPDATE invoices SET status = ? WHERE id = ?",
+                "UPDATE invoices SET status = ? WHERE id = ? AND status != 'Settled'",
                 (event_type.replace("Invoice", ""), invoice_id),
             )
 
@@ -782,6 +861,58 @@ def _multihop_response(mesh_ip: str, pair: dict) -> WGRegisterResponse:
     )
 
 
+def _single_hop_peers(conn, region: str) -> list:
+    """
+    Up to 3 exit-capable peers, preferring the requested region and falling
+    back to any region so a single dead node doesn't strand the customer.
+    """
+    peers = conn.execute(
+        """SELECT id, pubkey, endpoint, region
+           FROM mesh_nodes
+           WHERE active = 1
+             AND region = ?
+             AND (role = 'exit' OR role = 'both')
+           ORDER BY capacity DESC
+           LIMIT 3""",
+        (region,),
+    ).fetchall()
+    if not peers:
+        peers = conn.execute(
+            """SELECT id, pubkey, endpoint, region
+               FROM mesh_nodes
+               WHERE active = 1 AND (role = 'exit' OR role = 'both')
+               ORDER BY capacity DESC
+               LIMIT 3"""
+        ).fetchall()
+    if not peers:
+        # _validate_regions only proves the region has SOME active node. If
+        # every one of them is entry-only there is nothing to terminate a
+        # tunnel, and returning 200 with an empty peer list just moves the
+        # failure into the client — where `resp.Peers[0]` panics.
+        raise HTTPException(503, "No exit nodes are currently available")
+    return peers
+
+
+def _single_hop_response(mesh_ip: str, peers: list) -> WGRegisterResponse:
+    return WGRegisterResponse(
+        interface_ip=f"{mesh_ip}/32",
+        dns=["10.64.0.1"],
+        peers=[
+            {
+                "id": p["id"],
+                "public_key": p["pubkey"],
+                "endpoint": p["endpoint"],
+                "allowed_ips": ["0.0.0.0/0", "::/0"],
+                "persistent_keepalive": 25,
+            }
+            for p in peers
+        ],
+        multihop=False,
+        entry_node=peers[0]["id"],
+        exit_node=peers[0]["id"],
+    )
+
+
 @app.post("/api/v1/wg/register", response_model=WGRegisterResponse)
 def wg_register(
     req: WGRegisterRequest,
@@ -799,73 +930,134 @@ def wg_register(
                   forwards that UDP port to the exit's WireGuard listener.
                   Entry cannot decrypt; exit cannot see client IP.
     """
-    with db() as conn:
+    with db(write=True) as conn:
         # Validate the requested region(s) actually exist as active nodes.
         # Without this, a malformed client could register a device pinned to
         # a nonexistent region, which then silently fails to connect.
         _validate_regions(conn, req.region, req.exit_region)
 
-        # device cap
-        n_devices = conn.execute(
-            "SELECT COUNT(*) AS n FROM devices WHERE account_id = ?",
-            (account["id"],),
-        ).fetchone()["n"]
-        if n_devices >= 8:
-            raise HTTPException(409, "Device limit reached (8)")
+        # Registration is idempotent on the pubkey. The client keeps its
+        # keypair in state.json, so every `0trust connect` after the first
+        # re-sends the same key — which used to hit the UNIQUE index on
+        # devices.pubkey and surface as a 500. A device re-presenting its key
+        # is asking for its current config, so hand it back and keep the
+        # existing mesh IP (changing it would break the running tunnel).
+        existing = conn.execute(
+            "SELECT * FROM devices WHERE pubkey = ?", (req.pubkey,)
+        ).fetchone()
 
-        mesh_ip = allocate_mesh_ip(conn)
         now = int(time.time())
-        cur = conn.execute(
-            """INSERT INTO devices
-                 (account_id, pubkey, device_name, created_at, mesh_ip)
-               VALUES (?, ?, ?, ?, ?)""",
-            (account["id"], req.pubkey, req.device_name, now, mesh_ip),
-        )
-        device_id = cur.lastrowid
+        if existing:
+            if existing["account_id"] != account["id"]:
+                # Someone else's key. Never leak that it exists elsewhere.
+                raise HTTPException(409, "Device key already in use")
+            device_id = existing["id"]
+            mesh_ip = existing["mesh_ip"]
+            conn.execute(
+                "UPDATE devices SET device_name = ?, last_seen = ? WHERE id = ?",
+                (req.device_name, now, device_id),
+            )
+        else:
+            n_devices = conn.execute(
+                "SELECT COUNT(*) AS n FROM devices WHERE account_id = ?",
+                (account["id"],),
+            ).fetchone()["n"]
+            if n_devices >= MAX_DEVICES_PER_ACCOUNT:
+                raise HTTPException(
+                    409,
+                    f"Device limit reached ({MAX_DEVICES_PER_ACCOUNT}). "
+                    f"Remove one with DELETE /api/v1/devices/{{pubkey}}.",
+                )
+            mesh_ip = allocate_mesh_ip(conn)
+            cur = conn.execute(
+                """INSERT INTO devices
+                     (account_id, pubkey, device_name, created_at, last_seen, mesh_ip)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (account["id"], req.pubkey, req.device_name, now, now, mesh_ip),
+            )
+            device_id = cur.lastrowid
 
         # ------------- MULTI-HOP -------------
         if req.exit_region:
-            pair = _allocate_hop_pair(conn, device_id, req.region, req.exit_region)
+            prior = conn.execute(
+                "SELECT id FROM hop_pairs WHERE device_id = ?", (device_id,)
+            ).fetchone()
+            pair = _allocate_hop_pair(
+                conn, device_id, req.region, req.exit_region,
+                prior_pair_id=prior["id"] if prior else None,
+            )
             return _multihop_response(mesh_ip, pair)
 
-        # ------------- SINGLE-HOP (legacy / default) -------------
-        peers = conn.execute(
-            """SELECT id, pubkey, endpoint, region
-               FROM mesh_nodes
-               WHERE active = 1
-                 AND region = ?
-                 AND (role = 'exit' OR role = 'both')
-               ORDER BY capacity DESC
-               LIMIT 3""",
-            (req.region,),
+        # ------------- SINGLE-HOP (default) -------------
+        # Re-registering single-hop retires any multi-hop pair, otherwise the
+        # entry node keeps a DNAT rule for a session the client abandoned.
+        conn.execute("DELETE FROM hop_pairs WHERE device_id = ?", (device_id,))
+        return _single_hop_response(mesh_ip, _single_hop_peers(conn, req.region))
+
+
+class DeviceInfo(BaseModel):
+    pubkey: str
+    device_name: str
+    mesh_ip: str
+    created_at: int
+    last_seen: int
+    multihop: bool = False
+    entry_node: str | None = None
+    exit_node: str | None = None
+
+
+@app.get("/api/v1/devices", response_model=list[DeviceInfo])
+def list_devices(account: dict = Depends(require_account)):
+    """
+    The devices on this account. Needed to make the device cap survivable:
+    without a way to see what is registered, a customer who hits the limit
+    has no way to work out which slot to free.
+    """
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT d.pubkey, d.device_name, d.mesh_ip, d.created_at, d.last_seen,
+                      hp.entry_node, hp.exit_node
+               FROM devices d
+               LEFT JOIN hop_pairs hp ON hp.device_id = d.id
+               WHERE d.account_id = ?
+               ORDER BY d.created_at""",
+            (account["id"],),
         ).fetchall()
+    return [
+        DeviceInfo(
+            pubkey=r["pubkey"],
+            device_name=r["device_name"] or "",
+            mesh_ip=r["mesh_ip"],
+            created_at=r["created_at"],
+            last_seen=r["last_seen"],
+            multihop=r["entry_node"] is not None,
+            entry_node=r["entry_node"],
+            exit_node=r["exit_node"],
+        )
+        for r in rows
+    ]
 
-        if not peers:
-            peers = conn.execute(
-                """SELECT id, pubkey, endpoint, region
-                   FROM mesh_nodes
-                   WHERE active = 1 AND (role = 'exit' OR role = 'both')
-                   ORDER BY capacity DESC
-                   LIMIT 3"""
-            ).fetchall()
 
-    return WGRegisterResponse(
-        interface_ip=f"{mesh_ip}/32",
-        dns=["10.64.0.1"],
-        peers=[
-            {
-                "id": p["id"],
-                "public_key": p["pubkey"],
-                "endpoint": p["endpoint"],
-                "allowed_ips": ["0.0.0.0/0", "::/0"],
-                "persistent_keepalive": 25,
-            }
-            for p in peers
-        ],
-        multihop=False,
-        entry_node=peers[0]["id"] if peers else None,
-        exit_node=peers[0]["id"] if peers else None,
-    )
+@app.delete("/api/v1/devices/{pubkey:path}")
+def delete_device(pubkey: str, account: dict = Depends(require_account)):
+    """
+    Deregister a device and release its mesh IP and any hop pair.
+
+    Note the {pubkey:path} converter — WireGuard public keys are standard
+    base64 and routinely contain '/', which a normal path segment would split.
+    """
+    with db(write=True) as conn:
+        row = conn.execute(
+            "SELECT id FROM devices WHERE pubkey = ? AND account_id = ?",
+            (pubkey, account["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Device not found")
+        # hop_pairs has ON DELETE CASCADE from devices, but be explicit so the
+        # entry port is released even on a DB created before that was added.
+        conn.execute("DELETE FROM hop_pairs WHERE device_id = ?", (row["id"],))
+        conn.execute("DELETE FROM devices WHERE id = ?", (row["id"],))
+    return {"ok": True, "deleted": pubkey}
 
 
 class WGRotateRequest(BaseModel):
@@ -893,7 +1085,7 @@ def wg_rotate(
     For single-hop devices (no existing hop_pair), this is a no-op that
     returns the current single-hop config.
     """
-    with db() as conn:
+    with db(write=True) as conn:
         device = conn.execute(
             "SELECT * FROM devices WHERE pubkey = ? AND account_id = ?",
             (req.pubkey, account["id"]),
@@ -929,25 +1121,15 @@ def wg_rotate(
             )
             return _multihop_response(device["mesh_ip"], pair)
 
-        # No prior pair and no exit_region: fall back to single-hop
-        peers = conn.execute(
-            """SELECT id, pubkey, endpoint FROM mesh_nodes
-               WHERE active = 1 AND region = ?
-                 AND (role = 'exit' OR role = 'both')
-               ORDER BY capacity DESC LIMIT 3""",
-            (req.region,),
-        ).fetchall()
-        return WGRegisterResponse(
-            interface_ip=f"{device['mesh_ip']}/32",
-            dns=["10.64.0.1"],
-            peers=[
-                {
-                    "id": p["id"], "public_key": p["pubkey"],
-                    "endpoint": p["endpoint"],
-                    "allowed_ips": ["0.0.0.0/0", "::/0"],
-                    "persistent_keepalive": 25,
-                } for p in peers
-            ],
+        # No prior pair and no exit_region: fall back to single-hop.
+        # Shares _single_hop_peers with register so the "no exit node" case
+        # 503s here too instead of returning an empty peer list.
+        conn.execute(
+            "UPDATE devices SET last_seen = ? WHERE id = ?",
+            (int(time.time()), device["id"]),
+        )
+        return _single_hop_response(
+            device["mesh_ip"], _single_hop_peers(conn, req.region)
         )
 
 
@@ -1000,7 +1182,10 @@ def node_provision(req: NodeProvisionRequest, request: Request):
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     now = int(time.time())
 
-    with db() as conn:
+    # write=True: _next_node_id reads the existing ids and then inserts one,
+    # and burning the token has to land in the same transaction as the insert
+    # or a crash between them leaves a spent token with no node.
+    with db(write=True) as conn:
         row = conn.execute(
             "SELECT * FROM provision_tokens WHERE token_hash = ?",
             (token_hash,),
@@ -1039,8 +1224,16 @@ def node_provision(req: NodeProvisionRequest, request: Request):
     return NodeProvisionResponse(node_id=node_id, node_psk=node_psk)
 
 
+class NodeHeartbeatRequest(BaseModel):
+    node_id: str | None = None
+
+
 @app.post("/api/v1/node/heartbeat")
-def node_heartbeat(request: Request, _: bool = Depends(require_node)):
+def node_heartbeat(
+    request: Request,
+    body: NodeHeartbeatRequest | None = None,
+    _: Optional[str] = Depends(require_node),
+):
     """
     Ephemeral nodes call this every ~60s. If a node hasn't checked in for
     5 minutes, the sweeper marks it inactive and customers stop being
@@ -1049,16 +1242,35 @@ def node_heartbeat(request: Request, _: bool = Depends(require_node)):
     # Identify the node by matching the PSK against psk_hash.
     psk = request.headers.get("X-Node-Psk", "")
     psk_hash = hashlib.sha256(psk.encode()).hexdigest()
-    with db() as conn:
-        conn.execute(
+    node_id_hint = body.node_id if body else None
+    with db(write=True) as conn:
+        cur = conn.execute(
             "UPDATE mesh_nodes SET last_heartbeat = ? WHERE psk_hash = ?",
             (int(time.time()), psk_hash),
         )
+        if cur.rowcount == 0:
+            # A node authenticating with the shared NODE_API_PSK has no
+            # psk_hash row to match, so this UPDATE used to hit nothing and
+            # still answer {"ok": true} — a node could "heartbeat" forever
+            # while the control plane recorded nothing. Let it name itself.
+            node_id = (node_id_hint or "").strip()
+            if not node_id:
+                raise HTTPException(
+                    400,
+                    "Heartbeat could not be attributed to a node. Send a "
+                    "per-node PSK, or pass node_id when using the shared PSK.",
+                )
+            cur = conn.execute(
+                "UPDATE mesh_nodes SET last_heartbeat = ? WHERE id = ?",
+                (int(time.time()), node_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Unknown node")
     return {"ok": True}
 
 
 @app.get("/api/v1/wg/peers")
-def list_peers(_: bool = Depends(require_node)):
+def list_peers(_: Optional[str] = Depends(require_node)):
     """
     Mesh nodes call this periodically to sync their peer list.
     Returns all active devices so the node can authorize their pubkeys.
@@ -1078,7 +1290,7 @@ def list_peers(_: bool = Depends(require_node)):
 
 
 @app.get("/api/v1/wg/forwards")
-def list_forwards(node_id: str, _: bool = Depends(require_node)):
+def list_forwards(node_id: str, caller: Optional[str] = Depends(require_node)):
     """
     Multi-hop DNAT rules for an entry node.
 
@@ -1089,6 +1301,12 @@ def list_forwards(node_id: str, _: bool = Depends(require_node)):
     Only active subscriptions are returned, so expired devices' forwards
     fall out of the rule set on the next sync.
     """
+    # A node identified by its own PSK may only read its own DNAT table.
+    # Otherwise any one node could enumerate every other entry node's live
+    # sessions and their exit endpoints.
+    if caller is not None and caller != node_id:
+        raise HTTPException(403, "A node may only read its own forwards")
+
     with db() as conn:
         rows = conn.execute(
             """SELECT hp.entry_port, mn.endpoint AS exit_endpoint
@@ -1154,14 +1372,22 @@ def public_status() -> dict:
         regions = []
         any_unhealthy = False
         for r in rows:
-            # Status bucket — we never expose raw counts, only a 3-state health
+            # Status bucket — we never expose raw counts, only a 3-state health.
+            #
+            # The bar is "can this region carry traffic", not "does it have a
+            # spare". Three nodes, one per region, is the locked production
+            # topology, so a redundancy floor of 2 marked every region degraded
+            # forever — a status page that always cries wolf is worse than none,
+            # and for a product selling verifiable honesty it reads as broken.
             entries = r["entries"]
             exits = r["exits"]
             if entries == 0 and exits == 0:
                 state = "down"
                 any_unhealthy = True
-            elif entries < 2 or exits < 2:
-                # Below redundancy floor; still serving but no headroom
+            elif entries == 0 or exits == 0:
+                # Half a region: can be an entry but not an exit, or vice
+                # versa. Multi-hop may still route through it; single-hop
+                # customers here cannot terminate a tunnel.
                 state = "degraded"
                 any_unhealthy = True
             else:

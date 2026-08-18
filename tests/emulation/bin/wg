@@ -1,0 +1,13 @@
+#!/bin/bash
+echo "wg $*" >> "${STUB_LOG:-/dev/null}"
+case "$1" in
+  genkey) head -c32 /dev/urandom | base64 ;;
+  pubkey) priv=$(cat); printf '%s' "$priv" | sha256sum | head -c44 | tr '/+' 'ab' ; echo ;;
+  syncconf)
+      # $3 is the config path — snapshot it so tests can assert on peer sync
+      cp "$3" "${STUB_STATE:-/tmp}/wg-synced-$2.conf" 2>/dev/null
+      echo "wg syncconf $2 <$(grep -c '^\[Peer\]' "$3" 2>/dev/null || echo 0) peers>" >> "${STUB_LOG:-/dev/null}"
+      ;;
+  set|show) : ;;
+esac
+exit 0

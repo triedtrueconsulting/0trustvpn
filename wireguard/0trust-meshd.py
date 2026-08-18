@@ -137,7 +137,18 @@ def build_nft_ruleset(forwards: list[dict]) -> str:
         "  }",
         "  chain postrouting {",
         "    type nat hook postrouting priority srcnat;",
-        "    udp sport >= 52000 udp sport <= 59999 masquerade",
+        # Masquerade exactly the connections prerouting just DNAT'd.
+        #
+        # The old rule matched `udp sport 52000-59999`, but by postrouting the
+        # source port is the CLIENT's ephemeral port — the 52000-59999 value
+        # was the destination port, and DNAT already rewrote it. So the rule
+        # almost never matched, and an unmasqueraded packet reaches the exit
+        # carrying the client's real source address: the exit replies straight
+        # to the client instead of back through the entry (breaking the
+        # tunnel), and it learns the client IP the multi-hop design exists to
+        # hide from it. `ct status dnat` selects precisely the forwarded
+        # flows, whatever ports they landed on.
+        "    ct status dnat masquerade",
         "  }",
         "}",
     ]
@@ -189,17 +200,27 @@ def do_entry_sync(state: dict) -> None:
 
 
 def heartbeat() -> None:
-    """Tell the control plane we're alive. Best-effort; failures don't block sync."""
+    """
+    Tell the control plane we're alive. Best-effort; failures don't block sync.
+
+    Always send node_id. An ephemeral node's per-node PSK identifies it on its
+    own, but a static node authenticating with the shared NODE_API_PSK has no
+    psk_hash row to match, so without the id the control plane cannot tell
+    which node just checked in.
+    """
+    body = json.dumps({"node_id": NODE_ID}).encode()
     req = urllib.request.Request(
         f"{CONTROL_URL}/api/v1/node/heartbeat",
-        data=b"{}",
+        data=body,
         headers={"X-Node-Psk": NODE_PSK, "Content-Type": "application/json"},
         method="POST",
     )
     try:
         urllib.request.urlopen(req, timeout=5).read()
     except Exception as e:
-        log.debug("heartbeat failed: %s", e)
+        # Warn, not debug: a heartbeat that never lands means the sweeper
+        # eventually marks this node dead and traffic stops being routed here.
+        log.warning("heartbeat failed: %s", e)
 
 
 def main():

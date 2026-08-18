@@ -41,9 +41,10 @@ def main():
         sys.exit(1)
 
     now = int(time.time())
-    conn = sqlite3.connect(DB_PATH, isolation_level=None)
+    conn = sqlite3.connect(DB_PATH, isolation_level=None, timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=30000")
 
     # ---- 1. Expire accounts ----
     cur = conn.execute(
@@ -97,6 +98,29 @@ def main():
     # Garbage-collect inactive ephemeral rows older than 1 hour.
     # Customers won't be routed to them; keeping them around is just clutter.
     gc_threshold = now - 3600
+    #
+    # Drop the hop_pairs pointing at those nodes FIRST. A pair has a 24h TTL
+    # but a node can die an hour into it, so a live pair routinely outlives
+    # the node it names. hop_pairs.entry_node/exit_node reference mesh_nodes,
+    # and on any database created before those refs gained ON DELETE CASCADE
+    # the node DELETE below raises FOREIGN KEY constraint failed — which
+    # aborted the whole sweep, so account expiry and device release silently
+    # stopped running too. Doing it explicitly is also the correct behaviour
+    # in its own right: a pair through a dead node cannot carry traffic.
+    cur = conn.execute(
+        """DELETE FROM hop_pairs
+           WHERE entry_node IN (
+                   SELECT id FROM mesh_nodes
+                   WHERE ephemeral = 1 AND active = 0 AND last_heartbeat < ?)
+              OR exit_node IN (
+                   SELECT id FROM mesh_nodes
+                   WHERE ephemeral = 1 AND active = 0 AND last_heartbeat < ?)""",
+        (gc_threshold, gc_threshold),
+    )
+    n_orphan_pairs = cur.rowcount
+    if n_orphan_pairs:
+        log.info("released %d hop_pairs routed through dead nodes", n_orphan_pairs)
+
     cur = conn.execute(
         """DELETE FROM mesh_nodes
            WHERE ephemeral = 1
@@ -108,7 +132,7 @@ def main():
     if n_gc_nodes:
         log.info("garbage-collected %d dead ephemeral nodes", n_gc_nodes)
 
-    # ---- 4. Drop devices belonging to long-dead accounts ----
+    # ---- 5. Drop devices belonging to long-dead accounts ----
     # If an account has been expired for >7 days, drop its devices so they
     # release their mesh IPs back to the pool.
     week_ago = now - 7 * 86400
@@ -124,6 +148,16 @@ def main():
     n_devices = cur.rowcount
     if n_devices:
         log.info("released %d devices from expired accounts", n_devices)
+
+    # ---- 6. Release hop_pairs whose node references have gone stale ----
+    # Belt and braces for a control plane where a node row was removed by hand.
+    cur = conn.execute(
+        """DELETE FROM hop_pairs
+           WHERE entry_node NOT IN (SELECT id FROM mesh_nodes)
+              OR exit_node  NOT IN (SELECT id FROM mesh_nodes)"""
+    )
+    if cur.rowcount:
+        log.info("released %d hop_pairs with dangling node refs", cur.rowcount)
 
     log.info("sweep complete")
     conn.close()

@@ -3,9 +3,9 @@
 // Implementation strategy varies by platform:
 //   - Linux:   shells out to wg-quick(8) + wg(8)
 //   - macOS:   shells out to wg-quick(8) + wg(8) (via Homebrew or
-//              the WireGuard for macOS app's CLI tools)
+//     the WireGuard for macOS app's CLI tools)
 //   - Windows: integrates with WireGuard for Windows via the tunnel
-//              service IPC (wireguard.exe /installtunnelservice)
+//     service IPC (wireguard.exe /installtunnelservice)
 //
 // Keys are now generated in pure Go (Curve25519) so the binary does not
 // depend on `wg(8)` being in PATH just to mint a keypair — that lets the

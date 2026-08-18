@@ -92,6 +92,11 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   terms (web/terms.html), and audit pack (docs/AUDIT.md) all make the SAME
   claims. If you change what the system collects/retains, you MUST update all
   three, and `scripts/audit-verify.sh` must still pass. See discipline note below.
+- **Device registration is idempotent on the pubkey.** Clients persist their
+  keypair, so reconnects re-present the same key. Registering it again returns
+  the existing device's config and keeps its mesh IP; it never creates a second
+  device or errors. Deregistering is `DELETE /api/v1/devices/{pubkey}` — the
+  8-device cap needs an exit or customers get permanently stuck.
 - **The GUI is browser-based, not native.** `0trust gui` runs a localhost web
   server; it's the same code on all 3 desktop OSes. No system tray (v0.2 —
   systray libs were blocked in the original build env). No kill switch (v0.2).
@@ -174,8 +179,24 @@ code, actively check for them:
    expiry). If you change data handling, reconcile privacy.html + terms.html +
    AUDIT.md + audit-verify.sh together. Be honest over reassuring.
 5. **Empty-slice panics.** `resp.Peers[0]` panics if the peer list is empty.
-   Guard with `len(...) > 0` before indexing API responses.
-6. **Platform-specific Go.** `wg_unix.go` / `wg_windows.go` are build-tagged.
+   Guard with `len(...) > 0` before indexing API responses. The API no longer
+   hands back an empty peer list — `_single_hop_peers()` raises 503 instead —
+   but the client guard stays as defence in depth.
+6. **Read-then-write races.** Allocating a mesh IP, an entry port or a node id
+   is a read of what's free followed by an insert. Under more than one uvicorn
+   worker two requests read the same free slot and one dies on a UNIQUE
+   constraint — a 500 for the customer. Any handler that allocates must take
+   `db(write=True)`, which opens BEGIN IMMEDIATE.
+7. **Replayable side effects.** The payment webhook is the sharp one: BTCPay
+   retries deliveries and the HMAC on a captured delivery never expires, so
+   crediting has to be guarded on stored state (`invoices.status`), not on the
+   signature being valid.
+8. **Foreign keys in scheduled jobs.** `hop_pairs` references `mesh_nodes`.
+   The sweeper deletes dead nodes, and a 24h pair routinely outlives the node
+   it names, so the delete has to clear dependent pairs first — otherwise it
+   raises and takes the rest of the sweep (account expiry, device release)
+   down with it.
+9. **Platform-specific Go.** `wg_unix.go` / `wg_windows.go` are build-tagged.
    `checkRoot()` returns nil on Windows (UAC handles elevation), requires
    euid 0 on Unix. Always cross-compile all 6 targets after touching wg or gui.
 

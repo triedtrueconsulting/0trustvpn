@@ -2,8 +2,9 @@
 // and any cached server info.
 //
 // State lives in:
-//   Linux/macOS:  ~/.config/0trust/state.json   (mode 0600)
-//   Windows:      %APPDATA%\0trust\state.json
+//
+//	Linux/macOS:  ~/.config/0trust/state.json   (mode 0600)
+//	Windows:      %APPDATA%\0trust\state.json
 package config
 
 import (
@@ -26,7 +27,7 @@ type State struct {
 	// Multi-hop session state — populated after connect/rotate
 	EntryRegion string `json:"entry_region,omitempty"`
 	ExitRegion  string `json:"exit_region,omitempty"`
-	ExpiresAt   int64  `json:"expires_at,omitempty"`     // hop pair expiry (epoch s)
+	ExpiresAt   int64  `json:"expires_at,omitempty"` // hop pair expiry (epoch s)
 }
 
 func configDir() (string, error) {

@@ -1,13 +1,14 @@
 // 0trust — VPN client
 //
 // Usage:
-//   0trust login           Enter your account token (stored locally)
-//   0trust status          Show subscription + tunnel state
-//   0trust regions         List available mesh regions
-//   0trust connect [region]   Bring up the tunnel
-//   0trust disconnect      Tear down the tunnel
-//   0trust logout          Wipe local state
-//   0trust version
+//
+//	0trust login           Enter your account token (stored locally)
+//	0trust status          Show subscription + tunnel state
+//	0trust regions         List available mesh regions
+//	0trust connect [region]   Bring up the tunnel
+//	0trust disconnect      Tear down the tunnel
+//	0trust logout          Wipe local state
+//	0trust version
 //
 // Run with sudo for connect/disconnect (needs CAP_NET_ADMIN).
 package main
@@ -61,6 +62,10 @@ func main() {
 		err = cmdConnect(region, exitRegion)
 	case "rotate":
 		err = cmdRotate()
+	case "devices":
+		err = cmdDevices()
+	case "remove":
+		err = cmdRemoveDevice(args)
 	case "export":
 		err = cmdExport(args)
 	case "gui":
@@ -68,7 +73,9 @@ func main() {
 		// via desktop shortcut where the browser opens itself)
 		open := true
 		for _, a := range args {
-			if a == "--no-browser" { open = false }
+			if a == "--no-browser" {
+				open = false
+			}
 		}
 		err = gui.Serve(open)
 	case "disconnect":
@@ -107,6 +114,9 @@ COMMANDS
                                    --exit:  enable multi-hop; exit region
   rotate                         Rotate to a fresh entry/exit pair
                                    (only meaningful for multi-hop)
+  devices                        List devices registered on this account
+  remove <pubkey|this>           Deregister a device and free its slot
+                                   ("this" removes the device you're on)
   export [flags]                 Create a config + QR for a mobile device
                                    --region <r>   entry region (default zur)
                                    --exit   <r>   multi-hop exit region
@@ -437,6 +447,89 @@ func cmdExport(args []string) error {
 	fmt.Println("⚠ The .conf file and QR code contain a private key.")
 	fmt.Println("  Treat them like a password — share them only with the device you're provisioning.")
 	return nil
+}
+
+// cmdDevices lists what's registered. The account is capped at 8 devices, so
+// there has to be a way to see which slots are taken before freeing one.
+func cmdDevices() error {
+	st, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if st.Token == "" {
+		return fmt.Errorf("not logged in — run: 0trust login")
+	}
+	devices, err := api.New(st.APIBase, st.Token).Devices()
+	if err != nil {
+		return err
+	}
+	if len(devices) == 0 {
+		fmt.Println("no devices registered")
+		return nil
+	}
+	fmt.Printf("%d of 8 device slots used\n\n", len(devices))
+	for _, d := range devices {
+		marker := "  "
+		if d.Pubkey == st.PublicKey {
+			marker = "* " // the device you're running on
+		}
+		route := "single-hop"
+		if d.Multihop {
+			route = fmt.Sprintf("multi-hop %s → %s", d.EntryNode, d.ExitNode)
+		}
+		fmt.Printf("%s%-20s %-16s %s\n", marker, truncate(d.DeviceName, 20), d.MeshIP, route)
+		fmt.Printf("    %s\n", d.Pubkey)
+		if d.LastSeen > 0 {
+			fmt.Printf("    last seen %s\n", time.Unix(d.LastSeen, 0).Format("2006-01-02 15:04"))
+		}
+	}
+	fmt.Println("\n* = this device")
+	return nil
+}
+
+func cmdRemoveDevice(args []string) error {
+	st, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if st.Token == "" {
+		return fmt.Errorf("not logged in — run: 0trust login")
+	}
+	if len(args) < 1 {
+		return fmt.Errorf("usage: 0trust remove <pubkey|this>  (see: 0trust devices)")
+	}
+	target := args[0]
+	if target == "this" {
+		if st.PublicKey == "" {
+			return fmt.Errorf("this device isn't registered yet")
+		}
+		target = st.PublicKey
+	}
+	if err := api.New(st.APIBase, st.Token).DeleteDevice(target); err != nil {
+		return err
+	}
+	fmt.Printf("✓ removed %s\n", target)
+	if target == st.PublicKey {
+		// The key is gone server-side; drop it locally so the next connect
+		// registers cleanly instead of re-presenting a key that no longer
+		// resolves to a device.
+		st.PrivateKey, st.PublicKey, st.InterfaceIP = "", "", ""
+		if err := st.Save(); err != nil {
+			return err
+		}
+		fmt.Println("  local key cleared — next connect will register a new device")
+	}
+	return nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if n <= 1 {
+		return s[:n]
+	}
+	return s[:n-1] + "…"
 }
 
 func cmdDisconnect() error {

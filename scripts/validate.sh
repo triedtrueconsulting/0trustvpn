@@ -88,6 +88,10 @@ check go-vet "go vet across the client" -- \
 check go-test "go test ./..." -- \
     bash -c 'cd client && CGO_ENABLED=0 go test ./...'
 
+check go-fmt "client is gofmt clean" -- bash -c '
+    out=$(cd client && gofmt -l .)
+    [ -z "$out" ] || { echo "needs gofmt:"; echo "$out"; exit 1; }'
+
 check go-crosscompile "all six release targets build" -- bash -c '
     cd client
     for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 \
@@ -128,6 +132,14 @@ if bad:
 check api-smoke "control plane end-to-end" -- bash -c "
     \"$PY\" -c 'import fastapi' >/dev/null 2>&1 || exit 77
     \"$PY\" api/smoke_test.py"
+
+# Boots the real stack — control plane, meshd, the compiled client — and
+# drives it. Slower than the rest of the battery put together and worth it:
+# every bug this suite was written for was invisible to a parse check.
+check emulation "full-stack emulation suite" -- bash -c "
+    \"$PY\" -c 'import fastapi' >/dev/null 2>&1 || exit 77
+    command -v go >/dev/null || exit 77
+    \"$PY\" tests/emulation/run.py"
 
 # ----------------------------------------------------------------------------
 # Scripts and markup

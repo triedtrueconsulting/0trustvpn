@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -157,9 +158,9 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 
 type StateView struct {
 	LoggedIn      bool   `json:"logged_in"`
-	Token         string `json:"token,omitempty"`         // masked
+	Token         string `json:"token,omitempty"` // masked
 	APIBase       string `json:"api_base"`
-	Status        string `json:"status,omitempty"`        // active / expired / pending_payment
+	Status        string `json:"status,omitempty"` // active / expired / pending_payment
 	ExpiresAt     int64  `json:"expires_at,omitempty"`
 	DaysRemaining int    `json:"days_remaining,omitempty"`
 	DeviceCount   int    `json:"device_count,omitempty"`
@@ -170,6 +171,43 @@ type StateView struct {
 	HopExpiresAt  int64  `json:"hop_expires_at,omitempty"`
 }
 
+// The browser polls /api/state every 3s to keep the tunnel indicator live.
+// Tunnel state is local and cheap, but the subscription status is a remote
+// call — and at 20 requests a minute it burns rate limit for a value that
+// changes about once a month. Cache it and let the fast poll read local state.
+var (
+	statusMu     sync.Mutex
+	statusCache  *api.Status
+	statusCached time.Time
+)
+
+const statusCacheTTL = 60 * time.Second
+
+// cachedStatus returns the account status, refreshing at most once per TTL.
+// force bypasses the cache after an action that changes it (login, connect).
+func cachedStatus(c *api.Client, force bool) *api.Status {
+	statusMu.Lock()
+	defer statusMu.Unlock()
+	if !force && statusCache != nil && time.Since(statusCached) < statusCacheTTL {
+		return statusCache
+	}
+	s, err := c.Status()
+	if err != nil {
+		// Keep serving the last good value if the API is briefly unreachable;
+		// a network blip shouldn't blank the subscription panel.
+		return statusCache
+	}
+	statusCache, statusCached = s, time.Now()
+	return s
+}
+
+// invalidateStatus drops the cache so the next poll re-reads from the API.
+func invalidateStatus() {
+	statusMu.Lock()
+	statusCache, statusCached = nil, time.Time{}
+	statusMu.Unlock()
+}
+
 func handleState(w http.ResponseWriter, r *http.Request) {
 	st, err := config.Load()
 	if err != nil {
@@ -177,19 +215,19 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := StateView{
-		LoggedIn:    st.Token != "",
-		APIBase:     st.APIBase,
-		TunnelUp:    wg.IsUp(),
-		Multihop:    st.ExitRegion != "",
-		EntryRegion: st.EntryRegion,
-		ExitRegion:  st.ExitRegion,
+		LoggedIn:     st.Token != "",
+		APIBase:      st.APIBase,
+		TunnelUp:     wg.IsUp(),
+		Multihop:     st.ExitRegion != "",
+		EntryRegion:  st.EntryRegion,
+		ExitRegion:   st.ExitRegion,
 		HopExpiresAt: st.ExpiresAt,
 	}
 	if st.Token != "" {
 		view.Token = maskToken(st.Token)
 		// Best-effort status fetch; don't fail the whole call if API is down
 		c := api.New(st.APIBase, st.Token)
-		if s, err := c.Status(); err == nil {
+		if s := cachedStatus(c, r.URL.Query().Get("refresh") == "1"); s != nil {
 			view.Status = s.Status
 			view.ExpiresAt = s.ExpiresAt
 			view.DaysRemaining = s.DaysRemaining
@@ -206,6 +244,7 @@ type loginReq struct {
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
@@ -238,6 +277,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 // --- /api/logout ---
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
@@ -260,6 +300,7 @@ type connectReq struct {
 }
 
 func handleConnect(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
@@ -350,6 +391,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 // --- /api/disconnect ---
 
 func handleDisconnect(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
@@ -368,6 +410,7 @@ func handleDisconnect(w http.ResponseWriter, r *http.Request) {
 // --- /api/rotate ---
 
 func handleRotate(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
