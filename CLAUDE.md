@@ -109,6 +109,11 @@ done. Exit code is the number of failed checks. In Claude Code on the web,
 `.claude/hooks/session-start.sh` provisions the venv and Go module cache the
 script needs; elsewhere, build a venv from `api/requirements-dev.txt`.
 
+CI runs the same script on every push to `main` and every PR against it
+(`.github/workflows/validate.yml`), so there is one definition of green rather
+than a local one and a CI one that drift apart. A new invariant worth enforcing
+belongs in validate.sh, where all three pick it up.
+
 The individual checks, for reference — this is what the script runs:
 
 ```bash

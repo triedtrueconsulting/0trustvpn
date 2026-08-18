@@ -41,11 +41,15 @@ the exit node never sees your IP.
 ./scripts/validate.sh -l       # list the check ids
 ```
 
-Twelve checks: `go vet`, `go test`, all six cross-compile targets, real .deb
-packages, the control-plane smoke test, every `.py`/`.sh`/`.html`/`.xml`/`.yaml`
-parsed, and the two invariants that keep biting — only `zur`/`rey`/`buc` appear
-as region codes, and clients authenticate with `X-Account-Token` rather than a
-bearer token. Exit code is the number of failures.
+Thirteen checks: `go vet`, `go test`, all six cross-compile targets, real .deb
+packages, the control-plane smoke test, every `.py`/`.sh`/`.html`/`.xml`/`.json`/
+`.yaml` parsed, and the two invariants that keep biting — only `zur`/`rey`/`buc`
+appear as region codes, and clients authenticate with `X-Account-Token` rather
+than a bearer token. Exit code is the number of failures.
+
+The same battery runs in CI on every push to `main` and every pull request
+against it (`.github/workflows/validate.yml`), so local, web-session and CI all
+gate on one definition of green.
 
 Claude Code on the web provisions itself via `.claude/hooks/session-start.sh`.
 Working locally, create the venv the script expects:

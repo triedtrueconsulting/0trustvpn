@@ -1,0 +1,51 @@
+# Runs the same battery as ./scripts/validate.sh, which is what a developer
+# runs locally and what .claude/hooks/session-start.sh prepares a Claude Code
+# web session for. One definition of "green", three places to reach it.
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same ref makes an in-flight run irrelevant.
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tracks the toolchain client/go.mod declares rather than pinning a
+      # second copy of the version here.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            api/requirements.txt
+            api/requirements-dev.txt
+
+      - name: Install control-plane deps
+        run: pip install -r api/requirements-dev.txt
+
+      # dpkg-deb ships on ubuntu-latest, so the .deb check runs for real here
+      # instead of skipping.
+      - name: Validate
+        run: ./scripts/validate.sh

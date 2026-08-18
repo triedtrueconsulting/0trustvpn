@@ -63,6 +63,22 @@ check() {
 PY=python3
 $PY -c 'import fastapi' >/dev/null 2>&1 || PY="$REPO_DIR/.venv/bin/python"
 
+# The files the repo actually owns: tracked, plus new ones that aren't
+# gitignored. Asking git rather than globbing keeps a stray venv/, dist/ or
+# node_modules out of the parse checks — .gitignore already names them, and
+# third-party code failing our syntax checks would be noise, not signal.
+VALIDATE_FILES="$(mktemp)"; export VALIDATE_FILES
+trap 'rm -f "$VALIDATE_FILES"' EXIT
+if git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$REPO_DIR" ls-files --cached --others --exclude-standard > "$VALIDATE_FILES"
+else
+    # Not a checkout (an extracted tarball, say) — approximate it.
+    find . -type f -not -path './.git/*' -not -path '*/site-packages/*' \
+        -not -path '*venv/*' -not -path '*/dist/*' -not -path '*/out/*' \
+        -not -path '*/node_modules/*' -not -path '*/__pycache__/*' \
+        | sed 's|^\./||' > "$VALIDATE_FILES"
+fi
+
 # ----------------------------------------------------------------------------
 # Go client
 # ----------------------------------------------------------------------------
@@ -84,6 +100,12 @@ check go-crosscompile "all six release targets build" -- bash -c '
 
 check deb-package ".deb builds for amd64 + arm64" -- bash -c '
     command -v dpkg-deb >/dev/null || exit 77
+    # Self-contained: go-crosscompile normally leaves these behind, but a
+    # filtered run (./scripts/validate.sh deb) starts from an empty dist/.
+    if [ ! -f client/dist/0trust-linux-amd64 ] \
+    || [ ! -f client/dist/0trust-linux-arm64 ]; then
+        make -C client linux >/dev/null || exit 1
+    fi
     ./installer/linux/deb/build.sh >/dev/null || exit 1
     [ "$(ls installer/linux/deb/out/*.deb 2>/dev/null | wc -l)" -eq 2 ]'
 
@@ -91,9 +113,11 @@ check deb-package ".deb builds for amd64 + arm64" -- bash -c '
 # Control plane
 # ----------------------------------------------------------------------------
 check py-parse "every .py parses" -- "$PY" -c '
-import ast, glob, sys
+import ast, os, sys
 bad = []
-for f in glob.glob("**/*.py", recursive=True):
+for f in open(os.environ["VALIDATE_FILES"]).read().splitlines():
+    if not f.endswith(".py"):
+        continue
     try:
         ast.parse(open(f).read())
     except SyntaxError as e:
@@ -110,26 +134,62 @@ check api-smoke "control plane end-to-end" -- bash -c "
 # ----------------------------------------------------------------------------
 check sh-syntax "every .sh parses" -- bash -c '
     rc=0
-    while IFS= read -r f; do bash -n "$f" || rc=1; done \
-        < <(find . -name "*.sh" -not -path "./.git/*")
+    while IFS= read -r f; do
+        case "$f" in *.sh) bash -n "$f" || rc=1 ;; esac
+    done < "$VALIDATE_FILES"
     exit $rc'
 
+# Confirms the pages tokenize; Python's HTMLParser is lenient about tag
+# nesting, so this catches malformed markup, not every structural mistake.
 check html-parse "web pages + GUI assets parse" -- "$PY" -c '
-import glob, html.parser
+import html.parser, os, sys
 class P(html.parser.HTMLParser): pass
-for f in glob.glob("web/*.html") + glob.glob("client/internal/gui/assets/*.html"):
-    P().feed(open(f).read())'
+bad = []
+for f in open(os.environ["VALIDATE_FILES"]).read().splitlines():
+    if not f.endswith(".html"):
+        continue
+    try:
+        P().feed(open(f).read())
+    except Exception as e:
+        bad.append(f"{f}: {e}")
+if bad:
+    print("\n".join(bad)); sys.exit(1)'
 
 check xml-parse "Android res, MSI source, SVGs parse" -- "$PY" -c '
-import glob, xml.etree.ElementTree as ET
-for f in (glob.glob("mobile/android/**/*.xml", recursive=True)
-          + glob.glob("installer/**/*.wxs", recursive=True)
-          + glob.glob("**/*.svg", recursive=True)):
-    ET.parse(f)'
+import os, sys, xml.etree.ElementTree as ET
+bad = []
+for f in open(os.environ["VALIDATE_FILES"]).read().splitlines():
+    if not f.endswith((".xml", ".wxs", ".svg")):
+        continue
+    try:
+        ET.parse(f)
+    except ET.ParseError as e:
+        bad.append(f"{f}: {e}")
+if bad:
+    print("\n".join(bad)); sys.exit(1)'
+
+check json-parse "every .json parses" -- "$PY" -c '
+import json, os, sys
+bad = []
+for f in open(os.environ["VALIDATE_FILES"]).read().splitlines():
+    if not f.endswith(".json"):
+        continue
+    try:
+        json.load(open(f))
+    except json.JSONDecodeError as e:
+        bad.append(f"{f}: {e}")
+if bad:
+    print("\n".join(bad)); sys.exit(1)'
 
 check yaml-parse "cloud-init node image parses" -- bash -c "
     \"$PY\" -c 'import yaml' >/dev/null 2>&1 || exit 77
-    \"$PY\" -c 'import yaml; yaml.safe_load(open(\"wireguard/cloud-init-ephemeral.yaml\"))'"
+    \"$PY\" -c '
+import sys, yaml
+f = \"wireguard/cloud-init-ephemeral.yaml\"
+try:
+    yaml.safe_load(open(f))
+except yaml.YAMLError as e:
+    print(f\"{f}: {e}\"); sys.exit(1)'"
 
 # ----------------------------------------------------------------------------
 # Invariants from CLAUDE.md's "recurring bug classes"
@@ -137,8 +197,8 @@ check yaml-parse "cloud-init node image parses" -- bash -c "
 # scripts/audit-verify.sh is exempt: its list of Eyes-country codes is a
 # denylist, so the stale codes belong there.
 check regions-current "only zur/rey/buc appear as regions" -- bash -c '
-    hits=$(grep -rnE "\b(ams|fra|lon|sto|nyc|sjc|sgp|tyo)-[0-9]+\b" \
-             --exclude-dir=.git --exclude-dir=dist --exclude-dir=out . || true)
+    hits=$(xargs -r -a "$VALIDATE_FILES" \
+             grep -nE "\b(ams|fra|lon|sto|nyc|sjc|sgp|tyo)-[0-9]+\b" || true)
     [ -z "$hits" ] || { echo "stale region codes:"; echo "$hits"; exit 1; }'
 
 check auth-header "clients send X-Account-Token, never Bearer" -- bash -c '
