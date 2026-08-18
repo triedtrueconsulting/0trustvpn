@@ -5,7 +5,7 @@
 # Output: 0trust_<version>_amd64.deb  + 0trust_<version>_arm64.deb
 #
 # Run from anywhere; reads $VERSION (default 0.1.0) and the prebuilt binaries
-# in client/dist/ (run `make` in client/ first to produce them).
+# in client/dist/ (run `make linux` in client/ first to produce them).
 #
 # Requires: dpkg-deb (Debian/Ubuntu have this by default; on other distros,
 # `apt-get install dpkg-dev` or run inside a Debian container).
@@ -22,7 +22,7 @@ BIN_DIR="${BIN_DIR:-$REPO_DIR/client/dist}"
 OUT_DIR="${OUT_DIR:-$REPO_DIR/installer/linux/deb/out}"
 
 command -v dpkg-deb >/dev/null || die "dpkg-deb not found (apt-get install dpkg-dev)"
-[[ -d "$BIN_DIR" ]] || die "binary dir $BIN_DIR missing — run 'make' in client/ first"
+[[ -d "$BIN_DIR" ]] || die "binary dir $BIN_DIR missing — run 'make linux' in client/ first"
 
 mkdir -p "$OUT_DIR"
 

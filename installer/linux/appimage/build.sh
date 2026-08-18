@@ -27,7 +27,7 @@ OUT_DIR="${OUT_DIR:-$REPO_DIR/installer/linux/appimage/out}"
 TOOL_DIR="${TOOL_DIR:-$HOME/.cache/appimagetool}"
 
 src_bin="$BIN_DIR/0trust-linux-$GO_ARCH"
-[[ -f "$src_bin" ]] || die "$src_bin missing — run 'make' in client/ first"
+[[ -f "$src_bin" ]] || die "$src_bin missing — run 'make linux' in client/ first"
 
 mkdir -p "$OUT_DIR" "$TOOL_DIR"
 
