@@ -48,6 +48,8 @@ class H(BaseHTTPRequestHandler):
                  "amount": "0.00012", "rate": "41000", "paymentLink": f"bitcoin:bc1qtest000?amount=0.00012"},
                 {"paymentMethod": "XMR", "destination": "4Atest000",
                  "amount": "0.031", "rate": "160", "paymentLink": "monero:4Atest000"},
+                {"paymentMethod": "ZEC", "destination": "zs1test000",
+                 "amount": "0.19", "rate": "26", "paymentLink": "zcash:zs1test000"},
                 {"paymentMethod": "BTC-LightningNetwork", "destination": "lnbc1test",
                  "amount": "0.00012", "rate": "41000", "paymentLink": "lightning:lnbc1test"},
             ])

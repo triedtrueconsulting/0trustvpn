@@ -152,6 +152,64 @@ abuse defaults:
       LAUNCH.md were selected partly for this) — a provider that understands
       VPNs forwards complaints instead of instantly terminating
 
+## The /surf visitor proxy
+
+The proxy is a different risk from the VPN and needs its own reflexes.
+
+**Why it is different.** VPN abuse comes from someone who paid and holds a
+token. Proxy abuse comes from an anonymous stranger with a URL bar, and every
+request leaves *our* egress address on someone else's logs. The abuse arrives
+faster, and the first consequence is usually not a complaint — it is the
+egress IP quietly landing on a blocklist.
+
+**Rails already in place** (`proxy/guards.py`, and read it before changing
+anything there):
+
+- GET and HEAD only. No form posts, no uploads, no API driving.
+- http/https, ports 80 and 443 only.
+- Public unicast destinations only, re-checked on every redirect, so the proxy
+  cannot be pointed at internal networks or cloud metadata.
+- 5 MB and 12 s caps; content-type allowlist that excludes archives and
+  executables. Nobody is distributing malware through a clean domain with it.
+- `<script>` stripped and a `script-src 'none'` CSP, so a proxied page cannot
+  execute in our origin.
+
+**When a complaint arrives about /surf:**
+
+1. Add the host suffix to `ZTV_PROXY_BLOCKLIST` in `/etc/0trust/proxy.env` and
+   `systemctl reload 0trust-proxy`. Minutes, not hours.
+2. Reply with what is true: the proxy is stateless, we hold no record of who
+   requested that URL, and we have blocked the destination. Do not invent a
+   log you do not have, and do not imply you could identify the requester.
+3. Record it in the ledger below. Pattern matters more than any single event.
+
+**If the egress lands on a blocklist**, that is a business problem, not just
+an abuse one. Run the proxy's egress on an address you can rotate without
+moving the main site — if `/surf` and `0trustvpn.com` share an IP, one abuse
+report takes down signups too.
+
+**The kill switch.** `/surf` is a marketing funnel, not a product customers
+paid for. If it becomes a net liability, turn it off:
+`systemctl stop 0trust-proxy`. Nothing a paying customer relies on is affected.
+Decide in advance what threshold triggers that, so the decision is not made
+under pressure.
+
+## Free trials
+
+Trials are the other new abuse surface: a working VPN account for anyone who
+can run JavaScript for a second.
+
+- The proof-of-work makes bulk minting expensive but not impossible, and the
+  nonce ledger stops one solved puzzle becoming many accounts. A determined
+  abuser with CPU can still get trials. That is the accepted cost of not
+  demanding an email address.
+- Raise `ZTV_TRIAL_POW_BITS` to make it more expensive; each extra bit doubles
+  the work. Set `ZTV_TRIAL_ENABLED=0` to stop issuing trials entirely.
+- Trials carry a lower device cap (`ZTV_TRIAL_MAX_DEVICES`), which limits the
+  blast radius of any single abused account.
+- Abuse from a trial is handled exactly like abuse from a paid account. The
+  account is the unit, and we still cannot identify the person behind it.
+
 ## The abuse ledger
 
 Keep a simple append-only encrypted log, OFF the control plane:

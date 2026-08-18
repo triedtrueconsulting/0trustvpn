@@ -23,7 +23,9 @@ are anonymous 16-char tokens; there's no email/password/identity.
 
 ```
 api/            FastAPI + SQLite control plane (main.py is the core)
-                btcpay.py, sweep.py (expiry sweeper), mint-provision-token.py
+                payments.py (BTCPay / hosted gateway), btcpay.py (legacy client),
+                sweep.py (expiry sweeper), mint-provision-token.py,
+                smoke_test.py
 client/         Go module github.com/0trust/cli (Go 1.22, dep: skip2/go-qrcode)
   cmd/0trust/main.go              CLI entrypoint + help text
   internal/api/api.go             Backend HTTP client — CANONICAL wire contract
@@ -48,7 +50,12 @@ nginx/0trustvpn.com.conf          Main site config (rate limits, routes, TLS)
 scripts/                          bootstrap.sh, bootstrap-node.sh, audit-verify.sh,
                                   backup.sh, release.sh, verify-release.sh
 systemd/                          api / sweep / backup / meshd .service + .timer
-web/                              Landing + status/download/help/audit/privacy/terms/security
+proxy/                            Visitor web proxy (/surf):
+                                  guards.py (the security argument),
+                                  rewrite.py, server.py
+tests/emulation/                  Full-stack suite: boots the product, drives it
+web/                              Landing + status/download/help/audit/privacy/
+                                  terms/security + trial.html (free-month signup)
 docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 ```
 
@@ -67,7 +74,23 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   (Norway was rejected earlier — it's in Nine Eyes. Romania replaced it.)
   **These region codes must be identical everywhere** — CLI, GUI, Android,
   iOS skeleton, API defaults, docs, landing-page terminal demo.
-- **BTCPay:** lite path (~$8/mo: pruned Bitcoin + remote Monero daemon).
+- **Currencies: BTC, XMR, ZEC.** ETH and LTC were dropped. The codes live in
+  `payments.CURRENCIES`, the BTCPay checkout config, and web/index.html's
+  crypto tabs — keep them in step.
+- **No self-hosted blockchain node.** `ZTV_PAYMENT_PROVIDER` picks between
+  `btcpay` (your own or somebody else's BTCPay instance — non-custodial, funds
+  land in your wallet) and `hosted` (a commercial gateway, no infrastructure at
+  all, but custodial and usually KYC'd). `api/payments.py` documents the
+  trade-off; if the audit pack ever leans on the payment path, reconcile it
+  with whichever provider is actually configured.
+- **Free trial: one month, no identity.** A browser grinds a proof-of-work
+  stamp, redeems it for an ordinary anonymous token, and the account expires in
+  30 days with a lower device cap. Paying converts the same account and stacks
+  the paid months on whatever the trial had left.
+- **`/surf` is a funnel, not a product.** A page reader that covers one browser
+  tab. Separate service, separate port, so it can be killed without touching
+  the control plane — and the UI must keep saying plainly what it is not.
+  Overstating it would be claim-vs-reality drift on our most visible page.
 - **iOS:** dropped from v0.1 scope. QR-export into the official WireGuard app
   covers iOS users. Do not build a branded iOS app without explicit go-ahead
   (needs Apple Developer Program + Network Extension entitlement + review).
@@ -97,6 +120,11 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   the existing device's config and keeps its mesh IP; it never creates a second
   device or errors. Deregistering is `DELETE /api/v1/devices/{pubkey}` — the
   8-device cap needs an exit or customers get permanently stuck.
+- **The proxy never becomes a general-purpose relay.** `proxy/guards.py` is the
+  entire security argument: GET/HEAD only, http/https only, ports 80/443 only,
+  public unicast destinations re-checked on every redirect, size and time caps,
+  content-type allowlist. Read it before touching anything under `proxy/`, and
+  keep `test_proxy_guards` passing with nothing patched.
 - **The GUI is browser-based, not native.** `0trust gui` runs a localhost web
   server; it's the same code on all 3 desktop OSes. No system tray (v0.2 —
   systray libs were blocked in the original build env). No kill switch (v0.2).

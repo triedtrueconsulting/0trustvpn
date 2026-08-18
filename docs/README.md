@@ -149,6 +149,8 @@ FastAPI app on `127.0.0.1:8080`. Endpoints:
 | GET    | `/api/v1/payment/{id}/methods`    | none            | Per-currency addresses + amounts     |
 | GET    | `/api/v1/payment/{id}/status`     | none            | Poll for settlement                  |
 | POST   | `/api/v1/payment/webhook`         | BTCPay HMAC     | Settlement notifications             |
+| GET    | `/api/v1/trial/challenge`         | none            | Proof-of-work challenge for a free trial |
+| POST   | `/api/v1/trial`                   | solved stamp    | Redeem it for a 1-month trial account |
 | GET    | `/api/v1/devices`                 | X-Account-Token | List devices on the account          |
 | DELETE | `/api/v1/devices/{pubkey}`        | X-Account-Token | Deregister a device, free its slot   |
 | POST   | `/api/v1/wg/register`             | X-Account-Token | Register device, get peers (single- or multi-hop) |
@@ -608,7 +610,7 @@ Follow the [official guide](https://docs.btcpayserver.org/Deployment/).
 Configure:
 
 - Store: "0trust VPN"
-- Payment methods: BTC, XMR, ETH, LTC
+- Payment methods: BTC, XMR, ZEC
 - Webhook URL: `https://0trustvpn.com/api/v1/payment/webhook`
 - Webhook secret: same value as `BTCPAY_WEBHOOK_SECRET` in `/etc/0trust/api.env`
 

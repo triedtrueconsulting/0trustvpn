@@ -34,11 +34,16 @@ def interpreter() -> str:
              "Create one: python3 -m venv .venv && "
              ".venv/bin/pip install -r api/requirements-dev.txt")
 MODULES = [
-    ("lifecycle",   "signup, payment, devices, multi-hop, node lifecycle, sweeper"),
-    ("concurrency", "parallel writers, degenerate topologies, auth edges"),
-    ("client",      "the compiled 0trust binary, end to end"),
-    ("meshd",       "the mesh node daemon against a live control plane"),
-    ("integration", "pubkey escaping and GUI polling pressure"),
+    ("lifecycle",    "signup, payment, devices, multi-hop, node lifecycle, sweeper"),
+    ("concurrency",  "parallel writers, degenerate topologies, auth edges"),
+    ("payments",     "BTC/XMR/ZEC through BTCPay and a hosted gateway"),
+    ("trial",        "proof-of-work, redemption, trial limits, conversion"),
+    ("client",       "the compiled 0trust binary, end to end"),
+    ("meshd",        "the mesh node daemon against a live control plane"),
+    ("integration",  "pubkey escaping and GUI polling pressure"),
+    ("proxy_guards", "SSRF and content rails, nothing patched"),
+    ("proxy",        "the visitor proxy against a real origin server"),
+    ("funnel",       "trial signup in a real browser (skips without chromium)"),
 ]
 
 def main(argv):
@@ -49,20 +54,26 @@ def main(argv):
         return 64
 
     py = interpreter()
-    failed = []
+    failed, skipped = [], []
     for name, desc in picked:
         print(f"\n{'=' * 68}\n  {name} — {desc}\n{'=' * 68}")
         t0 = time.time()
         rc = subprocess.call([py, os.path.join(HERE, f"test_{name}.py")])
-        print(f"  [{name}] {'ok' if rc == 0 else 'FAILED'} in {time.time() - t0:.0f}s")
-        if rc != 0:
+        # 77 means the module's prerequisites are absent (no browser, say).
+        # That's a skip, not a failure — the same convention validate.sh uses.
+        label = "ok" if rc == 0 else ("skipped" if rc == 77 else "FAILED")
+        print(f"  [{name}] {label} in {time.time() - t0:.0f}s")
+        if rc not in (0, 77):
             failed.append(name)
+        elif rc == 77:
+            skipped.append(name)
 
     print(f"\n{'=' * 68}")
+    tail = f" ({len(skipped)} skipped: {', '.join(skipped)})" if skipped else ""
     if failed:
-        print(f"  emulation: {len(failed)} module(s) failed: {', '.join(failed)}")
+        print(f"  emulation: {len(failed)} module(s) failed: {', '.join(failed)}{tail}")
     else:
-        print(f"  emulation: all {len(picked)} modules passed")
+        print(f"  emulation: all {len(picked) - len(skipped)} modules passed{tail}")
     return len(failed)
 
 

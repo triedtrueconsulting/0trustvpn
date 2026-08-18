@@ -62,14 +62,25 @@ from pydantic import BaseModel, Field, field_validator
 # ============================================================================
 
 DB_PATH = os.environ.get("ZTV_DB_PATH", "/var/lib/0trust/0trust.db")
-BTCPAY_URL = os.environ.get("BTCPAY_URL", "https://btcpay.example.com")
-BTCPAY_STORE_ID = os.environ.get("BTCPAY_STORE_ID", "")
-BTCPAY_API_KEY = os.environ.get("BTCPAY_API_KEY", "")
-BTCPAY_WEBHOOK_SECRET = os.environ.get("BTCPAY_WEBHOOK_SECRET", "")
 MESH_NETWORK = os.environ.get("MESH_NETWORK", "10.64.0.0/10")  # ~4M addresses
 NODE_API_PSK = os.environ.get("NODE_API_PSK", "")  # mesh nodes auth with this
 DB_TIMEOUT_SECS = float(os.environ.get("ZTV_DB_TIMEOUT", "30"))
 MAX_DEVICES_PER_ACCOUNT = int(os.environ.get("ZTV_MAX_DEVICES", "8"))
+
+# --- Free trial -------------------------------------------------------------
+# One month, no payment, no identity. Trials are the whole top of the funnel:
+# the web proxy hands visitors a grant, they redeem it for a working tunnel.
+TRIAL_ENABLED = os.environ.get("ZTV_TRIAL_ENABLED", "1") == "1"
+TRIAL_DAYS = int(os.environ.get("ZTV_TRIAL_DAYS", "30"))
+TRIAL_MAX_DEVICES = int(os.environ.get("ZTV_TRIAL_MAX_DEVICES", "2"))
+# Trials cost us bandwidth and there is no identity to rate-limit against, so
+# redemption costs CPU instead: a hashcash-style stamp the browser grinds.
+# 20 bits is about a second of JS on a phone and makes bulk minting expensive
+# without touching a captcha or an email address.
+TRIAL_POW_BITS = int(os.environ.get("ZTV_TRIAL_POW_BITS", "20"))
+TRIAL_CHALLENGE_TTL = int(os.environ.get("ZTV_TRIAL_CHALLENGE_TTL", "900"))
+# Signs trial challenges so we can verify one we issued without storing it.
+TRIAL_SECRET = os.environ.get("ZTV_TRIAL_SECRET", "")
 
 # Crockford-ish base32 alphabet: drops 0/O/1/I/L for unambiguous reading
 TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -94,6 +105,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   expires_at      INTEGER NOT NULL DEFAULT 0,
   status          TEXT NOT NULL DEFAULT 'pending_payment',
                   -- pending_payment | active | expired | banned
+  plan            TEXT NOT NULL DEFAULT 'paid',   -- paid | trial
+  trial_started_at INTEGER NOT NULL DEFAULT 0,
   ip_allocation   TEXT,    -- mesh IPv4 like 10.64.12.7
   notes           TEXT
 );
@@ -110,16 +123,17 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE INDEX IF NOT EXISTS idx_devices_account ON devices(account_id);
 
 CREATE TABLE IF NOT EXISTS invoices (
-  id              TEXT PRIMARY KEY,            -- BTCPay invoice ID
+  id              TEXT PRIMARY KEY,            -- provider's invoice ID
   account_id      INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   months          INTEGER NOT NULL,
   amount_usd      REAL NOT NULL,
-  currency        TEXT NOT NULL,               -- BTC | XMR | ETH | LTC
-  status          TEXT NOT NULL,               -- New | Processing | Settled | Expired | Invalid
+  currency        TEXT NOT NULL,               -- pricing currency (USD)
+  status          TEXT NOT NULL,               -- pending | settled | expired | invalid
   created_at      INTEGER NOT NULL,
   settled_at      INTEGER,
   payment_address TEXT,
-  amount_crypto   TEXT
+  amount_crypto   TEXT,
+  checkout_url    TEXT                         -- hosted checkout, shown to the buyer
 );
 CREATE INDEX IF NOT EXISTS idx_invoices_account ON invoices(account_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
@@ -150,6 +164,18 @@ CREATE TABLE IF NOT EXISTS provision_tokens (
   used_at       INTEGER,                      -- NULL = unused
   used_node_id  TEXT
 );
+
+-- Redeemed trial stamps. A challenge is signed rather than stored, so the
+-- only thing that needs persisting is the fact that one was spent — which is
+-- what stops the same solved proof-of-work being replayed into many accounts.
+CREATE TABLE IF NOT EXISTS trial_grants (
+  nonce        TEXT PRIMARY KEY,
+  issued_at    INTEGER NOT NULL,
+  redeemed_at  INTEGER NOT NULL,
+  account_id   INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+  source       TEXT                            -- proxy | web | cli
+);
+CREATE INDEX IF NOT EXISTS idx_trial_grants_time ON trial_grants(redeemed_at);
 
 -- Multi-hop: maps a device's session to an (entry, exit) pair.
 -- The client's WG Endpoint points at entry's public_ip:entry_port; nftables
@@ -215,10 +241,23 @@ def db(write: bool = False):
         conn.close()
 
 
+# Columns added after the first release. SQLite can ADD COLUMN in place, so
+# each entry is applied to databases that predate it and skipped otherwise.
+MIGRATIONS = [
+    ("invoices", "checkout_url", "TEXT"),
+    ("accounts", "plan", "TEXT NOT NULL DEFAULT 'paid'"),
+    ("accounts", "trial_started_at", "INTEGER NOT NULL DEFAULT 0"),
+]
+
+
 def init_db():
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with db() as conn:
         conn.executescript(SCHEMA)
+        for table, column, decl in MIGRATIONS:
+            have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 # ============================================================================
@@ -276,46 +315,26 @@ def allocate_mesh_ip(conn) -> str:
 # BTCPAY INTEGRATION
 # ============================================================================
 
-from btcpay import BTCPayClient, BTCPayError
-
-_btcpay: BTCPayClient | None = None
-
-
-def btcpay() -> BTCPayClient:
-    """Lazy singleton so missing env vars don't crash module import."""
-    global _btcpay
-    if _btcpay is None:
-        _btcpay = BTCPayClient(
-            base_url=BTCPAY_URL,
-            store_id=BTCPAY_STORE_ID,
-            api_key=BTCPAY_API_KEY,
-        )
-    return _btcpay
+from payments import (  # noqa: E402  (kept next to its only users)
+    CURRENCIES, EXPIRED, INVALID, PENDING, SETTLED, PaymentError, provider,
+)
 
 
-def btcpay_create_invoice(account_id: int, months: int, amount_usd: float) -> dict:
+def create_invoice(account_id: int, months: int, amount_usd: float) -> dict:
+    """
+    Open an invoice with whichever provider is configured. Returns the
+    normalized shape: {id, checkout_url, status, raw}.
+    """
     try:
-        return btcpay().create_invoice(
+        return provider().create_invoice(
             amount_usd=amount_usd,
             account_id=account_id,
             months=months,
             redirect_url="https://0trustvpn.com/welcome",
         )
-    except BTCPayError as e:
-        # Don't leak BTCPay internals to clients
-        raise HTTPException(502, f"Payment processor unavailable") from e
-
-
-def btcpay_verify_webhook(payload: bytes, signature: str) -> bool:
-    """BTCPay signs webhooks with HMAC-SHA256 using the webhook secret."""
-    if not BTCPAY_WEBHOOK_SECRET:
-        return False
-    expected = "sha256=" + hmac.new(
-        BTCPAY_WEBHOOK_SECRET.encode(),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature or "")
+    except PaymentError as e:
+        # Don't leak provider internals to clients
+        raise HTTPException(502, "Payment processor unavailable") from e
 
 
 # ============================================================================
@@ -345,6 +364,8 @@ class AccountStatusResponse(BaseModel):
     expires_at: Optional[int]
     days_remaining: Optional[int]
     device_count: int
+    plan: str = "paid"
+    max_devices: int = MAX_DEVICES_PER_ACCOUNT
 
 
 class WGRegisterRequest(BaseModel):
@@ -370,6 +391,11 @@ class WGRegisterResponse(BaseModel):
 # ============================================================================
 # AUTH DEPENDENCY
 # ============================================================================
+
+def _device_cap(plan: str) -> int:
+    """Trials get fewer slots — enough for a laptop and a phone."""
+    return TRIAL_MAX_DEVICES if plan == "trial" else MAX_DEVICES_PER_ACCOUNT
+
 
 def require_account(x_account_token: str = Header(...)) -> dict:
     """Resolve and authenticate an account from the X-Account-Token header."""
@@ -541,7 +567,7 @@ def create_account(req: AccountCreateRequest):
     # leaving an unreachable pending_payment row behind on every outage; the
     # customer never received the token, so nothing is lost by removing it.
     try:
-        invoice = btcpay_create_invoice(account_id, req.months, amount)
+        invoice = create_invoice(account_id, req.months, amount)
     except BaseException:
         with db(write=True) as conn:
             conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
@@ -550,17 +576,142 @@ def create_account(req: AccountCreateRequest):
     with db(write=True) as conn:
         conn.execute(
             """INSERT INTO invoices
-                 (id, account_id, months, amount_usd, currency, status, created_at)
-               VALUES (?, ?, ?, ?, 'USD', ?, ?)""",
-            (invoice["id"], account_id, req.months, amount, invoice["status"], now),
+                 (id, account_id, months, amount_usd, currency, status,
+                  created_at, checkout_url)
+               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?)""",
+            (invoice["id"], account_id, req.months, amount, invoice["status"],
+             now, invoice.get("checkout_url", "")),
         )
 
     return AccountCreateResponse(
         token=token,
         invoice_id=invoice["id"],
-        checkout_url=invoice["checkoutLink"],
+        checkout_url=invoice["checkout_url"],
         amount_usd=amount,
     )
+
+
+# ----------------------------------------------------------------------------
+# FREE TRIAL
+# ----------------------------------------------------------------------------
+# Two steps so the cost lands on the client, not on us:
+#
+#   GET  /api/v1/trial/challenge  ->  a signed nonce + difficulty
+#   POST /api/v1/trial            ->  nonce + solution, returns an account token
+#
+# The challenge is an HMAC over (nonce, expiry) under TRIAL_SECRET, so the
+# server verifies its own issuance without storing anything. Redeemed nonces
+# ARE stored, because that's the only way to stop one solved stamp minting a
+# hundred accounts.
+
+class TrialChallenge(BaseModel):
+    nonce: str
+    bits: int
+    expires_at: int
+    signature: str
+
+
+class TrialRedeemRequest(BaseModel):
+    nonce: str
+    expires_at: int
+    signature: str
+    solution: str = Field(..., max_length=64)
+    source: str = Field("web", max_length=16)
+
+
+class TrialResponse(BaseModel):
+    token: str
+    plan: str
+    expires_at: int
+    days: int
+    max_devices: int
+
+
+def _trial_secret() -> str:
+    if TRIAL_SECRET:
+        return TRIAL_SECRET
+    # Refuse rather than fall back to something guessable: an attacker who can
+    # forge challenges skips the proof-of-work entirely.
+    raise HTTPException(503, "Trials are not configured on this deployment")
+
+
+def _sign_challenge(nonce: str, expires_at: int) -> str:
+    return hmac.new(
+        _trial_secret().encode(), f"{nonce}:{expires_at}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def _pow_ok(nonce: str, solution: str, bits: int) -> bool:
+    """Leading-zero-bit check over SHA-256(nonce:solution)."""
+    digest = hashlib.sha256(f"{nonce}:{solution}".encode()).digest()
+    need_bytes, need_bits = divmod(bits, 8)
+    if any(digest[i] for i in range(need_bytes)):
+        return False
+    if need_bits and digest[need_bytes] >> (8 - need_bits):
+        return False
+    return True
+
+
+@app.get("/api/v1/trial/challenge", response_model=TrialChallenge)
+def trial_challenge():
+    """Hand out a proof-of-work challenge for a free trial."""
+    if not TRIAL_ENABLED:
+        raise HTTPException(404, "Trials are not available")
+    nonce = secrets.token_hex(16)
+    expires_at = int(time.time()) + TRIAL_CHALLENGE_TTL
+    return TrialChallenge(
+        nonce=nonce, bits=TRIAL_POW_BITS, expires_at=expires_at,
+        signature=_sign_challenge(nonce, expires_at),
+    )
+
+
+@app.post("/api/v1/trial", response_model=TrialResponse)
+def redeem_trial(req: TrialRedeemRequest):
+    """
+    Redeem a solved challenge for a trial account. No payment, no email, no
+    identity — same anonymous token a paying customer gets, time-limited.
+    """
+    if not TRIAL_ENABLED:
+        raise HTTPException(404, "Trials are not available")
+
+    now = int(time.time())
+    if req.expires_at < now:
+        raise HTTPException(400, "Challenge expired — request a new one")
+    if req.expires_at > now + TRIAL_CHALLENGE_TTL + 60:
+        raise HTTPException(400, "Challenge expiry is implausible")
+    if not hmac.compare_digest(_sign_challenge(req.nonce, req.expires_at),
+                               req.signature):
+        raise HTTPException(400, "Challenge signature invalid")
+    if not _pow_ok(req.nonce, req.solution, TRIAL_POW_BITS):
+        raise HTTPException(400, "Proof of work does not meet the difficulty")
+
+    token = generate_token()
+    expires = now + TRIAL_DAYS * 86400
+
+    with db(write=True) as conn:
+        # Burning the nonce is what makes one stamp worth one account. The
+        # PRIMARY KEY does the work: a replay loses the race and gets a 409.
+        try:
+            conn.execute(
+                """INSERT INTO trial_grants (nonce, issued_at, redeemed_at, source)
+                   VALUES (?, ?, ?, ?)""",
+                (req.nonce, req.expires_at - TRIAL_CHALLENGE_TTL, now,
+                 req.source[:16]),
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "This challenge has already been redeemed")
+
+        cur = conn.execute(
+            """INSERT INTO accounts
+                 (token_hash, created_at, expires_at, status, plan, trial_started_at)
+               VALUES (?, ?, ?, 'active', 'trial', ?)""",
+            (hash_token(token), now, expires, now),
+        )
+        conn.execute("UPDATE trial_grants SET account_id = ? WHERE nonce = ?",
+                     (cur.lastrowid, req.nonce))
+
+    return TrialResponse(token=token, plan="trial", expires_at=expires,
+                         days=TRIAL_DAYS, max_devices=TRIAL_MAX_DEVICES)
 
 
 @app.get("/api/v1/account/status", response_model=AccountStatusResponse)
@@ -572,11 +723,14 @@ def account_status(account: dict = Depends(require_account)):
             "SELECT COUNT(*) AS n FROM devices WHERE account_id = ?",
             (account["id"],),
         ).fetchone()["n"]
+    plan = account["plan"] if "plan" in account.keys() else "paid"
     return AccountStatusResponse(
         status=account["status"],
         expires_at=expires or None,
         days_remaining=max(0, (expires - now) // 86400) if expires else None,
         device_count=device_count,
+        plan=plan,
+        max_devices=_device_cap(plan),
     )
 
 
@@ -584,15 +738,17 @@ def account_status(account: dict = Depends(require_account)):
 def topup(req: AccountCreateRequest, account: dict = Depends(require_account)):
     """Open another invoice for an existing account. Extends on payment."""
     amount = PRICING[req.months]
-    invoice = btcpay_create_invoice(account["id"], req.months, amount)
+    invoice = create_invoice(account["id"], req.months, amount)
     now = int(time.time())
 
     with db(write=True) as conn:
         conn.execute(
             """INSERT INTO invoices
-                 (id, account_id, months, amount_usd, currency, status, created_at)
-               VALUES (?, ?, ?, ?, 'USD', ?, ?)""",
-            (invoice["id"], account["id"], req.months, amount, invoice["status"], now),
+                 (id, account_id, months, amount_usd, currency, status,
+                  created_at, checkout_url)
+               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?)""",
+            (invoice["id"], account["id"], req.months, amount, invoice["status"],
+             now, invoice.get("checkout_url", "")),
         )
 
     return AccountCreateResponse(
@@ -600,7 +756,7 @@ def topup(req: AccountCreateRequest, account: dict = Depends(require_account)):
         # and we never store it in a form we could echo back.
         token="",
         invoice_id=invoice["id"],
-        checkout_url=invoice["checkoutLink"],
+        checkout_url=invoice["checkout_url"],
         amount_usd=amount,
     )
 
@@ -617,30 +773,20 @@ def payment_methods(invoice_id: str):
     """
     with db() as conn:
         row = conn.execute(
-            "SELECT id FROM invoices WHERE id = ?", (invoice_id,)
+            "SELECT id, checkout_url FROM invoices WHERE id = ?", (invoice_id,)
         ).fetchone()
     if not row:
         raise HTTPException(404, "Invoice not found")
 
     try:
-        methods = btcpay().get_payment_methods(invoice_id)
-    except BTCPayError:
+        methods = provider().get_payment_methods(invoice_id)
+    except PaymentError:
         raise HTTPException(502, "Payment processor unavailable")
 
-    # Reshape to what the frontend needs — drop BTCPay-internal fields
-    return {
-        "methods": [
-            {
-                "currency": m.get("paymentMethod", "").replace("-LightningNetwork", "-LN"),
-                "address": m.get("destination"),
-                "amount": m.get("amount"),
-                "rate": m.get("rate"),
-                "uri": m.get("paymentLink"),
-            }
-            for m in methods
-            if m.get("destination")
-        ]
-    }
+    # Providers already normalize to {currency, address, amount, rate, uri}.
+    # A hosted gateway keeps the customer on its own checkout and returns
+    # nothing here, so the UI falls back to checkout_url.
+    return {"methods": methods, "checkout_url": row["checkout_url"] or ""}
 
 
 @app.get("/api/v1/payment/{invoice_id}/status")
@@ -656,15 +802,19 @@ def payment_status(invoice_id: str):
     if not row:
         raise HTTPException(404, "Invoice not found")
 
-    # If the webhook already settled this, return immediately
-    if row["status"] in ("Settled", "Expired", "Invalid"):
+    # If a webhook already reached a terminal state, return it immediately
+    if row["status"] in (SETTLED, EXPIRED, INVALID):
         return {"status": row["status"], "settled_at": row["settled_at"]}
 
-    # Otherwise check BTCPay live (cheap call; rate-limited at nginx)
+    # Otherwise ask the provider (cheap call; rate-limited at nginx).
+    #
+    # Read-only on purpose: this endpoint is unauthenticated, so a poll must
+    # never be able to credit an account. Settlement happens in the webhook,
+    # which is signed. The worst a forged poll achieves is a stale label.
     try:
-        live = btcpay().get_invoice(invoice_id)
+        live = provider().get_invoice(invoice_id)
         return {"status": live.get("status", row["status"]), "settled_at": None}
-    except BTCPayError:
+    except PaymentError:
         return {"status": row["status"], "settled_at": None}
 
 
@@ -673,19 +823,20 @@ def payment_status(invoice_id: str):
 # ----------------------------------------------------------------------------
 
 @app.post("/api/v1/payment/webhook")
-async def btcpay_webhook(request: Request):
+async def payment_webhook(request: Request):
     """
-    BTCPay calls this when invoice state changes. On Settled, we extend the
-    account's expiry by `months` and mark it active.
+    The provider calls this when invoice state changes. On settlement we
+    extend the account's expiry by `months` and mark it active.
     """
     body = await request.body()
-    signature = request.headers.get("BTCPay-Sig", "")
-    if not btcpay_verify_webhook(body, signature):
+    pv = provider()
+    if not pv.verify_webhook(body, request.headers):
         raise HTTPException(401, "Invalid webhook signature")
 
-    event = json.loads(body)
-    invoice_id = event.get("invoiceId")
-    event_type = event.get("type")  # InvoiceSettled, InvoiceExpired, ...
+    try:
+        invoice_id, event_type = pv.parse_webhook(body)
+    except ValueError:
+        raise HTTPException(400, "Malformed webhook body")
 
     if not invoice_id or not event_type:
         return {"ok": False}
@@ -697,14 +848,14 @@ async def btcpay_webhook(request: Request):
         if not inv:
             return {"ok": False, "reason": "unknown invoice"}
 
-        if event_type == "InvoiceSettled":
+        if event_type == SETTLED:
             # Credit each invoice EXACTLY once. BTCPay retries a delivery it
             # didn't get a 2xx for, and re-sends on redelivery, so this handler
             # sees duplicates in normal operation — and anyone who captured one
             # signed delivery could otherwise replay it for unlimited free
             # months, since the HMAC stays valid forever. The settled_at
             # marker, not the signature, is what makes crediting single-shot.
-            if inv["status"] == "Settled":
+            if inv["status"] == SETTLED:
                 return {"ok": True, "duplicate": True}
 
             now = int(time.time())
@@ -718,24 +869,29 @@ async def btcpay_webhook(request: Request):
             # Guard the credit on the invoice still being uncredited, so two
             # concurrent deliveries of the same invoice can't both apply.
             cur = conn.execute(
-                """UPDATE invoices SET status = 'Settled', settled_at = ?
-                   WHERE id = ? AND status != 'Settled'""",
-                (now, invoice_id),
+                """UPDATE invoices SET status = ?, settled_at = ?
+                   WHERE id = ? AND status != ?""",
+                (SETTLED, now, invoice_id, SETTLED),
             )
             if cur.rowcount == 0:
                 return {"ok": True, "duplicate": True}
+            # Paying converts a trial to paid, and the paid months stack on
+            # whatever the trial had left (that's what max(expires_at, now)
+            # above computes). Starting the paid term from settlement instead
+            # would punish converting early, which is exactly the behaviour we
+            # want to encourage.
             conn.execute(
                 """UPDATE accounts
-                   SET status = 'active', expires_at = ?
+                   SET status = 'active', expires_at = ?, plan = 'paid'
                    WHERE id = ?""",
                 (new_expiry, acc["id"]),
             )
-        elif event_type in ("InvoiceExpired", "InvoiceInvalid"):
-            # Never walk a settled invoice backwards — BTCPay can emit an
-            # Expired event for an invoice that settled late.
+        elif event_type in (EXPIRED, INVALID):
+            # Never walk a settled invoice backwards — providers can emit an
+            # expiry for an invoice that settled late.
             conn.execute(
-                "UPDATE invoices SET status = ? WHERE id = ? AND status != 'Settled'",
-                (event_type.replace("Invoice", ""), invoice_id),
+                "UPDATE invoices SET status = ? WHERE id = ? AND status != ?",
+                (event_type, invoice_id, SETTLED),
             )
 
     return {"ok": True}
@@ -962,12 +1118,14 @@ def wg_register(
                 "SELECT COUNT(*) AS n FROM devices WHERE account_id = ?",
                 (account["id"],),
             ).fetchone()["n"]
-            if n_devices >= MAX_DEVICES_PER_ACCOUNT:
-                raise HTTPException(
-                    409,
-                    f"Device limit reached ({MAX_DEVICES_PER_ACCOUNT}). "
-                    f"Remove one with DELETE /api/v1/devices/{{pubkey}}.",
+            cap = _device_cap(account["plan"] if "plan" in account.keys() else "paid")
+            if n_devices >= cap:
+                hint = (
+                    " Upgrade to a paid plan for more."
+                    if cap < MAX_DEVICES_PER_ACCOUNT else
+                    f" Remove one with DELETE /api/v1/devices/{{pubkey}}."
                 )
+                raise HTTPException(409, f"Device limit reached ({cap}).{hint}")
             mesh_ip = allocate_mesh_ip(conn)
             cur = conn.execute(
                 """INSERT INTO devices

@@ -40,7 +40,9 @@ try:
     check("unpaid account cannot register (402)", st == 402, f"{st} {b3}")
 
     st, b4 = H.call("GET", f"/api/v1/payment/{inv}/methods")
-    check("payment methods listed", st == 200 and len(b4["methods"]) == 3, f"{st} {b4}")
+    curs = {m["currency"] for m in b4.get("methods", [])}
+    check("BTC, XMR and ZEC all offered", st == 200 and {"BTC", "XMR", "ZEC"} <= curs,
+          f"{st} {sorted(curs)}")
 
     code, _ = H.settle(inv)
     check("webhook accepted", code == 200, code)
