@@ -1,0 +1,49 @@
+[Unit]
+Description=0trust VPN API
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=0trust
+Group=0trust
+WorkingDirectory=/opt/0trust/api
+Environment="PATH=/opt/0trust/api/.venv/bin"
+EnvironmentFile=/etc/0trust/api.env
+ExecStart=/opt/0trust/api/.venv/bin/uvicorn main:app \
+    --host 127.0.0.1 \
+    --port 8080 \
+    --workers 2 \
+    --log-level info \
+    --proxy-headers \
+    --forwarded-allow-ips=127.0.0.1
+
+Restart=on-failure
+RestartSec=3s
+
+# --- Hardening ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/0trust
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

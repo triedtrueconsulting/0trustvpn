@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!--
+    0trust logo. The mark is a stylized "0" framing a shield interior in the
+    warm-dark palette. Designed to read at 16px through 256px.
+  -->
+  <rect width="128" height="128" rx="22" fill="#0C0C0A"/>
+  <!-- Outer 0 -->
+  <ellipse cx="64" cy="64" rx="36" ry="42"
+           fill="none" stroke="#D4A574" stroke-width="6"/>
+  <!-- Inner shield -->
+  <path d="M64 32 L80 40 L80 64 C80 76 72 86 64 90 C56 86 48 76 48 64 L48 40 Z"
+        fill="#14140F" stroke="#7D8F5A" stroke-width="2"/>
+  <!-- Checkmark inside the shield -->
+  <path d="M56 64 L62 70 L72 56" fill="none" stroke="#D4A574" stroke-width="3"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

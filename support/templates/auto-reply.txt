@@ -1,0 +1,47 @@
+Subject: Re: Your 0trust support request
+
+Hi —
+
+This is an automated acknowledgement. A human will respond within 48
+hours; faster if the issue looks urgent.
+
+A few things first, because they answer most questions:
+
+  STATUS PAGE       https://0trustvpn.com/status
+                    If your tunnel is down, check here first. Regions show
+                    as operational, degraded, or down. A degraded region
+                    still works but has reduced redundancy.
+
+  FAQ              https://0trustvpn.com/help
+                    Likely your question is already there.
+
+  WARRANT CANARY    https://0trustvpn.com/canary.txt
+                    PGP-signed weekly. If you want to verify it's fresh.
+
+  NO-LOGS AUDIT     https://0trustvpn.com/audit
+                    What we do and don't store, in detail.
+
+If you still need help, please re-send with this in mind:
+
+  1. We literally cannot identify you from your email address. The only
+     identifier we have is your 16-character account token. If your
+     question is account-specific, mention your token in the body.
+
+  2. We can read PGP-encrypted mail. Our key is at
+     https://0trustvpn.com/.well-known/openpgpkey/hu/... and on
+     keys.openpgp.org. If your issue involves anything sensitive
+     (the full token, payment IDs, your tunnel logs), please encrypt.
+
+  3. Don't send screenshots that include your IP address, real name,
+     or other identifying info. We can almost always help without it.
+     If we genuinely need it, we'll ask explicitly.
+
+  4. If this is a security vulnerability, please re-send to
+     0trustvpn@proton.me (encrypted to the same key). We commit to
+     acknowledging vuln reports within 24 hours and never publishing
+     anything that could endanger researchers.
+
+Once your ticket is resolved we delete this thread. Please keep your
+own copy if you want a record.
+
+— The 0trust team

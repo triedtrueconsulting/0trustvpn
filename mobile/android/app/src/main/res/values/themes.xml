@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Base theme. Compose handles all UI styling internally; this theme
+      only affects pre-Compose surfaces (status bar, splash background, etc).
+    -->
+    <style name="Theme.ZeroTrust" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:statusBarColor">@color/zt_bg</item>
+        <item name="android:navigationBarColor">@color/zt_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/zt_bg</item>
+    </style>
+</resources>

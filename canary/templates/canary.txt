@@ -1,0 +1,107 @@
+                              0TRUST VPN
+                          WARRANT CANARY
+                      ============================
+
+Period:           WEEK_NUMBER (YYYY-MM-DD to YYYY-MM-DD)
+Next signing:     NEXT_DEADLINE
+Issued at:        ISSUED_AT
+Issued by:        SIGNER_NAME, CTO
+
+  ----------------------------------------------------------------
+  PROOF OF FRESHNESS
+  ----------------------------------------------------------------
+  These headlines were taken from public news sources within 60
+  minutes of signing. Their inclusion proves this document could
+  not have been signed earlier than the dates they were published.
+
+  HEADLINE_1
+  HEADLINE_2
+  HEADLINE_3
+  HEADLINE_4
+
+  Today's Bitcoin block hash at height BLOCK_HEIGHT:
+  BLOCK_HASH
+
+  ----------------------------------------------------------------
+  STATEMENTS (each is true as of the issue time above)
+  ----------------------------------------------------------------
+
+  As of ISSUED_AT, 0trust VPN has NOT:
+
+   1.  Received any National Security Letters (NSLs) under
+       18 U.S.C. § 2709, or equivalent secret legal demands
+       under any other jurisdiction in which 0trust operates.
+
+   2.  Received any FISA court orders under 50 U.S.C. § 1801 et seq.,
+       including any orders requiring the operator to assist in
+       wiretapping, decryption, or the modification of software
+       or infrastructure.
+
+   3.  Received any gag orders, secrecy orders, or non-disclosure
+       directives that would prevent the operator from disclosing
+       the existence of legal demands, subpoenas, or warrants.
+
+   4.  Been served with any subpoena seeking customer records,
+       traffic data, payment data, or account identifiers.
+
+   5.  Been compelled to install, modify, or weaken any
+       cryptographic key, software component, network device,
+       or hardware module.
+
+   6.  Knowingly granted any government, intelligence, or law
+       enforcement entity access to any part of 0trust
+       infrastructure, customer data, or operational systems.
+
+   7.  Lost physical custody of any mesh node, server, or piece
+       of cryptographic key material in any way that would
+       compromise the confidentiality of customer traffic.
+
+   8.  Been the subject of any third-party security incident or
+       breach that has not been publicly disclosed.
+
+   9.  Deployed any 0trust mesh node, control-plane server, or other
+       infrastructure component in a jurisdiction party to the Five
+       Eyes, Nine Eyes, or Fourteen Eyes intelligence-sharing
+       alliances. The current deployment runs exactly three mesh
+       nodes, in Switzerland (zur), Iceland (rey), and Romania (buc),
+       all of which are outside every iteration of these alliances.
+
+  10.  Knowingly hosted any 0trust infrastructure with a provider
+       that has disclosed (publicly or to the operator privately)
+       a national-security or law-enforcement compulsion regarding
+       0trust services.
+
+  ----------------------------------------------------------------
+  WHAT THE ABSENCE OF THIS DOCUMENT MEANS
+  ----------------------------------------------------------------
+
+  If this canary is not re-signed by NEXT_DEADLINE, customers and
+  observers should assume that one or more of the statements above
+  may no longer be true.
+
+  Specifically: this document SHOULD be PGP-signed by the listed
+  signer on the schedule shown above. A delay of more than 7 days
+  past NEXT_DEADLINE, without prior public announcement of a
+  planned maintenance window, is a signal.
+
+  The absence of a signed canary is, deliberately, the only signal
+  we can lawfully give. We will not confirm or deny the existence
+  of any specific demand under any circumstances.
+
+  ----------------------------------------------------------------
+  VERIFICATION
+  ----------------------------------------------------------------
+
+  Detached PGP signature:  /canary.txt.sig
+  Signing key fingerprint: KEY_FINGERPRINT
+  Public key:              /pubkey.asc  (also on keys.openpgp.org)
+
+  To verify:
+    curl -O https://0trustvpn.com/canary.txt
+    curl -O https://0trustvpn.com/canary.txt.sig
+    curl -O https://0trustvpn.com/pubkey.asc
+    gpg --import pubkey.asc
+    gpg --verify canary.txt.sig canary.txt
+
+  All prior canaries are archived at /canary/archive/ and remain
+  signed indefinitely.

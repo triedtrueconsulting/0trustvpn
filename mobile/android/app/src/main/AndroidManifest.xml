@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  0trust VPN — Android manifest
+
+  Namespace is set in build.gradle.kts (AGP 8+); we no longer declare
+  `package` here.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Core networking -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- VpnService runs as a foreground service so the tunnel survives
+         when the app is backgrounded. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+
+    <!-- Required to post the persistent "connected" notification on
+         Android 13+ (NotificationManager needs explicit user grant). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Optional: re-establish the tunnel on boot if the user has the
+         "Auto-connect on startup" toggle enabled. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.ZeroTrust"
+        android:supportsRtl="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- VpnService keeps the tunnel alive in the background. -->
+        <service
+            android:name=".ZeroTrustVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="systemExempted"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+        <!-- Optional: BootReceiver re-arms the tunnel after a reboot if
+             the user opted in to auto-connect. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

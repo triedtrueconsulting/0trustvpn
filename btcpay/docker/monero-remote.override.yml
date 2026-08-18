@@ -1,0 +1,83 @@
+# ============================================================================
+# 0trust BTCPay LITE — Monero remote daemon override
+# ============================================================================
+# Adds monero-wallet-rpc (only) to BTCPay's compose stack. The wallet RPC is
+# pointed at a public remote daemon instead of running monerod locally.
+#
+# What this gives us:
+#   - BTCPay's Monero plugin sees monero-wallet-rpc on the local network
+#   - The wallet RPC handles key management, address generation, polling
+#   - The remote daemon supplies blockchain data + tx broadcasting
+#
+# What stays local:
+#   - The wallet file (spend key + view key) lives in the monero_wallet volume
+#     on THIS host. Operator must back up & sweep as in runbook §3.1.
+#
+# What's remote:
+#   - The Monero blockchain (~150GB we don't have to store)
+#   - Block validation and tx broadcast
+#
+# Privacy note: the remote daemon operator sees that someone is asking about
+# specific subaddresses. They cannot link those to customer identities or see
+# amounts (Monero's view key model + ring signatures handle that), but they
+# can correlate polling timing.
+# ============================================================================
+version: "3"
+
+services:
+  monero-wallet-rpc:
+    restart: unless-stopped
+    image: btcpayserver/monero:0.18.3.4
+    container_name: monero-wallet-rpc
+    expose:
+      - "18082"
+    volumes:
+      - "monero_wallet:/wallet"
+      - "monero_data:/data"
+    networks:
+      - btcpayservernetwork
+    environment:
+      MONERO_DAEMON_ADDRESS: "__MONERO_REMOTE_DAEMON__"
+    command:
+      - /usr/local/bin/monero-wallet-rpc
+      - --non-interactive
+      - --rpc-bind-ip=0.0.0.0
+      - --rpc-bind-port=18082
+      - --confirm-external-bind
+      - --disable-rpc-login
+      - --daemon-address=__MONERO_REMOTE_DAEMON__
+      # --trusted-daemon would make wallet-rpc accept fewer sanity checks
+      # from the remote daemon. We deliberately leave it OFF so the wallet
+      # double-checks anything weird (e.g. a malicious remote node feeding
+      # us bogus block data — still can't steal funds but could try to
+      # confuse the invoice settlement logic).
+      - --untrusted-daemon
+      - --wallet-dir=/wallet
+      - --log-file=/data/wallet-rpc.log
+      - --log-level=1
+
+  # Tell BTCPay where to find the wallet RPC.
+  # BTCPay's monero plugin auto-discovers if these env vars are set on
+  # the btcpayserver container.
+  btcpayserver:
+    environment:
+      BTCPAY_XMR_DAEMON_URI_xmr: "http://monero-wallet-rpc:18082"
+      BTCPAY_XMR_WALLET_DAEMON_URI_xmr: "http://monero-wallet-rpc:18082"
+      BTCPAY_XMR_WALLET_DAEMON_WALLETDIR_xmr: "/wallet"
+      BTCPAY_CHAINS: "btc,xmr"
+    volumes:
+      - "monero_wallet:/datadir/Monero_settings:ro"
+
+  # NBXplorer doesn't index Monero but BTCPay's monero plugin needs the
+  # wallet directory to find the wallet file BTCPay's UI creates.
+  nbxplorer:
+    volumes:
+      - "monero_wallet:/datadir/Monero_settings:ro"
+
+volumes:
+  monero_wallet:
+  monero_data:
+
+networks:
+  btcpayservernetwork:
+    external: true

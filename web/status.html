@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>0trust · status</title>
+
+<!-- Same self-hosted fonts as the landing page, no external trackers -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
+      rel="stylesheet">
+
+<style>
+:root {
+  --bg: #0c0c0a;
+  --bg-elev: #14140f;
+  --ink: #f4ede0;
+  --ink-dim: #a8a094;
+  --ink-faint: #6b6359;
+  --line: #2a2820;
+  --amber: #d4a574;
+  --terra: #c44536;
+  --moss: #7d8f5a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-weight: 300;
+  line-height: 1.5;
+  font-size: 15px;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+body {
+  background-image:
+    linear-gradient(rgba(244,237,224,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244,237,224,0.025) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+.wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; }
+
+.brand {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 24px;
+  margin-bottom: 40px;
+}
+.brand .zero { color: var(--amber); font-size: 30px; }
+.crumb {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-left: 16px;
+}
+
+h1 {
+  font-family: 'Instrument Serif', serif;
+  font-weight: 400;
+  font-size: 56px;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin-bottom: 8px;
+}
+
+.overall {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  margin: 32px 0;
+  position: relative;
+  overflow: hidden;
+}
+.overall::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 16px; right: 16px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212,165,116,0.3), transparent);
+}
+.dot {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  flex-shrink: 0;
+}
+.dot.operational { background: var(--moss); box-shadow: 0 0 0 4px rgba(125,143,90,0.18); }
+.dot.degraded    { background: var(--amber); box-shadow: 0 0 0 4px rgba(212,165,116,0.18); }
+.dot.down        { background: var(--terra); box-shadow: 0 0 0 4px rgba(196,69,54,0.18); }
+
+.state-text {
+  font-family: 'Instrument Serif', serif;
+  font-size: 28px;
+}
+.state-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin: 40px 0 16px;
+}
+
+.regions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+.region {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.region .code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  color: var(--ink);
+  letter-spacing: 0.05em;
+}
+.region .small-dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.region .small-dot.operational { background: var(--moss); }
+.region .small-dot.degraded    { background: var(--amber); }
+.region .small-dot.down        { background: var(--terra); }
+.region .label {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.legend {
+  margin-top: 32px;
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.legend > span { display: flex; align-items: center; gap: 8px; }
+
+.footer {
+  margin-top: 64px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.footer a { color: var(--amber); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+.fineprint {
+  margin-top: 24px;
+  font-size: 13px;
+  color: var(--ink-dim);
+  line-height: 1.6;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div style="display:flex;align-items:baseline">
+    <a class="brand" href="/" style="text-decoration:none;color:inherit">
+      <span class="zero">0</span><span>trust</span>
+    </a>
+    <span class="crumb">/ status</span>
+  </div>
+
+  <h1>Service status</h1>
+
+  <div class="overall">
+    <div id="overall-dot" class="dot"></div>
+    <div>
+      <div id="overall-text" class="state-text">Checking…</div>
+      <div id="overall-sub" class="state-sub">Last updated —</div>
+    </div>
+  </div>
+
+  <h2>Regions</h2>
+  <div id="regions" class="regions"></div>
+
+  <div class="legend">
+    <span><span class="small-dot operational"></span> Operational</span>
+    <span><span class="small-dot degraded"></span> Degraded</span>
+    <span><span class="small-dot down"></span> Down</span>
+  </div>
+
+  <p class="fineprint">
+    What this page does and does not say. We report per-region availability
+    only — never per-node identities, capacities, customer counts, or anything
+    else we deliberately don't store. <strong>Degraded</strong> means the
+    region is still serving traffic but has reduced redundancy; new connections
+    may route to other regions until it recovers. <strong>Down</strong> means
+    no entry or exit node in that region is currently reachable from the
+    control plane; existing tunnels may still work if their entry is alive.
+  </p>
+
+  <div class="footer">
+    <span>Source: <span style="color:var(--ink)">control-plane heartbeat, refreshed every 60s</span></span>
+    <span><a href="/canary.txt">Warrant canary</a> · <a href="/">Home</a></span>
+  </div>
+
+</div>
+
+<script>
+// No analytics, no third-party scripts. Just fetch our own /api endpoint.
+const $ = (id) => document.getElementById(id);
+
+function setOverall(state, asOf) {
+  $('overall-dot').className = 'dot ' + state;
+  $('overall-text').textContent = {
+    operational: 'All systems operational',
+    degraded:    'Service degraded',
+    down:        'Service unavailable',
+  }[state] || 'Unknown';
+
+  const date = new Date(asOf * 1000);
+  const fmt = date.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  $('overall-sub').textContent = 'Updated ' + fmt;
+}
+
+function setRegions(regions) {
+  const grid = $('regions');
+  grid.innerHTML = '';
+  if (!regions.length) {
+    grid.innerHTML = '<div class="region"><span class="code">—</span>' +
+      '<span class="label">No regions reporting</span></div>';
+    return;
+  }
+  for (const r of regions) {
+    const el = document.createElement('div');
+    el.className = 'region';
+    el.innerHTML =
+      `<span class="small-dot ${r.state}"></span>` +
+      `<span class="code">${r.region.toUpperCase()}</span>` +
+      `<span class="label">${r.state}</span>`;
+    grid.appendChild(el);
+  }
+}
+
+async function refresh() {
+  try {
+    const resp = await fetch('/api/v1/status/public', { cache: 'no-store' });
+    if (!resp.ok) throw new Error('http ' + resp.status);
+    const data = await resp.json();
+    setOverall(data.service, data.as_of);
+    setRegions(data.regions);
+  } catch (e) {
+    setOverall('down', Math.floor(Date.now() / 1000));
+    $('regions').innerHTML =
+      '<div class="region"><span class="small-dot down"></span>' +
+      '<span class="code">—</span><span class="label">Status endpoint unreachable</span></div>';
+  }
+}
+
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>

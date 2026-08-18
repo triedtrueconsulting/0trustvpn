@@ -1,0 +1,7 @@
+[Unit]
+Description=0trust warrant canary freshness check
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/0trust/canary.env
+ExecStart=/opt/0trust/canary/scripts/check.sh

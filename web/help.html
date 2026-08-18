@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>0trust · help</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
+      rel="stylesheet">
+
+<style>
+:root {
+  --bg: #0c0c0a;
+  --bg-elev: #14140f;
+  --ink: #f4ede0;
+  --ink-dim: #a8a094;
+  --ink-faint: #6b6359;
+  --line: #2a2820;
+  --amber: #d4a574;
+  --terra: #c44536;
+  --moss: #7d8f5a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-weight: 300;
+  line-height: 1.65;
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+body {
+  background-image:
+    linear-gradient(rgba(244,237,224,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244,237,224,0.025) 1px, transparent 1px);
+  background-size: 64px 64px;
+  min-height: 100vh;
+}
+.wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; }
+
+.brand {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 24px;
+  text-decoration: none;
+  color: inherit;
+}
+.brand .zero { color: var(--amber); font-size: 30px; }
+.crumb {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-left: 16px;
+}
+
+h1 {
+  font-family: 'Instrument Serif', serif;
+  font-weight: 400;
+  font-size: 56px;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 32px 0 12px;
+}
+.lede {
+  color: var(--ink-dim);
+  font-size: 17px;
+  margin-bottom: 40px;
+  max-width: 60ch;
+}
+
+h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin: 48px 0 16px;
+}
+
+.q {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 20px 24px;
+  margin-bottom: 12px;
+}
+.q h3 {
+  font-family: 'Instrument Serif', serif;
+  font-weight: 400;
+  font-size: 22px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+.q p { color: var(--ink-dim); margin: 10px 0; }
+.q p:last-child { margin-bottom: 0; }
+.q strong { color: var(--ink); }
+
+code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  color: var(--amber);
+  background: rgba(212,165,116,0.08);
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+
+pre {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 12px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  color: var(--ink);
+  overflow-x: auto;
+  margin: 10px 0;
+  line-height: 1.55;
+}
+
+a { color: var(--amber); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.footer {
+  margin-top: 64px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div style="display:flex;align-items:baseline">
+    <a class="brand" href="/"><span class="zero">0</span><span>trust</span></a>
+    <span class="crumb">/ help</span>
+  </div>
+
+  <h1>Help &amp; common questions.</h1>
+  <p class="lede">
+    Read this before emailing <a href="mailto:0trustvpn@proton.me">0trustvpn@proton.me</a> —
+    most issues are answered here, and we can respond to the ones that aren't
+    much faster when we're not also answering the ones that are.
+  </p>
+
+  <h2>Account &amp; access</h2>
+
+  <div class="q">
+    <h3>I lost my account token.</h3>
+    <p>
+      The 16-character token is the <em>only</em> credential. We have no email,
+      no phone number, no recovery question. We <strong>cannot</strong>
+      retrieve it. This is deliberate — if we could, so could a subpoena.
+    </p>
+    <p>
+      The pragmatic fix: sign up again with a new token, keep a backup
+      (password manager, paper, or both) this time. Your previous account
+      expires naturally and you don't owe us anything.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>Can I share my account across devices?</h3>
+    <p>
+      Yes — up to <strong>8 devices</strong> per account. The CLI / GUI
+      handles this; for phones, use <code>0trust export</code> from the
+      desktop client to generate a config QR.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>How do I add a new device after my first connection?</h3>
+    <p>
+      <code>sudo 0trust connect</code> on the new device, after pasting the
+      same account token via <code>0trust login</code>. The server assigns
+      it a unique pubkey and IP. For mobile devices: open the desktop GUI,
+      click <em>Add mobile device</em>, scan the QR with the WireGuard app.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>How long does my subscription last?</h3>
+    <p>
+      As long as you paid for. Check expiry with <code>0trust status</code> —
+      it shows days remaining. We don't auto-renew because we don't keep your
+      payment details. About 7 days before expiry, the GUI shows a renewal
+      reminder; you top up with another crypto invoice and the new days
+      stack on top of the old ones.
+    </p>
+  </div>
+
+  <h2>Payment</h2>
+
+  <div class="q">
+    <h3>Why crypto only? Why no credit card?</h3>
+    <p>
+      Credit card processors require a real name and a billing address,
+      and the card network itself logs every transaction. That data lives
+      forever and is reachable by subpoena. Our no-logs claim would be
+      meaningless if we collected it at signup. Crypto avoids the trail.
+    </p>
+    <p>
+      If crypto is genuinely a blocker, the standard workaround is a
+      pre-paid VISA card bought with cash from a corner store. We don't
+      sell those; you'd need to figure that out locally.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>I paid but my account is still inactive.</h3>
+    <p>
+      Check the invoice status in the BTCPay UI link from your signup page —
+      Bitcoin needs 1 on-chain confirmation, Monero needs 10. That's
+      typically 10-20 minutes for BTC, 20-30 minutes for XMR. After that,
+      the webhook fires within seconds and your account activates.
+    </p>
+    <p>
+      If 60+ minutes have passed and the invoice shows <em>Settled</em>
+      but your account is still inactive, that's a real bug — email
+      <a href="mailto:0trustvpn@proton.me">support</a> with the invoice ID.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>Refunds?</h3>
+    <p>
+      Within 30 days, yes, full refund via BTCPay's dispute flow — just
+      ask. After that the bandwidth is used and we can't get it back.
+    </p>
+  </div>
+
+  <h2>Connection &amp; routing</h2>
+
+  <div class="q">
+    <h3>What's the difference between single-hop and multi-hop?</h3>
+    <p>
+      <strong>Single-hop</strong>: one server terminates your tunnel and
+      forwards traffic to the internet. Fast, simple, slightly cheaper on
+      our end. Adequate for almost everyone.
+    </p>
+    <p>
+      <strong>Multi-hop</strong>: your traffic enters via one server in
+      region A and exits via a different server in region B. The entry
+      server can see your IP but never decrypts your traffic (you're
+      end-to-end-encrypted to the exit). The exit decrypts but only ever
+      sees the entry's IP, never yours. Adds latency, eliminates the
+      single-server correlation risk.
+    </p>
+    <p>
+      Use <code>0trust connect zur</code> for single-hop, or
+      <code>0trust connect zur --exit buc</code> for multi-hop.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>How often does the multi-hop pair rotate?</h3>
+    <p>
+      Every 24 hours by default; the <code>0trust-rotate.timer</code>
+      systemd unit fires every 6 hours with jitter. You can rotate
+      manually with <code>sudo 0trust rotate</code> any time — the
+      tunnel hot-swaps without dropping existing connections.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>My tunnel works but the internet feels slow.</h3>
+    <p>
+      Check <a href="/status">status.0trustvpn.com</a> first — if your region
+      is degraded, capacity might be tight. Otherwise, try a different
+      entry region (<code>0trust connect rey</code> instead of
+      <code>zur</code>). If multi-hop, try removing the exit
+      (<code>--exit</code>) to compare.
+    </p>
+    <p>
+      Real bottlenecks we've seen: ISP throttling of WireGuard on UDP/51820
+      (try <code>0trust connect --port 443</code> if available), or
+      MTU issues (some carrier networks fragment WireGuard packets badly).
+    </p>
+  </div>
+
+  <h2>Privacy &amp; logging</h2>
+
+  <div class="q">
+    <h3>Where are your servers? Which jurisdictions?</h3>
+    <p>
+      Three nodes in three countries: <strong>Switzerland</strong>
+      (Zurich), <strong>Iceland</strong> (Reykjavik), and
+      <strong>Romania</strong> (Bucharest). All three are outside
+      the Five Eyes, Nine Eyes, and Fourteen Eyes intelligence-sharing
+      alliances. No servers in the US, UK, Canada, Australia, New
+      Zealand, Germany, France, Netherlands, Denmark, Belgium, Italy,
+      Spain, Sweden, or Norway. Not for any reason.
+    </p>
+    <p>
+      Three nodes means fewer servers to scrutinize and harden, not
+      more. Each box is a RAM-only ephemeral instance — disk is tmpfs,
+      swap is disabled, keys are regenerated on every reboot. A seized
+      machine reveals the OS image and nothing operational. See the
+      <a href="/audit">audit pack</a> for the verification commands.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>Do you actually keep no logs?</h3>
+    <p>
+      The honest answer is "almost". Read <a href="/audit">the full audit
+      pack</a> for the details, but the short version: we store hashed
+      account tokens, device pubkeys, and 2 days of /24-anonymized nginx
+      access logs (for DDoS forensics). We don't store IPs, user agents,
+      traffic destinations, or connection times.
+    </p>
+    <p>
+      <code>scripts/audit-verify.sh</code> in the repo runs an automated
+      verification matrix that any independent auditor (or you) can use
+      to confirm what we say matches what the server does.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>What happens if you're served a subpoena?</h3>
+    <p>
+      Specifics depend on jurisdiction. The structural defense is that we
+      don't <em>have</em> the data most subpoenas would ask for — there's
+      nothing to hand over. The disclosure signal is the
+      <a href="/canary.txt">warrant canary</a>, re-signed weekly. If it
+      stops being signed, treat that as the signal.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>What if your servers get seized?</h3>
+    <p>
+      Our exit and entry nodes are <strong>RAM-only ephemeral instances</strong>
+      (see audit pack §5.3). Disk is tmpfs, swap is off, keys regenerate on
+      boot. A seized box contains its base OS and nothing operationally
+      relevant. The control plane has a customer-token table, but tokens are
+      stored as SHA-256 hashes; a seizure reveals which tokens have been
+      issued but not which tokens map to which connections.
+    </p>
+  </div>
+
+  <h2>Technical</h2>
+
+  <div class="q">
+    <h3>Why WireGuard? Why not OpenVPN?</h3>
+    <p>
+      WireGuard is smaller (~4000 lines of audited kernel code vs
+      OpenVPN's ~70k), faster (kernel-space datapath), and has a saner
+      cryptographic design (no negotiation, no roundtrip handshake costs
+      after setup). The tradeoffs — slightly less hairy NAT traversal,
+      no per-connection user authentication — don't matter for our model
+      where we hand out per-device keypairs.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>Is the client open source?</h3>
+    <p>
+      Yes — <a href="https://github.com/0trust/cli">github.com/0trust/cli</a>.
+      Builds are reproducible: same source rev + same Go version produces
+      byte-identical binaries. See the build instructions in
+      <code>build-info.txt</code> in any release.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>Can I run my own exit node?</h3>
+    <p>
+      Not currently — we operate the mesh ourselves to keep customer
+      traffic correlation under one trust boundary. A federated model
+      (Bring-Your-Own-Node) is on the long-term roadmap but isn't
+      something we're ready to support.
+    </p>
+  </div>
+
+  <h2>Still need help?</h2>
+
+  <div class="q">
+    <h3>How do I contact you?</h3>
+    <p>
+      Email <a href="mailto:0trustvpn@proton.me">0trustvpn@proton.me</a>.
+      We respond within 48 hours, faster for outages. <strong>Please
+      encrypt sensitive details to our PGP key</strong> — fingerprint
+      at <a href="/.well-known/security.txt">/.well-known/security.txt</a>.
+    </p>
+    <p>
+      For security vulnerabilities, use
+      <a href="mailto:0trustvpn@proton.me">0trustvpn@proton.me</a>
+      — same key, faster triage. See
+      <a href="/security-policy">our security policy</a>.
+    </p>
+    <p>
+      <strong>Tor users:</strong> we run a `.onion` mirror of this site.
+      The address is published in the footer below, in our warrant canary,
+      and on our Mastodon profile. Tor Browser auto-promotes you when you
+      visit the clearnet URL (look for the purple onion icon).
+    </p>
+  </div>
+
+  <div class="footer">
+    <span>Last updated 2026-05</span>
+    <span><a href="/">Home</a> · <a href="/status">Status</a> · <a href="/audit">Audit</a> · <a href="/download">Download</a></span>
+  </div>
+
+</div>
+</body>
+</html>

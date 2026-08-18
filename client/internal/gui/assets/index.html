@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>0trust</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<div class="window">
+  <header class="titlebar">
+    <div class="brand">
+      <span class="zero">0</span><span class="word">trust</span>
+    </div>
+    <div class="version">v0.1.0</div>
+  </header>
+
+  <!-- LOGGED-OUT VIEW -->
+  <section id="view-login" class="view">
+    <div class="hero">
+      <h1>Welcome.</h1>
+      <p class="muted">Sign in with your account token to connect.</p>
+    </div>
+    <div class="card">
+      <label class="label">Account token</label>
+      <input id="token-input" type="text" placeholder="XXXX-XXXX-XXXX-XXXX"
+             maxlength="19" autocomplete="off" spellcheck="false">
+      <button id="login-btn" class="btn-primary">Sign in</button>
+      <p id="login-err" class="error hidden"></p>
+      <p class="hint">No account? <a href="https://0trustvpn.com" target="_blank">Get one →</a></p>
+    </div>
+  </section>
+
+  <!-- LOGGED-IN VIEW -->
+  <section id="view-main" class="view hidden">
+
+    <!-- BIG STATUS -->
+    <div class="status-block">
+      <div class="status-light" id="status-light"></div>
+      <div>
+        <div class="status-label" id="status-text">Disconnected</div>
+        <div class="status-sub" id="status-sub">no tunnel</div>
+      </div>
+      <button id="toggle-btn" class="btn-large">Connect</button>
+    </div>
+
+    <!-- ROUTING -->
+    <div class="card">
+      <div class="row">
+        <div class="flex">
+          <label class="label">Entry region</label>
+          <select id="entry-select"></select>
+        </div>
+        <div class="flex">
+          <label class="label">Exit region</label>
+          <select id="exit-select">
+            <option value="">— (single-hop)</option>
+          </select>
+        </div>
+      </div>
+      <div class="hint" id="route-hint">
+        Single-hop: one node terminates your tunnel and routes to the internet.
+      </div>
+    </div>
+
+    <!-- MULTI-HOP SESSION DETAILS -->
+    <div class="card" id="hop-details">
+      <div class="kv-row"><span class="k">mode</span>          <span class="v" id="kv-mode">—</span></div>
+      <div class="kv-row"><span class="k">entry node</span>    <span class="v mono" id="kv-entry">—</span></div>
+      <div class="kv-row"><span class="k">exit node</span>     <span class="v mono" id="kv-exit">—</span></div>
+      <div class="kv-row"><span class="k">rotates</span>       <span class="v mono" id="kv-rotates">—</span></div>
+      <button id="rotate-btn" class="btn-ghost">Rotate now</button>
+    </div>
+
+    <!-- ACCOUNT -->
+    <div class="card">
+      <div class="kv-row"><span class="k">account</span>       <span class="v mono" id="kv-token">—</span></div>
+      <div class="kv-row"><span class="k">subscription</span>  <span class="v" id="kv-sub">—</span></div>
+      <div class="kv-row"><span class="k">expires</span>       <span class="v mono" id="kv-exp">—</span></div>
+      <div class="kv-row"><span class="k">devices</span>       <span class="v" id="kv-dev">—</span></div>
+      <div class="btn-row">
+        <button id="export-btn" class="btn-ghost">Add mobile device</button>
+        <button id="logout-btn" class="btn-ghost danger">Sign out</button>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- EXPORT MODAL -->
+  <div id="export-modal" class="modal hidden">
+    <div class="modal-inner">
+      <div class="modal-head">
+        <h2>Mobile device</h2>
+        <button id="export-close" class="x-btn">×</button>
+      </div>
+
+      <div id="export-step1">
+        <p class="muted">
+          Generates a new WireGuard config for an iOS or Android device,
+          using the same routing settings as your current selection.
+          Scan the QR with the official WireGuard app.
+        </p>
+        <label class="label">Device name</label>
+        <input id="export-name" type="text" value="phone" maxlength="40">
+        <button id="export-go" class="btn-primary">Create QR code</button>
+      </div>
+
+      <div id="export-step2" class="hidden">
+        <img id="export-qr" alt="WireGuard config QR"
+             style="display:block;margin:0 auto;background:#fff;padding:8px;border-radius:4px;max-width:340px;width:100%;">
+        <div class="kv-row" style="margin-top:16px"><span class="k">mode</span> <span class="v mono" id="export-mode">—</span></div>
+        <p class="hint" style="margin-top:12px">
+          In the WireGuard app: <strong>Add tunnel → Create from QR code</strong>.
+          The QR contains a private key — don't photograph anyone else's screen with it.
+        </p>
+        <button id="export-copy" class="btn-ghost">Copy config text</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast hidden"></div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

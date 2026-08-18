@@ -1,0 +1,27 @@
+[Unit]
+Description=0trust mesh node syncer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+EnvironmentFile=/etc/0trust/meshd.env
+ExecStart=/usr/bin/python3 /usr/local/bin/0trust-meshd
+Restart=on-failure
+RestartSec=5s
+
+# Needs CAP_NET_ADMIN for wg/ip commands
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/wireguard
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

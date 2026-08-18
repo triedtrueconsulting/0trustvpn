@@ -1,0 +1,55 @@
+# ─── Secrets & operator state (NEVER commit) ───
+*.env
+!systemd/api.env.example
+*.key
+*.asc
+!**/pubkey.asc.example
+*.jks
+*.keystore
+keystore.properties
+/etc/0trust/
+backup-recipients.txt
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.age
+.snap-*
+
+# ─── Go build artifacts ───
+client/dist/
+*.exe
+*.test
+*.out
+
+# ─── Android build artifacts ───
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/captures/
+
+# ─── Installer outputs ───
+installer/linux/deb/out/
+installer/linux/appimage/out/
+installer/windows/*.msi
+installer/windows/obj/
+installer/windows/bin/
+*.AppImage
+*.deb
+
+# ─── Python ───
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ─── OS / editor ───
+.DS_Store
+*.swp
+.idea/
+.vscode/
+*.iml
+
+# ─── Node (if any tooling is added later) ───
+node_modules/

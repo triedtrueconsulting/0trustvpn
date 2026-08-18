@@ -1,0 +1,21 @@
+[Unit]
+Description=0trust control plane backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/0trust/api.env
+EnvironmentFile=-/etc/0trust/backup.env
+ExecStart=/opt/0trust/scripts/backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Hardening — backup script reads the DB + writes to one directory,
+# nothing else needed.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/0trust /tmp
+PrivateTmp=yes
+NoNewPrivileges=yes

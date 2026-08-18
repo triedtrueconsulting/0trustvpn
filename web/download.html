@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>0trust · download</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
+      rel="stylesheet">
+
+<style>
+:root {
+  --bg: #0c0c0a;
+  --bg-elev: #14140f;
+  --ink: #f4ede0;
+  --ink-dim: #a8a094;
+  --ink-faint: #6b6359;
+  --line: #2a2820;
+  --amber: #d4a574;
+  --terra: #c44536;
+  --moss: #7d8f5a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-weight: 300;
+  line-height: 1.6;
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+body {
+  background-image:
+    linear-gradient(rgba(244,237,224,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244,237,224,0.025) 1px, transparent 1px);
+  background-size: 64px 64px;
+  min-height: 100vh;
+}
+.wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; }
+
+.brand {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 24px;
+  text-decoration: none;
+  color: inherit;
+}
+.brand .zero { color: var(--amber); font-size: 30px; }
+.crumb {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-left: 16px;
+}
+
+h1 {
+  font-family: 'Instrument Serif', serif;
+  font-weight: 400;
+  font-size: 56px;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 32px 0 12px;
+}
+.lede {
+  color: var(--ink-dim);
+  font-size: 17px;
+  margin-bottom: 40px;
+  max-width: 56ch;
+}
+
+h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin: 40px 0 16px;
+}
+
+.binaries {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+.binary {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 14px 18px;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 16px;
+}
+.binary .plat {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  color: var(--ink);
+}
+.binary .arch-suffix {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.05em;
+  font-weight: 400;
+}
+.binary .arch {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.binary a {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--amber);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  border: 1px solid var(--line);
+  padding: 8px 14px;
+  border-radius: 2px;
+  transition: all 0.15s;
+}
+.binary a:hover { border-color: var(--amber); background: rgba(212,165,116,0.06); }
+
+.verify {
+  background: var(--bg-elev);
+  border-left: 2px solid var(--amber);
+  padding: 20px 24px;
+  margin: 24px 0;
+  border-radius: 2px;
+}
+.verify p { margin-bottom: 12px; }
+.verify p:last-child { margin-bottom: 0; }
+pre {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 14px 18px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  color: var(--ink);
+  overflow-x: auto;
+  margin: 12px 0;
+  line-height: 1.55;
+}
+pre .comment { color: var(--ink-faint); }
+pre .prompt { color: var(--amber); }
+
+code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  color: var(--amber);
+  background: rgba(212,165,116,0.08);
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+
+.key-block {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 14px 18px;
+  word-break: break-all;
+  letter-spacing: 0.04em;
+  color: var(--moss);
+  margin: 8px 0 20px;
+}
+
+.callout {
+  font-size: 14px;
+  color: var(--ink-dim);
+  margin: 24px 0;
+  line-height: 1.6;
+}
+.callout strong { color: var(--ink); }
+
+.footer {
+  margin-top: 64px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.footer a { color: var(--amber); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div style="display:flex;align-items:baseline">
+    <a class="brand" href="/"><span class="zero">0</span><span>trust</span></a>
+    <span class="crumb">/ download</span>
+  </div>
+
+  <h1>Download the client.</h1>
+  <p class="lede">
+    One binary per platform. Statically linked, reproducible, PGP-signed.
+    Verify the signature before you run it — instructions below the table.
+  </p>
+
+  <h2>Current release · v0.1.0</h2>
+
+  <div class="binaries">
+    <div class="binary">
+      <span class="plat">Linux <span class="arch-suffix">.deb (Debian / Ubuntu)</span></span>
+      <span class="arch">x86_64</span>
+      <a href="/releases/0.1.0/0trust_0.1.0_amd64.deb">Download</a>
+    </div>
+    <div class="binary">
+      <span class="plat">Linux <span class="arch-suffix">.deb (Debian / Ubuntu)</span></span>
+      <span class="arch">ARM64</span>
+      <a href="/releases/0.1.0/0trust_0.1.0_arm64.deb">Download</a>
+    </div>
+    <div class="binary">
+      <span class="plat">Linux <span class="arch-suffix">AppImage (universal)</span></span>
+      <span class="arch">x86_64</span>
+      <a href="/releases/0.1.0/0trust-0.1.0-x86_64.AppImage">Download</a>
+    </div>
+    <div class="binary">
+      <span class="plat">Linux <span class="arch-suffix">raw binary</span></span>
+      <span class="arch">x86_64</span>
+      <a href="/releases/0.1.0/0trust-0.1.0-linux-amd64">Download</a>
+    </div>
+    <div class="binary">
+      <span class="plat">macOS</span>
+      <span class="arch">Intel</span>
+      <a href="/releases/0.1.0/0trust-0.1.0-darwin-amd64">Download</a>
+    </div>
+    <div class="binary">
+      <span class="plat">macOS</span>
+      <span class="arch">Apple Silicon</span>
+      <a href="/releases/0.1.0/0trust-0.1.0-darwin-arm64">Download</a>
+    </div>
+    <div class="binary">
+      <span class="plat">Windows <span class="arch-suffix">.msi (recommended)</span></span>
+      <span class="arch">x86_64</span>
+      <a href="/releases/0.1.0/0trust-0.1.0-x64.msi">Download</a>
+    </div>
+    <div class="binary">
+      <span class="plat">Windows <span class="arch-suffix">raw .exe</span></span>
+      <span class="arch">x86_64</span>
+      <a href="/releases/0.1.0/0trust-0.1.0-windows-amd64.exe">Download</a>
+    </div>
+    <div class="binary">
+      <span class="plat">Android <span class="arch-suffix">APK</span></span>
+      <span class="arch">arm64 + armv7</span>
+      <a href="/releases/0.1.0/0trust-0.1.0.apk">Download</a>
+    </div>
+  </div>
+
+  <h2>iOS &amp; Android</h2>
+  <p class="callout">
+    Native apps are in development. Until then, use <code>0trust export</code>
+    from the desktop binary to generate a QR code, then scan it from the
+    official <strong>WireGuard</strong> app on the App Store or Play Store
+    (or <a href="https://f-droid.org/en/packages/com.wireguard.android/">F-Droid</a>).
+    The desktop GUI has the same flow under <em>Add mobile device</em>.
+  </p>
+
+  <h2>Verify before you run</h2>
+  <p class="callout">
+    Every release is accompanied by <code>SHA256SUMS</code> and a detached
+    PGP signature <code>SHA256SUMS.asc</code>. Don't trust binaries that
+    don't verify against our release key.
+  </p>
+
+  <div class="verify">
+    <p><strong>1.</strong> Get the verification script (one-time):</p>
+<pre><span class="prompt">$</span> curl -O https://0trustvpn.com/verify-release.sh
+<span class="prompt">$</span> chmod +x verify-release.sh</pre>
+
+    <p><strong>2.</strong> Download the release bundle:</p>
+<pre><span class="prompt">$</span> mkdir 0.1.0 &amp;&amp; cd 0.1.0
+<span class="prompt">$</span> curl -O https://0trustvpn.com/releases/0.1.0/SHA256SUMS
+<span class="prompt">$</span> curl -O https://0trustvpn.com/releases/0.1.0/SHA256SUMS.asc
+<span class="prompt">$</span> curl -O https://0trustvpn.com/releases/0.1.0/pubkey.asc
+<span class="prompt">$</span> curl -O https://0trustvpn.com/releases/0.1.0/0trust-0.1.0-linux-amd64</pre>
+
+    <p><strong>3.</strong> Verify:</p>
+<pre><span class="prompt">$</span> ../verify-release.sh
+<span class="comment"># [✓] PGP signature valid (key: DEADBEEF...REPLACE-ME)</span>
+<span class="comment"># [✓] key fingerprint matches expected: DEADBEEF...REPLACE-ME</span>
+<span class="comment"># [✓] all 5 files match SHA256SUMS</span>
+<span class="comment"># [✓] VERIFIED.  Safe to run.</span></pre>
+  </div>
+
+  <h2>Our release-signing key</h2>
+  <p class="callout">
+    PGP fingerprint (also available via <a href="/.well-known/security.txt">/.well-known/security.txt</a>
+    and on <a href="https://keys.openpgp.org/">keys.openpgp.org</a>):
+  </p>
+  <div class="key-block">
+    DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+  </div>
+  <p class="callout">
+    <strong>Verify this fingerprint out-of-band</strong> before trusting it —
+    check it against our published canary, Mastodon/Bluesky posts, and any
+    in-person introduction. A fingerprint from this page alone isn't enough
+    if you're worried about a compromised TLS chain.
+  </p>
+
+  <h2>Reproducible builds</h2>
+  <p class="callout">
+    The binaries are built with <code>go build -trimpath -buildvcs=false
+    -ldflags "-s -w"</code> from a tagged source rev. Two builds of the
+    same source with the same Go version produce byte-identical binaries.
+    See <code>build-info.txt</code> in the release directory for the
+    exact rev and toolchain.
+  </p>
+
+  <div class="footer">
+    <span>Source: <a href="https://github.com/0trust/cli">github.com/0trust/cli</a></span>
+    <span><a href="/audit">No-logs audit</a> · <a href="/canary.txt">Canary</a> · <a href="/help">Help</a> · <a href="/status">Status</a></span>
+  </div>
+
+</div>
+</body>
+</html>

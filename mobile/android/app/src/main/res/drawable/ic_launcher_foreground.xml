@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!--
+      Foreground for adaptive icons. 108x108 viewport with ~72x72 safe area
+      centered. We draw a stylized "0" in the amber brand color.
+    -->
+    <path
+        android:fillColor="#D4A574"
+        android:pathData="M54,30c-9.39,0 -17,10.7 -17,24s7.61,24 17,24 17,-10.7 17,-24S63.39,30 54,30zM54,72c-5.6,0 -10,-8.2 -10,-18s4.4,-18 10,-18 10,8.2 10,18S59.6,72 54,72z" />
+</vector>

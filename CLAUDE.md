@@ -1,0 +1,210 @@
+# 0trust VPN — Claude Code project guide
+
+> This file is read automatically by Claude Code at the start of every
+> session. It carries over the context, locked decisions, conventions, and
+> gotchas from the project's design so you don't start cold. Keep it current:
+> when a decision changes or a new invariant appears, update this file.
+
+## What this is
+
+**0trust** is a commercial, privacy-first mesh VPN service (a Mullvad-style
+product) built as a complete, launch-ready codebase. It is a real business:
+it takes crypto payments, provisions WireGuard tunnels, and makes verifiable
+no-logs claims. Everything parses/builds/validates; what remains before public
+launch is operator action (provisioning servers, signing keys, compiling
+installers, legal review), not core engineering.
+
+The product routes customer traffic through a mesh of **three server nodes in
+three jurisdictions outside the Five/Nine/Fourteen Eyes alliances**, with
+single-hop or multi-hop (enter one country, exit another) routing. Accounts
+are anonymous 16-char tokens; there's no email/password/identity.
+
+## Repository layout
+
+```
+api/            FastAPI + SQLite control plane (main.py is the core)
+                btcpay.py, sweep.py (expiry sweeper), mint-provision-token.py
+client/         Go module github.com/0trust/cli (Go 1.22, dep: skip2/go-qrcode)
+  cmd/0trust/main.go              CLI entrypoint + help text
+  internal/api/api.go             Backend HTTP client — CANONICAL wire contract
+  internal/config/                Local state (~/.config/0trust/state.json)
+  internal/wg/                     Cross-platform WireGuard control:
+    wg.go        Shared: GenKeypair (stdlib crypto/ecdh), BuildConfig, WriteConfig
+    wg_unix.go   Linux/macOS: wg-quick + wg syncconf
+    wg_windows.go Windows: wireguard.exe /installtunnelservice (official service)
+  internal/gui/gui.go             Browser GUI server on 127.0.0.1:51827
+  internal/gui/assets/            index.html, app.css, app.js (embedded)
+  internal/export/export.go       Mobile QR config export
+mobile/android/                   Complete Kotlin/Compose app (wireguard-android)
+mobile/ios/                       Skeleton — OUT OF SCOPE for v0.1 (QR-export covers iOS)
+installer/windows/                WiX v4 MSI (0trust.wxs)
+installer/linux/deb/              build.sh → .deb (amd64+arm64), TESTED working
+installer/linux/appimage/         build.sh → AppImage (auto-fetches appimagetool)
+btcpay/                           BTCPay Server deploy + integration (lite path)
+canary/                           Warrant canary (PGP-signed weekly statements)
+support/                          PGP support workflow (WKD, auto-reply)
+tor/                              v3 onion mirror (serves browsing, NOT /api)
+nginx/0trustvpn.com.conf          Main site config (rate limits, routes, TLS)
+scripts/                          bootstrap.sh, bootstrap-node.sh, audit-verify.sh,
+                                  backup.sh, release.sh, verify-release.sh
+systemd/                          api / sweep / backup / meshd .service + .timer
+web/                              Landing + status/download/help/audit/privacy/terms/security
+docs/                             README, LAUNCH, AUDIT, ABUSE, DR
+```
+
+## LOCKED operator decisions — do not change without explicit instruction
+
+- **Domain:** `0trustvpn.com` (brand mark "0trustvpn", no slash). A backup
+  domain at a different registrar is a launch to-do.
+- **Contact email:** `0trustvpn@proton.me` — SINGLE inbox. All role addresses
+  (security@, support@, abuse@, legal@) are optional aliases that route here.
+  Every web page uses the proton.me address directly.
+- **Bitcoin xpub:** `zpub6msFuvuWJzY7eGzgLkT2omB8HqBQ5z3KkbVD43Fj2iKGTPDLxyZJphYyJAnJwkDYRYtvTnHB1zJhDC6iFrEmF7puQDD3e11d6zKtQdvP1xU`
+- **Three mesh nodes only**, all outside Five/Nine/Fourteen Eyes:
+  - `zur` = Zurich, Switzerland
+  - `rey` = Reykjavik, Iceland
+  - `buc` = Bucharest, Romania
+  (Norway was rejected earlier — it's in Nine Eyes. Romania replaced it.)
+  **These region codes must be identical everywhere** — CLI, GUI, Android,
+  iOS skeleton, API defaults, docs, landing-page terminal demo.
+- **BTCPay:** lite path (~$8/mo: pruned Bitcoin + remote Monero daemon).
+- **iOS:** dropped from v0.1 scope. QR-export into the official WireGuard app
+  covers iOS users. Do not build a branded iOS app without explicit go-ahead
+  (needs Apple Developer Program + Network Extension entitlement + review).
+- **Design system:** warm-dark palette
+  `--bg #0c0c0a  --ink #f4ede0  --amber #d4a574  --terra #c44536  --moss #7d8f5a  --line #2a2820`.
+  Fonts: Instrument Serif (headings), JetBrains Mono (technical/labels),
+  IBM Plex Sans (body). Dark-only product.
+
+## Architecture invariants (things that must stay true)
+
+- **API wire contract is snake_case**, auth via `X-Account-Token` header (NOT
+  Bearer/OAuth — the token IS the credential). `client/internal/api/api.go` is
+  the canonical definition; any other client (Android, iOS) must match it
+  field-for-field. See "Recurring bug classes" below — this has bitten us.
+- **Mesh network is `10.64.0.0/10`** (`MESH_NETWORK` in the API). The node
+  egress filter's `CLIENT_NET` and the masquerade rule must match this.
+- **Multi-hop requires entry ≠ exit.** Enforced by `_validate_regions()` in
+  the API, shared by both register and rotate endpoints.
+- **RAM-only ephemeral nodes:** tmpfs paths, swap off, fresh WG keys on boot,
+  journald volatile. A seized node reveals nothing operational.
+- **No-logs claims must match reality.** The privacy policy (web/privacy.html),
+  terms (web/terms.html), and audit pack (docs/AUDIT.md) all make the SAME
+  claims. If you change what the system collects/retains, you MUST update all
+  three, and `scripts/audit-verify.sh` must still pass. See discipline note below.
+- **The GUI is browser-based, not native.** `0trust gui` runs a localhost web
+  server; it's the same code on all 3 desktop OSes. No system tray (v0.2 —
+  systray libs were blocked in the original build env). No kill switch (v0.2).
+
+## Build & validation commands
+
+Run these from the repo root. They're the exact checks used throughout
+development — treat green across all of them as the bar before considering
+anything done.
+
+```bash
+# --- Go client: vet + cross-compile all 6 targets ---
+cd client
+export CGO_ENABLED=0
+go vet ./...
+for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+  os=${p%/*}; arch=${p#*/}; ext=""; [ "$os" = "windows" ] && ext=".exe"
+  GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o dist/0trust-$os-$arch$ext ./cmd/0trust
+done
+cd ..
+
+# --- Python API: parse + import + smoke-test endpoints ---
+python3 -c "import ast; ast.parse(open('api/main.py').read())"
+# For a live import test, set ZTV_DB_PATH to a tmp file, call main.init_db(),
+# insert rows into mesh_nodes, then call main.regions() / main.public_status().
+
+# --- Bash: syntax-check every script ---
+for f in $(find . -name '*.sh'); do bash -n "$f" || echo "FAIL: $f"; done
+
+# --- HTML: parse every page ---
+python3 -c "import html.parser,glob
+class P(html.parser.HTMLParser): pass
+[P().feed(open(f).read()) for f in glob.glob('web/*.html')]"
+
+# --- Android XML validity (full build needs Android Studio + NDK) ---
+python3 -c "import xml.etree.ElementTree as ET,glob
+[ET.parse(f) for f in glob.glob('mobile/android/**/*.xml',recursive=True)]"
+
+# --- Linux packages (needs dpkg-dev; produces real .debs) ---
+make -C client linux 2>/dev/null || (cd client && for a in amd64 arm64; do \
+  GOOS=linux GOARCH=$a go build -o dist/0trust-linux-$a ./cmd/0trust; done; cd ..)
+./installer/linux/deb/build.sh
+```
+
+The Android app requires Android Studio Hedgehog+ with the NDK to build an
+APK (`./gradlew assembleDebug`). The Windows MSI requires a Windows host with
+WiX (`wix build`). Neither can be built in a headless Linux-only environment;
+the source is complete and validated as far as it can be without those toolchains.
+
+## Recurring bug classes — check these first when something's off
+
+These have each bitten the project more than once. When you touch related
+code, actively check for them:
+
+1. **Stale region codes.** Old codes `ams/fra/lon/sto/nyc/sjc/sgp/tyo` from
+   an earlier design leak into defaults, help text, and demos. The ONLY valid
+   codes are `zur/rey/buc`. Grep for the old ones after any change:
+   `grep -rnE '"(ams|fra|lon|sto|nyc)"' api client mobile`
+2. **camelCase vs snake_case wire mismatch.** The API is snake_case. Any new
+   API client field must map correctly (Kotlin uses @SerialName; Go uses json
+   tags). The Android client was fully broken by this once.
+3. **Auth header.** It's `X-Account-Token`, never `Authorization: Bearer`.
+4. **Claim-vs-reality drift.** The biggest risk for a privacy product. The
+   audit pack once claimed "no backups" while backups existed (and the claim
+   was also operationally broken — the token alone can't rebuild subscription
+   expiry). If you change data handling, reconcile privacy.html + terms.html +
+   AUDIT.md + audit-verify.sh together. Be honest over reassuring.
+5. **Empty-slice panics.** `resp.Peers[0]` panics if the peer list is empty.
+   Guard with `len(...) > 0` before indexing API responses.
+6. **Platform-specific Go.** `wg_unix.go` / `wg_windows.go` are build-tagged.
+   `checkRoot()` returns nil on Windows (UAC handles elevation), requires
+   euid 0 on Unix. Always cross-compile all 6 targets after touching wg or gui.
+
+## Discipline for a privacy product
+
+This is a product whose entire value is trustworthiness. Two rules that
+overrode convenience throughout:
+
+- **Never make a claim the system doesn't back up.** If marketing/legal/audit
+  text says X, the code must do X and audit-verify.sh must prove it.
+- **Prefer the honest, specific, falsifiable statement** over the vague
+  reassuring one — in docs, legal pages, and the warrant canary alike.
+
+## Current state & what's left
+
+**Done and validated:** control plane, 6-platform CLI, browser GUI, Windows
+MSI source, Linux .deb + AppImage (deb build tested), complete Android app,
+BTCPay integration, warrant canary, RAM-only node bootstrap with egress
+hardening, no-logs audit pack + machine-checkable verifier, Tor onion mirror,
+encrypted DB backup + DR runbook, abuse/DMCA runbook, legal pages
+(privacy/terms), full landing site with app showcase.
+
+**Remaining — operator action, not engineering:**
+1. Provision 5 VPSes (control plane, BTCPay, 3 mesh nodes), run the bootstraps
+   (docs/LAUNCH.md is the day-by-day playbook).
+2. Generate keys: release-signing PGP, support PGP, age backup key. Replace the
+   `DEADBEEF` placeholders in web/download.html, web/security-policy.html, and
+   scripts/verify-release.sh with real fingerprints.
+3. Compile signed installers on real toolchains: MSI (Windows host), APK
+   (Android Studio), .deb/AppImage (Linux host — scripts ready).
+4. Legal review of privacy.html + terms.html; set the operating entity name.
+5. Commission a third-party audit (Cure53 / Assured AB) — the audit pack is
+   built to be their starting point.
+
+**Explicit v0.2 backlog:** system tray icon, kill switch, native desktop
+window, branded iOS app, APT repo for auto-updates.
+
+## Conventions
+
+- Keep changes minimal and targeted; this codebase is deliberately lean.
+- After any change, run the full validation battery above before declaring done.
+- Prose in docs and legal pages avoids over-formatting; match the existing
+  voice (direct, specific, honest about limitations).
+- When adding a mesh region, it flows from the live `mesh_nodes` table — the
+  API's /regions endpoint and REGION_NAMES dict derive from it. Add the display
+  name to REGION_NAMES in api/main.py.

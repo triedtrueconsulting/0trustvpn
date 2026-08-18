@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>0trust · security policy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
+      rel="stylesheet">
+
+<style>
+:root {
+  --bg: #0c0c0a; --bg-elev: #14140f; --ink: #f4ede0; --ink-dim: #a8a094;
+  --ink-faint: #6b6359; --line: #2a2820; --amber: #d4a574;
+  --terra: #c44536; --moss: #7d8f5a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg); color: var(--ink);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-weight: 300; line-height: 1.65; font-size: 15px;
+}
+body {
+  background-image:
+    linear-gradient(rgba(244,237,224,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244,237,224,0.025) 1px, transparent 1px);
+  background-size: 64px 64px; min-height: 100vh;
+}
+.wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; }
+.brand { font-family:'JetBrains Mono',monospace; font-weight:700; font-size:24px; text-decoration:none; color:inherit; }
+.brand .zero { color: var(--amber); font-size: 30px; }
+.crumb {
+  font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-faint);
+  letter-spacing:0.1em; text-transform:uppercase; margin-left:16px;
+}
+h1 {
+  font-family:'Instrument Serif',serif; font-weight:400; font-size:56px;
+  line-height:1.05; letter-spacing:-0.02em; margin: 32px 0 12px;
+}
+.lede { color: var(--ink-dim); font-size: 17px; margin-bottom: 32px; max-width: 60ch; }
+h2 {
+  font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600;
+  color:var(--ink-faint); letter-spacing:0.15em; text-transform:uppercase;
+  margin: 44px 0 16px;
+}
+h3 {
+  font-family:'Instrument Serif',serif; font-weight:400; font-size:24px;
+  line-height:1.2; color:var(--ink); margin: 24px 0 8px;
+}
+p { color: var(--ink-dim); margin: 14px 0; max-width: 70ch; }
+p strong { color: var(--ink); }
+ul { margin: 12px 0 16px 24px; }
+li { color: var(--ink-dim); margin: 8px 0; }
+
+code {
+  font-family:'JetBrains Mono',monospace; font-size:13px;
+  color:var(--amber); background:rgba(212,165,116,0.08);
+  padding:1px 6px; border-radius:2px;
+}
+.key-block {
+  font-family:'JetBrains Mono',monospace; font-size:12px;
+  background: var(--bg-elev); border: 1px solid var(--line);
+  border-radius: 2px; padding: 14px 18px;
+  word-break: break-all; letter-spacing: 0.04em; color: var(--moss);
+  margin: 8px 0 20px;
+}
+.scope {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0;
+}
+.scope-col {
+  background: var(--bg-elev); border: 1px solid var(--line);
+  border-radius: 3px; padding: 16px 20px;
+}
+.scope-col h4 {
+  font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:600;
+  letter-spacing:0.1em; text-transform:uppercase;
+  margin-bottom: 10px;
+}
+.scope-col.in h4 { color: var(--moss); }
+.scope-col.out h4 { color: var(--terra); }
+.scope-col li { font-size: 14px; }
+
+a { color: var(--amber); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.footer {
+  margin-top: 64px; padding-top: 24px;
+  border-top: 1px solid var(--line); color: var(--ink-faint);
+  font-family:'JetBrains Mono',monospace; font-size: 11px;
+  letter-spacing:0.08em; text-transform:uppercase;
+  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div style="display:flex;align-items:baseline">
+  <a class="brand" href="/"><span class="zero">0</span><span>trust</span></a>
+  <span class="crumb">/ security policy</span>
+</div>
+
+<h1>Security disclosure policy.</h1>
+<p class="lede">
+  We take security reports seriously and we treat the people who report
+  them well. This page describes how to contact us, what's in scope, what
+  we commit to, and what we ask in return.
+</p>
+
+<h2>Contact</h2>
+<p>
+  Email <a href="mailto:0trustvpn@proton.me">0trustvpn@proton.me</a>,
+  encrypted to our PGP key. Don't use the support address — vulnerability
+  reports get faster triage on a dedicated channel.
+</p>
+<p>The key fingerprint:</p>
+<div class="key-block">
+  DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+</div>
+<p>
+  Verify it via <a href="/.well-known/security.txt">/.well-known/security.txt</a>,
+  on <a href="https://keys.openpgp.org/">keys.openpgp.org</a>, and the
+  WKD URL also linked from security.txt. If you're unsure whether you've
+  reached the right key, ask us to sign a one-off challenge with the
+  fingerprint above.
+</p>
+
+<h2>Our commitments to you</h2>
+<ul>
+  <li><strong>Acknowledgement within 24 hours</strong> — even on weekends. If you don't hear back in 24h, the report didn't reach us; please try a different channel (Mastodon, Bluesky, signed Tor onion submission).</li>
+  <li><strong>Initial triage within 72 hours</strong> — we'll tell you whether we can reproduce, our severity estimate, and our expected timeline.</li>
+  <li><strong>You set the disclosure timeline</strong> within reason. The default is 90 days from acknowledgement before public disclosure; we'll negotiate longer for hard-to-fix architectural issues, or shorter for active exploitation.</li>
+  <li><strong>Credit your work</strong> in the resulting advisory unless you prefer to remain anonymous. We don't run a bounty program at our current scale, but we will offer free subscription extensions and we will not be the operator who shortchanged you on attribution.</li>
+  <li><strong>Never threaten you with legal action</strong> for good-faith research within the scope below. This commitment is non-revocable.</li>
+</ul>
+
+<h2>In scope</h2>
+
+<div class="scope">
+  <div class="scope-col in">
+    <h4>✓ Welcome</h4>
+    <ul>
+      <li>The control-plane API surface (<code>api/v1/*</code>)</li>
+      <li>The client binaries (CLI, GUI, mobile export)</li>
+      <li>BTCPay integration (webhook verification, invoice handling)</li>
+      <li>Mesh-node syncer and ephemeral-node provisioning flow</li>
+      <li>Cryptographic weaknesses in our protocol or implementation choices</li>
+      <li>Information leakage in nginx, our static pages, or DNS</li>
+      <li>Privacy regressions vs. the claims in our audit pack</li>
+    </ul>
+  </div>
+  <div class="scope-col out">
+    <h4>✗ Out of scope</h4>
+    <ul>
+      <li>Findings against BTCPay Server itself — report to BTCPay upstream</li>
+      <li>Findings against WireGuard — report to WireGuard upstream</li>
+      <li>Vulnerabilities requiring physical access to a customer device</li>
+      <li>Issues only exploitable with phishing or social engineering of our customers</li>
+      <li>Missing security headers without a demonstrated impact</li>
+      <li>SPF / DMARC / DKIM nits on the support inbox (controlled by the mail provider)</li>
+    </ul>
+  </div>
+</div>
+
+<h2>What we ask in return</h2>
+<ul>
+  <li><strong>Don't access customer data.</strong> If a vulnerability would allow it, demonstrate the path without retrieving real customer records.</li>
+  <li><strong>Don't degrade service for others.</strong> No load testing, no fuzzing the live API at high volume, no traffic generation that would impact paying customers. Hit us up first if you want a test environment.</li>
+  <li><strong>Coordinate disclosure.</strong> Give us a reasonable window to fix before publishing. We'll work with you on timing.</li>
+  <li><strong>Encrypt your report.</strong> The mail provider is encrypted at rest, but PGP-to-PGP is end-to-end. Use the key above.</li>
+</ul>
+
+<h2>Safe harbor</h2>
+<p>
+  Research conducted within this policy is authorized. We will not pursue
+  civil or criminal action against researchers who:
+</p>
+<ul>
+  <li>Make a good-faith effort to follow this policy</li>
+  <li>Avoid privacy violations, data destruction, and service degradation</li>
+  <li>Provide us with reasonable disclosure timelines</li>
+  <li>Don't extort us with the report</li>
+</ul>
+<p>
+  This commitment binds the legal entity operating 0trust and any successor
+  entity, regardless of the jurisdiction we operate from. It is published
+  here, in our <a href="/.well-known/security.txt">security.txt</a>, and in
+  our warrant canary archive, so a future operator cannot quietly revoke it.
+</p>
+
+<h2>Out-of-band verification</h2>
+<p>
+  If you suspect any of our public infrastructure is compromised — including
+  this page — and you want to verify a key fingerprint or our identity:
+</p>
+<ul>
+  <li>Cross-check the fingerprint with our <a href="/canary.txt">most recent warrant canary</a>; it includes the active signing key fingerprint and is itself PGP-signed.</li>
+  <li>Look at recent Mastodon posts (link from our home page) — same fingerprint published there.</li>
+  <li>Request signed responses from us via Tor onion (when available) which uses a separate certificate chain.</li>
+</ul>
+
+<div class="footer">
+  <span>Policy version 0.1 · 2026-05</span>
+  <span><a href="/">Home</a> · <a href="/audit">Audit</a> · <a href="/canary.txt">Canary</a> · <a href="/help">Help</a></span>
+</div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# ============================================================================
+# 0trust warrant canary generator
+# ============================================================================
+# Run weekly. Generates a fresh canary from the template, fills in proof-of-
+# freshness headlines and a Bitcoin block hash, prompts you to PGP-sign it,
+# and stages it for deployment.
+#
+# Designed to be run interactively by a human — the signing key MUST be
+# operated by a person, never automated, or the canary loses its meaning.
+#
+# Usage:
+#   sudo ./canary/scripts/generate.sh
+#
+# Required env:
+#   CANARY_SIGNER_NAME    "Your Name"
+#   CANARY_SIGNER_KEY     PGP key fingerprint to sign with
+#   CANARY_WEB_ROOT       defaults to /var/www/0trust
+# ============================================================================
+set -euo pipefail
+
+CANARY_SIGNER_NAME="${CANARY_SIGNER_NAME:?Set CANARY_SIGNER_NAME=\"Your Name\"}"
+CANARY_SIGNER_KEY="${CANARY_SIGNER_KEY:?Set CANARY_SIGNER_KEY=<your PGP fingerprint>}"
+CANARY_WEB_ROOT="${CANARY_WEB_ROOT:-/var/www/0trust}"
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEMPLATE="$REPO_DIR/templates/canary.txt"
+
+log() { printf '\033[1;33m[+] %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;31m[!] %s\033[0m\n' "$*" >&2; }
+
+[[ -f "$TEMPLATE" ]] || { warn "template missing at $TEMPLATE"; exit 1; }
+
+# ----------------------------------------------------------------------------
+log "Computing dates"
+# ----------------------------------------------------------------------------
+NOW_UTC=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+WEEK_NUMBER=$(date -u +"%G-W%V")
+WEEK_START=$(date -u -d "monday this week" +"%Y-%m-%d" 2>/dev/null \
+             || date -u +"%Y-%m-%d")   # macOS date doesn't take -d "monday"
+WEEK_END=$(date -u -d "$WEEK_START +6 days" +"%Y-%m-%d" 2>/dev/null \
+             || date -u -v+6d -j -f "%Y-%m-%d" "$WEEK_START" +"%Y-%m-%d")
+NEXT_DEADLINE=$(date -u -d "$WEEK_END +7 days" +"%Y-%m-%d" 2>/dev/null \
+             || date -u -v+13d -j -f "%Y-%m-%d" "$WEEK_START" +"%Y-%m-%d")
+
+# ----------------------------------------------------------------------------
+log "Fetching proof-of-freshness data"
+# ----------------------------------------------------------------------------
+
+# Bitcoin block height + hash from blockchain.info (no auth required, public API)
+BLOCK_INFO=$(curl -fsS https://blockchain.info/latestblock || echo '{}')
+BLOCK_HEIGHT=$(echo "$BLOCK_INFO" | grep -oE '"height":[0-9]+' | grep -oE '[0-9]+' | head -1)
+BLOCK_HASH=$(echo "$BLOCK_INFO" | grep -oE '"hash":"[a-f0-9]+"' | head -1 | sed 's/.*"\([a-f0-9]*\)"/\1/')
+
+if [[ -z "$BLOCK_HEIGHT" || -z "$BLOCK_HASH" ]]; then
+    warn "Could not fetch Bitcoin block info — please enter manually."
+    read -p "Block height: " BLOCK_HEIGHT
+    read -p "Block hash: " BLOCK_HASH
+fi
+
+# News headlines — you MUST review and verify these are real, current
+echo ""
+log "Provide 4 current-news headlines (paste any URL, then enter)"
+echo "These prove this document could not have been signed before today."
+echo "Pick ones likely to remain referenceable (BBC, Reuters, AP). Trim each to ~80 chars."
+echo ""
+HEADLINES=()
+for i in 1 2 3 4; do
+    read -p "Headline #$i: " line
+    HEADLINES+=("$line")
+done
+
+# ----------------------------------------------------------------------------
+log "Rendering canary"
+# ----------------------------------------------------------------------------
+WORK_DIR="$REPO_DIR/build"
+mkdir -p "$WORK_DIR" "$REPO_DIR/archive"
+
+CANARY_FILE="$WORK_DIR/canary.txt"
+cp "$TEMPLATE" "$CANARY_FILE"
+
+# Substitute all the placeholders
+sed -i.bak "s|WEEK_NUMBER|$WEEK_NUMBER|g"               "$CANARY_FILE"
+sed -i.bak "s|YYYY-MM-DD to YYYY-MM-DD|$WEEK_START to $WEEK_END|g"  "$CANARY_FILE"
+sed -i.bak "s|NEXT_DEADLINE|$NEXT_DEADLINE|g"           "$CANARY_FILE"
+sed -i.bak "s|ISSUED_AT|$NOW_UTC|g"                     "$CANARY_FILE"
+sed -i.bak "s|SIGNER_NAME|$CANARY_SIGNER_NAME|g"        "$CANARY_FILE"
+sed -i.bak "s|BLOCK_HEIGHT|$BLOCK_HEIGHT|g"             "$CANARY_FILE"
+sed -i.bak "s|BLOCK_HASH|$BLOCK_HASH|g"                 "$CANARY_FILE"
+sed -i.bak "s|HEADLINE_1|${HEADLINES[0]}|"              "$CANARY_FILE"
+sed -i.bak "s|HEADLINE_2|${HEADLINES[1]}|"              "$CANARY_FILE"
+sed -i.bak "s|HEADLINE_3|${HEADLINES[2]}|"              "$CANARY_FILE"
+sed -i.bak "s|HEADLINE_4|${HEADLINES[3]}|"              "$CANARY_FILE"
+sed -i.bak "s|KEY_FINGERPRINT|$CANARY_SIGNER_KEY|g"     "$CANARY_FILE"
+rm -f "$CANARY_FILE.bak"
+
+# ----------------------------------------------------------------------------
+log "Review before signing"
+# ----------------------------------------------------------------------------
+cat "$CANARY_FILE"
+echo ""
+read -p "Sign this canary now? [y/N] " ans
+[[ "$ans" =~ ^[Yy]$ ]] || { warn "aborted by operator"; exit 1; }
+
+# ----------------------------------------------------------------------------
+log "Signing with PGP key $CANARY_SIGNER_KEY"
+# ----------------------------------------------------------------------------
+# Detached signature so the .txt remains human-readable
+rm -f "$CANARY_FILE.sig"
+gpg --local-user "$CANARY_SIGNER_KEY" \
+    --output "$CANARY_FILE.sig" \
+    --detach-sign --armor \
+    "$CANARY_FILE"
+
+# Verify our own signature before deploying
+gpg --verify "$CANARY_FILE.sig" "$CANARY_FILE"
+
+# ----------------------------------------------------------------------------
+log "Archiving and staging for deploy"
+# ----------------------------------------------------------------------------
+cp "$CANARY_FILE"     "$REPO_DIR/archive/canary-$WEEK_NUMBER.txt"
+cp "$CANARY_FILE.sig" "$REPO_DIR/archive/canary-$WEEK_NUMBER.txt.sig"
+
+# Export public key for inclusion on the site
+PUBKEY_FILE="$WORK_DIR/pubkey.asc"
+gpg --armor --export "$CANARY_SIGNER_KEY" > "$PUBKEY_FILE"
+
+if [[ -d "$CANARY_WEB_ROOT" ]]; then
+    install -m 0644 "$CANARY_FILE"     "$CANARY_WEB_ROOT/canary.txt"
+    install -m 0644 "$CANARY_FILE.sig" "$CANARY_WEB_ROOT/canary.txt.sig"
+    install -m 0644 "$PUBKEY_FILE"     "$CANARY_WEB_ROOT/pubkey.asc"
+    mkdir -p "$CANARY_WEB_ROOT/canary/archive"
+    cp "$REPO_DIR/archive/canary-$WEEK_NUMBER".* "$CANARY_WEB_ROOT/canary/archive/"
+    log "Deployed to $CANARY_WEB_ROOT"
+else
+    warn "$CANARY_WEB_ROOT doesn't exist; canary is staged in $WORK_DIR but NOT deployed."
+    log "Files ready:"
+    ls -la "$WORK_DIR"
+fi
+
+cat <<EOF
+
+  Canary published for week $WEEK_NUMBER.
+  Next signing deadline: $NEXT_DEADLINE
+
+  Verify publicly:
+    curl https://0trustvpn.com/canary.txt
+    curl https://0trustvpn.com/canary.txt.sig
+    curl https://0trustvpn.com/pubkey.asc
+    gpg --import pubkey.asc
+    gpg --verify canary.txt.sig canary.txt
+
+EOF

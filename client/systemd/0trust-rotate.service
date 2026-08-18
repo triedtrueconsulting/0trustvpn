@@ -1,0 +1,10 @@
+[Unit]
+Description=0trust hop-pair rotation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/0trust rotate
+# Don't fail if user is single-hop or rotation isn't due
+SuccessExitStatus=0 1

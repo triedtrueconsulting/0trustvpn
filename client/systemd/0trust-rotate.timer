@@ -1,0 +1,12 @@
+[Unit]
+Description=Rotate 0trust hop-pair every 6 hours
+
+[Timer]
+# Fire every 6h — well inside the 24h pair TTL so we never let one expire
+OnBootSec=10min
+OnUnitActiveSec=6h
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,191 @@
+#cloud-config
+# ============================================================================
+# 0trust ephemeral mesh node — RAM-only cloud-init
+# ============================================================================
+#
+# Deploy by passing this file as user-data when provisioning a fresh Ubuntu
+# 24.04 cloud instance. The node will:
+#
+#   1. Mount /var/0trust as tmpfs (RAM-only).
+#   2. Generate a fresh WireGuard keypair on every boot.
+#   3. Self-register with the control plane using ZTV_PROVISION_TOKEN.
+#   4. Bring up the WireGuard + nftables ruleset.
+#   5. Run meshd, syncing peers/forwards from the control plane.
+#
+# When the instance reboots or is destroyed, EVERYTHING in /var/0trust is gone.
+# The control plane will time out the node from its mesh_nodes table within
+# 5 minutes (heartbeat) and stop routing customers to it.
+#
+# REPLACE the placeholders marked __REPLACE__ before deploying. The simplest
+# way is to template this file with envsubst or your IaC tool.
+#
+# Disk persistence: deliberately none beyond the OS image itself. The provider's
+# block storage holds the kernel + base packages; everything operational is in RAM.
+# For maximum paranoia, run on a provider that supports "diskless" or "memory-only"
+# instances (e.g. some bare-metal clouds, or a minimal Ubuntu image you maintain
+# with all writable paths bind-mounted to tmpfs).
+# ============================================================================
+
+write_files:
+  - path: /etc/systemd/system/0trust-prepare.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=0trust ephemeral node preparation
+      After=network-online.target
+      Wants=network-online.target
+      Before=0trust-meshd.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      EnvironmentFile=/etc/0trust/node.env
+      ExecStart=/usr/local/bin/0trust-prepare
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /usr/local/bin/0trust-prepare
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      # Generate a fresh WireGuard keypair, fetch our public IP, register
+      # with the control plane, and write meshd's env file.
+      set -euo pipefail
+
+      log() { echo "[prepare] $*"; }
+
+      log "Generating WireGuard keypair"
+      umask 077
+      mkdir -p /etc/wireguard
+      wg genkey | tee /etc/wireguard/wg0.key | wg pubkey > /etc/wireguard/wg0.pub
+      PUBKEY=$(cat /etc/wireguard/wg0.pub)
+
+      log "Fetching public IP"
+      PUBLIC_IP=$(curl -fsS https://api.ipify.org || \
+                   curl -fsS https://icanhazip.com | tr -d '[:space:]')
+
+      log "Registering with control plane"
+      # The provisioning token authorizes a one-shot node registration.
+      # The control plane validates it, returns the chosen node_id (e.g. "ams-04"),
+      # and burns the token so a stolen copy can't be reused.
+      RESPONSE=$(curl -fsS -X POST \
+        -H "Content-Type: application/json" \
+        -H "X-Provision-Token: $ZTV_PROVISION_TOKEN" \
+        -d "{\"pubkey\":\"$PUBKEY\",\"public_ip\":\"$PUBLIC_IP\",\"region\":\"$REGION\",\"role\":\"$NODE_ROLE\"}" \
+        "$CONTROL_URL/api/v1/node/provision")
+
+      NODE_ID=$(echo "$RESPONSE" | python3 -c 'import sys,json;print(json.load(sys.stdin)["node_id"])')
+      NODE_PSK=$(echo "$RESPONSE" | python3 -c 'import sys,json;print(json.load(sys.stdin)["node_psk"])')
+
+      log "Provisioned as node $NODE_ID"
+
+      cat > /etc/0trust/meshd.env <<EOF
+      CONTROL_URL=$CONTROL_URL
+      NODE_API_PSK=$NODE_PSK
+      NODE_ID=$NODE_ID
+      NODE_ROLE=$NODE_ROLE
+      WG_IFACE=wg0
+      WG_PRIVKEY=/etc/wireguard/wg0.key
+      WG_PORT=51820
+      MESH_GATEWAY=10.64.0.1/10
+      POLL_INTERVAL=30
+      EOF
+      chmod 600 /etc/0trust/meshd.env
+
+      log "Done — meshd will pick up from here."
+
+  - path: /etc/0trust/node.env
+    permissions: '0640'
+    content: |
+      # Edit before deploy. These are read by /usr/local/bin/0trust-prepare.
+      CONTROL_URL=https://__REPLACE_CONTROL_HOST__
+      REGION=__REPLACE_REGION__
+      NODE_ROLE=__REPLACE_ROLE__
+      ZTV_PROVISION_TOKEN=__REPLACE_ONE_TIME_TOKEN__
+
+mounts:
+  # Wipe and RAM-back the entire 0trust working tree on every boot.
+  - [ tmpfs, /var/0trust, tmpfs, "size=64M,mode=0700,uid=root,gid=root" ]
+  - [ tmpfs, /etc/0trust, tmpfs, "size=4M,mode=0700,uid=root,gid=root" ]
+  # /etc/wireguard MUST be tmpfs so the WG private key never touches disk
+  - [ tmpfs, /etc/wireguard, tmpfs, "size=1M,mode=0700,uid=root,gid=root" ]
+
+# Block swap — RAM is RAM, never page private keys to a disk file.
+bootcmd:
+  - swapoff -a
+  - sed -i '/swap/d' /etc/fstab
+
+# System hardening
+write_files_additional: &harden
+  - path: /etc/sysctl.d/99-0trust.conf
+    content: |
+      net.ipv4.ip_forward=1
+      net.ipv6.conf.all.forwarding=1
+      net.ipv4.conf.all.accept_source_route=0
+      net.ipv4.conf.all.accept_redirects=0
+      net.ipv4.conf.all.send_redirects=0
+      net.ipv4.conf.all.rp_filter=1
+      net.ipv4.conf.all.log_martians=0
+      kernel.dmesg_restrict=1
+      kernel.kptr_restrict=2
+      # No core dumps to disk (they could contain keys)
+      fs.suid_dumpable=0
+      kernel.core_pattern=|/bin/false
+
+packages:
+  - wireguard
+  - wireguard-tools
+  - python3
+  - ufw
+  - nftables
+  - curl
+  - ca-certificates
+
+runcmd:
+  # Disable persistent logging (journald to RAM only)
+  - mkdir -p /etc/systemd/journald.conf.d
+  - |
+    cat > /etc/systemd/journald.conf.d/0trust.conf <<'EOF'
+    [Journal]
+    Storage=volatile
+    RuntimeMaxUse=32M
+    EOF
+  - systemctl restart systemd-journald
+
+  # Apply sysctl
+  - sysctl -p /etc/sysctl.d/99-0trust.conf
+
+  # Install meshd (in production this would come baked into the image, or
+  # be fetched from a private artifact server with a checksum check)
+  - |
+    if [ ! -f /usr/local/bin/0trust-meshd ]; then
+      curl -fsS -o /usr/local/bin/0trust-meshd \
+        https://__REPLACE_ARTIFACT_HOST__/0trust-meshd
+      chmod +x /usr/local/bin/0trust-meshd
+    fi
+
+  # Firewall: deny everything except SSH (admin) and WireGuard
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 51820/udp
+  # Entry-node multi-hop port range
+  - ufw allow 52000:59999/udp
+  - ufw --force enable
+
+  # Boot the services
+  - systemctl daemon-reload
+  - systemctl enable --now 0trust-prepare.service
+  - systemctl enable --now 0trust-meshd.service
+
+  # Print operational summary
+  - |
+    echo "================================================================"
+    echo " 0trust ephemeral node ready"
+    echo " Filesystem (sensitive): tmpfs (RAM only)"
+    echo " Logs: journald volatile (RAM only)"
+    echo " On reboot: keys gone, configs gone, state gone"
+    echo "================================================================"
+
+final_message: "0trust ephemeral node ready at $(date)"

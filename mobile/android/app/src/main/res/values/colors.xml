@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="zt_bg">#0C0C0A</color>
+    <color name="zt_bg_elev">#14140F</color>
+    <color name="zt_ink">#F4EDE0</color>
+    <color name="zt_amber">#D4A574</color>
+    <color name="zt_terra">#C44536</color>
+    <color name="zt_moss">#7D8F5A</color>
+</resources>

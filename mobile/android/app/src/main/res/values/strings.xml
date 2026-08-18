@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">0trust</string>
+    <string name="notification_channel_name">VPN connection</string>
+    <string name="notification_channel_desc">Persistent notification while the 0trust tunnel is active</string>
+    <string name="notification_connected">0trust VPN connected</string>
+    <string name="notification_connecting">Connecting\u2026</string>
+    <string name="action_disconnect">Disconnect</string>
+</resources>

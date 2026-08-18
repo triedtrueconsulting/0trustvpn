@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=0trust VPN
+GenericName=Privacy-first VPN client
+Comment=Connect to the 0trust mesh VPN
+Exec=0trust gui
+Icon=0trust
+Terminal=false
+Categories=Network;Security;
+Keywords=vpn;wireguard;privacy;mesh;0trust;
+StartupNotify=false
+StartupWMClass=0trust

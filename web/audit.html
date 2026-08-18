@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>0trust · audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
+      rel="stylesheet">
+
+<style>
+:root {
+  --bg: #0c0c0a; --bg-elev: #14140f; --ink: #f4ede0; --ink-dim: #a8a094;
+  --ink-faint: #6b6359; --line: #2a2820; --amber: #d4a574;
+  --terra: #c44536; --moss: #7d8f5a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg); color: var(--ink);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-weight: 300; line-height: 1.65; font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+body {
+  background-image:
+    linear-gradient(rgba(244,237,224,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244,237,224,0.025) 1px, transparent 1px);
+  background-size: 64px 64px; min-height: 100vh;
+}
+.wrap { max-width: 780px; margin: 0 auto; padding: 48px 24px 80px; }
+.brand { font-family:'JetBrains Mono',monospace; font-weight:700; font-size:24px; text-decoration:none; color:inherit; }
+.brand .zero { color: var(--amber); font-size: 30px; }
+.crumb {
+  font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink-faint);
+  letter-spacing:0.1em; text-transform:uppercase; margin-left:16px;
+}
+h1 {
+  font-family:'Instrument Serif',serif; font-weight:400; font-size:56px;
+  line-height:1.05; letter-spacing:-0.02em; margin: 32px 0 12px;
+}
+.lede { color: var(--ink-dim); font-size: 17px; margin-bottom: 32px; max-width: 60ch; }
+h2 {
+  font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600;
+  color:var(--ink-faint); letter-spacing:0.15em; text-transform:uppercase;
+  margin: 48px 0 16px;
+}
+.box {
+  background: var(--bg-elev); border: 1px solid var(--line);
+  border-radius: 3px; padding: 20px 24px; margin-bottom: 16px;
+}
+.box h3 {
+  font-family:'Instrument Serif',serif; font-weight:400;
+  font-size:22px; line-height:1.25; color:var(--ink); margin-bottom: 8px;
+}
+.box p { color: var(--ink-dim); margin: 10px 0; }
+.box strong { color: var(--ink); }
+
+.tag {
+  display:inline-block; font-family:'JetBrains Mono',monospace;
+  font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+  padding: 2px 8px; border-radius: 2px; margin-right: 8px;
+}
+.tag.stored    { background: rgba(212,165,116,0.15); color: var(--amber); border: 1px solid rgba(212,165,116,0.3); }
+.tag.notstored { background: rgba(125,143,90,0.15); color: var(--moss); border: 1px solid rgba(125,143,90,0.3); }
+
+table {
+  width: 100%; border-collapse: collapse;
+  font-size: 13px; margin: 12px 0;
+}
+th, td {
+  text-align: left; padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+th {
+  font-family:'JetBrains Mono',monospace; font-weight:600;
+  font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+  color: var(--ink-faint);
+}
+td { color: var(--ink-dim); }
+td:first-child { color: var(--ink); width: 28%; }
+td code { font-family:'JetBrains Mono',monospace; color: var(--amber); font-size: 12px; }
+
+a { color: var(--amber); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.deep-link {
+  background: var(--bg-elev); border-left: 2px solid var(--amber);
+  padding: 16px 20px; margin: 24px 0; border-radius: 2px; font-size: 14px;
+}
+.deep-link strong { color: var(--ink); }
+
+.footer {
+  margin-top: 64px; padding-top: 24px;
+  border-top: 1px solid var(--line); color: var(--ink-faint);
+  font-family:'JetBrains Mono',monospace; font-size: 11px;
+  letter-spacing:0.08em; text-transform:uppercase;
+  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div style="display:flex;align-items:baseline">
+  <a class="brand" href="/"><span class="zero">0</span><span>trust</span></a>
+  <span class="crumb">/ audit</span>
+</div>
+
+<h1>What we collect, and what we don't.</h1>
+<p class="lede">
+  A "no-logs VPN" claim is meaningless without specifics. Here are ours.
+  The full machine-checkable audit pack and verification matrix is
+  linked at the bottom — this page is the customer-friendly version of
+  the same document.
+</p>
+
+<h2>Where the servers are</h2>
+
+<div class="box">
+  <h3>Three countries, all outside any Eyes alliance</h3>
+  <p>
+    <span class="tag notstored">switzerland</span>
+    <span class="tag notstored">iceland</span>
+    <span class="tag notstored">romania</span>
+  </p>
+  <p>
+    Zurich, Reykjavik, Bucharest. Each box is a RAM-only ephemeral
+    instance — disk is tmpfs, swap is disabled, WireGuard keys
+    regenerate on every reboot. A seized machine reveals the base OS
+    and nothing operational.
+  </p>
+  <p>
+    <strong>Not</strong> in the United States, United Kingdom, Canada,
+    Australia, New Zealand (Five Eyes), nor Denmark, France, Netherlands,
+    Norway (Nine Eyes), nor Germany, Belgium, Italy, Spain, Sweden
+    (Fourteen Eyes). Not for latency. Not for redundancy. Not for
+    any reason.
+  </p>
+</div>
+
+<h2>The short version</h2>
+
+<div class="box">
+  <h3>What we store</h3>
+  <p>
+    <span class="tag stored">stored</span>
+    SHA-256 hashes of account tokens, device WireGuard pubkeys, your
+    chosen mesh region(s), invoice amounts, and 2 days of nginx access
+    logs anonymized to the /24 (or /48 for IPv6).
+  </p>
+  <p>That's the complete list. Anything not on it isn't kept.</p>
+</div>
+
+<div class="box">
+  <h3>What we don't store</h3>
+  <p>
+    <span class="tag notstored">not stored</span>
+    Your IP address. Your User-Agent. The destinations you visit. The
+    bytes you transfer. The times you connect. The duration of your
+    sessions. Your real name, email, or phone (we never ask). Your
+    cryptocurrency wallet address (BTCPay knows it; we don't).
+  </p>
+</div>
+
+<div class="box">
+  <h3>What we cannot store, by design</h3>
+  <p>
+    <span class="tag notstored">cannot</span>
+    Your private WireGuard key (generated on your device, never
+    transmitted). Your traffic content on multi-hop routes that crosses
+    an entry node (it's end-to-end encrypted to the exit). Your seed
+    phrase / wallet keys for Bitcoin payments (you hold those; we only
+    watch your xpub).
+  </p>
+</div>
+
+<h2>At each stage</h2>
+
+<h2 style="font-size:11px;margin-top:24px">Signup</h2>
+<table>
+<thead><tr><th>Field</th><th>Stored?</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Email address</td>      <td>NO</td>  <td>Not requested anywhere</td></tr>
+<tr><td>Phone number</td>       <td>NO</td>  <td>Not requested</td></tr>
+<tr><td>Real name</td>          <td>NO</td>  <td>Not requested</td></tr>
+<tr><td>IP address</td>         <td>NO*</td> <td>Only nginx /24-bucket, 2-day retention</td></tr>
+<tr><td>User-Agent</td>         <td>NO</td>  <td>Stripped from nginx log_format</td></tr>
+<tr><td>Account token</td>      <td>HASH</td><td>SHA-256 only; original is on your device</td></tr>
+<tr><td>Subscription expiry</td><td>YES</td> <td>Required to enforce duration</td></tr>
+</tbody></table>
+
+<h2 style="font-size:11px;margin-top:32px">Payment</h2>
+<table>
+<thead><tr><th>Field</th><th>Stored?</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Wallet address</td>     <td>NO</td>  <td>Lives only on BTCPay, never sent to control plane</td></tr>
+<tr><td>Transaction ID</td>     <td>NO</td>  <td>Same</td></tr>
+<tr><td>Invoice ID</td>         <td>YES</td> <td>30 days; needed for refund dispute window</td></tr>
+<tr><td>Amount (USD)</td>       <td>YES</td> <td>Same</td></tr>
+</tbody></table>
+
+<h2 style="font-size:11px;margin-top:32px">Connect</h2>
+<table>
+<thead><tr><th>Field</th><th>Stored?</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Your device pubkey</td>      <td>YES</td><td>Required for WireGuard peering</td></tr>
+<tr><td>Mesh IP allocation</td>      <td>YES</td><td>Required to route packets to you</td></tr>
+<tr><td>Your private key</td>        <td>NO</td> <td>Lives only on your device</td></tr>
+<tr><td>Your real IP</td>            <td>NO</td> <td>Not recorded anywhere</td></tr>
+<tr><td>Destination IPs</td>         <td>NO</td> <td>WireGuard kernel module doesn't log; nftables has no log rules</td></tr>
+<tr><td>Bandwidth counters</td>      <td>NO</td> <td>Deliberately disabled</td></tr>
+<tr><td>Connection start/end times</td><td>NO</td><td>Not recorded</td></tr>
+</tbody></table>
+
+<h2>Known limitations we declare proactively</h2>
+
+<div class="box">
+  <h3>2 days of nginx access logs</h3>
+  <p>
+    Anonymized to /24 (IPv4) or /48 (IPv6). Used for DDoS forensics
+    and 5xx incident triage. A /24 is one of ~4.3 million possible
+    /24s — not a unique identifier, but not zero either. Auditor's
+    call whether to recommend zero retention.
+  </p>
+</div>
+
+<div class="box">
+  <h3>7 days of systemd journal on the control plane</h3>
+  <p>
+    Application errors, route exceptions. Tokens are hashed before
+    they hit any logger; pubkeys never appear. RAM-only ephemeral
+    mesh nodes have <code>Storage=volatile</code> so their journal
+    is gone on reboot.
+  </p>
+</div>
+
+<div class="box">
+  <h3>24-hour multi-hop rotation</h3>
+  <p>
+    A motivated adversary observing 24h of traffic on one entry
+    can still attempt correlation. If you want tighter rotation,
+    run <code>sudo 0trust rotate</code> manually or set the timer to 1h.
+  </p>
+</div>
+
+<div class="deep-link">
+  <p>
+    <strong>Auditors and skeptics</strong>: the full machine-readable
+    audit pack is at <a href="https://github.com/0trust/cli/blob/main/docs/AUDIT.md">docs/AUDIT.md</a>
+    — 13 sections, every claim cross-referenced to verification commands.
+    The verification script <code>scripts/audit-verify.sh</code> runs the
+    full check matrix against the live host and exits non-zero if anything
+    fails. Both should be your starting point if you're commissioning a
+    third-party audit.
+  </p>
+</div>
+
+<div class="footer">
+  <span>Audit pack version 0.1.0 · 2026-05</span>
+  <span><a href="/">Home</a> · <a href="/canary.txt">Canary</a> · <a href="/help">Help</a> · <a href="/status">Status</a></span>
+</div>
+
+</div>
+</body>
+</html>
