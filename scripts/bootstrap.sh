@@ -195,7 +195,7 @@ cat <<EOF
        mesh_nodes table:
          sqlite3 /var/lib/0trust/0trust.db <<SQL
            INSERT INTO mesh_nodes (id, hostname, pubkey, endpoint, region)
-           VALUES ('ams-01','ams-01.0trustvpn.com','<wg-pubkey>','1.2.3.4:51820','zur');
+           VALUES ('zur-01','zur-01.0trustvpn.com','<wg-pubkey>','1.2.3.4:51820','zur');
 SQL
     4. Visit https://$DOMAIN
 

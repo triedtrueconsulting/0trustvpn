@@ -8,16 +8,16 @@
 # Usage:
 #   sudo CONTROL_URL=https://api.0trustvpn.com \
 #        NODE_API_PSK=<from /etc/0trust/api.env on control plane> \
-#        NODE_ID=ams-01 \
-#        REGION=ams \
+#        NODE_ID=zur-01 \
+#        REGION=zur \
 #        ./bootstrap-node.sh
 # ============================================================================
 set -euo pipefail
 
 CONTROL_URL="${CONTROL_URL:?Set CONTROL_URL=https://api.your-domain}"
 NODE_API_PSK="${NODE_API_PSK:?Set NODE_API_PSK (from control plane api.env)}"
-NODE_ID="${NODE_ID:?Set NODE_ID=ams-01}"
-REGION="${REGION:?Set REGION=ams}"
+NODE_ID="${NODE_ID:?Set NODE_ID=zur-01}"
+REGION="${REGION:?Set REGION=zur (zur|rey|buc)}"
 NODE_ROLE="${NODE_ROLE:-both}"   # entry | exit | both
 WG_PORT="${WG_PORT:-51820}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

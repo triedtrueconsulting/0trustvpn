@@ -67,7 +67,7 @@ write_files:
 
       log "Registering with control plane"
       # The provisioning token authorizes a one-shot node registration.
-      # The control plane validates it, returns the chosen node_id (e.g. "ams-04"),
+      # The control plane validates it, returns the chosen node_id (e.g. "zur-04"),
       # and burns the token so a stolen copy can't be reused.
       RESPONSE=$(curl -fsS -X POST \
         -H "Content-Type: application/json" \

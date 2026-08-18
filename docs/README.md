@@ -24,7 +24,7 @@ USER ──▶│ 0trust.  │ ───────────▶   │  Contr
                               ▼              ▼              ▼
                        ┌────────────┐ ┌────────────┐ ┌────────────┐
                        │ ENTRY      │ │ ENTRY      │ │ EXIT       │
-                       │ ams-04     │ │ fra-12     │ │ buc-02     │
+                       │ zur-04     │ │ rey-12     │ │ buc-02     │
                        │ nftables   │ │ nftables   │ │ wireguard  │
                        │ DNAT only  │ │ DNAT only  │ │ + NAT      │
                        │ (no crypto)│ │ (no crypto)│ │ jurisdic-  │
@@ -310,7 +310,7 @@ $ 0trust status
   expires     : 2026-08-21  (89 days)
   devices     : 1 / 8
   tunnel      : up
-  mode        : multi-hop  ams → buc
+  mode        : multi-hop  zur → buc
   next rotate : 04:00  (in 17h 53m)
 
 # Single-hop connection
@@ -320,11 +320,11 @@ $ sudo 0trust connect zur
 → config written to /etc/wireguard/0trust0.conf
 ✓ tunnel up
 
-# Multi-hop: entry in Amsterdam, exit in Bucharest
+# Multi-hop: entry in Zurich, exit in Bucharest
 $ sudo 0trust connect zur --exit buc
-→ requesting multi-hop route: ams → buc
+→ requesting multi-hop route: zur → buc
 → config written to /etc/wireguard/0trust0.conf
-→ multi-hop:  entry=ams-04  exit=buc-02
+→ multi-hop:  entry=zur-04  exit=buc-02
               entry never decrypts; exit never sees your IP
               relay endpoint  185.180.143.27:52817
               rotates by      2026-05-25 04:00 UTC
@@ -332,9 +332,9 @@ $ sudo 0trust connect zur --exit buc
 
 # Hot-swap to a fresh entry/exit pair (no tunnel disruption)
 $ sudo 0trust rotate
-→ rotating hop-pair (ams → buc)
+→ rotating hop-pair (zur → buc)
 ✓ rotated in place (no tunnel disruption)
-  new pair:  entry=ams-07  exit=buc-04
+  new pair:  entry=zur-07  exit=buc-04
   endpoint:  185.180.143.31:54219
   expires:   2026-05-26 04:00 UTC
 
@@ -394,7 +394,7 @@ $ 0trust export --exit buc --name phone
 
 Scan this with the official WireGuard app (Add → From QR code).
 
-  mode:   multi-hop  ams-04 → buc-02
+  mode:   multi-hop  zur-04 → buc-02
   conf:   ./phone.conf
   png:    ./phone.png
 
@@ -590,8 +590,8 @@ git clone https://your-private-git/0trust-vpn
 cd 0trust-vpn
 sudo CONTROL_URL=https://0trustvpn.com \
      NODE_API_PSK=<from control plane> \
-     NODE_ID=ams-01 \
-     REGION=ams \
+     NODE_ID=zur-01 \
+     REGION=zur \
      NODE_ROLE=entry \
      ./scripts/bootstrap-node.sh
 ```
