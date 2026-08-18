@@ -33,6 +33,17 @@ the exit node never sees your IP.
 - **`docs/README.md`** — architecture, components, threat model, deployment.
 - **`docs/LAUNCH.md`** — the day-by-day playbook for going live.
 
+## Deploy
+
+```bash
+sudo ./scripts/install.sh --mode test                     # no domain, no TLS
+sudo ./scripts/install.sh --mode production \
+     --domain 0trustvpn.com --email you@example.com       # domain + Let's Encrypt
+```
+
+Idempotent, and `--dry-run` shows what a run would do without touching the
+box. Full walkthrough in [`docs/DEPLOY.md`](docs/DEPLOY.md).
+
 ## Validate a change
 
 ```bash

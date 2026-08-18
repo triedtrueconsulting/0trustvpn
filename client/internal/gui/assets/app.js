@@ -78,11 +78,18 @@ function render() {
 
   // Account card
   $('kv-token').textContent = state.token || '—';
-  $('kv-sub').textContent = state.status || '—';
+  // Say "active (trial)" rather than just "active": the difference is a
+  // hard expiry and a smaller device cap, and the user should see it here
+  // rather than discover it when a third device is refused.
+  $('kv-sub').textContent = state.status
+    ? state.status + (state.plan === 'trial' ? ' (trial)' : '')
+    : '—';
   $('kv-exp').textContent = state.expires_at
     ? new Date(state.expires_at * 1000).toISOString().slice(0, 10)
     : '—';
-  $('kv-dev').textContent = state.device_count ? `${state.device_count} / 8` : '—';
+  const cap = state.max_devices || 8;
+  $('kv-dev').textContent =
+    state.device_count != null ? `${state.device_count} / ${cap}` : '—';
 }
 
 function formatRotate(ts) {
@@ -288,6 +295,134 @@ $('export-copy').addEventListener('click', () => {
   navigator.clipboard.writeText(lastExportConfig).then(() => {
     toast('Config copied');
   });
+});
+
+// ---------------------------------------------------------------------------
+// Devices
+// ---------------------------------------------------------------------------
+
+function fmtSeen(ts) {
+  if (!ts) return 'never';
+  const d = new Date(ts * 1000);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+// Keys are base64 and long; show enough to tell two apart without wrapping.
+function shortKey(k) {
+  return k.length > 20 ? k.slice(0, 10) + '…' + k.slice(-6) : k;
+}
+
+async function loadDevices() {
+  const list = $('devices-list');
+  const err = $('devices-err');
+  err.classList.add('hidden');
+  list.textContent = 'Loading…';
+  let devices;
+  try {
+    devices = await api('/api/devices');
+  } catch (e) {
+    list.textContent = '';
+    err.textContent = e.message;
+    err.classList.remove('hidden');
+    return;
+  }
+
+  const cap = (state && state.max_devices) || 8;
+  $('devices-count').textContent =
+    `${devices.length} of ${cap} slots used` +
+    (state && state.plan === 'trial' ? ' (trial)' : '');
+
+  list.textContent = '';
+  if (!devices.length) {
+    list.textContent = 'No devices registered yet.';
+    return;
+  }
+  for (const d of devices) {
+    const row = document.createElement('div');
+    row.className = 'kv-row device-row';
+
+    const meta = document.createElement('div');
+    const name = document.createElement('div');
+    name.textContent = (d.device_name || 'unnamed') + (d.this ? '  · this device' : '');
+    // Its own class, not the .k label style — that uppercases, and a device
+    // the user named "MacBook" should not come back as "MACBOOK".
+    name.className = 'device-name' + (d.this ? ' is-this' : '');
+    const sub = document.createElement('div');
+    sub.className = 'hint mono';
+    sub.textContent = `${d.mesh_ip}  ${shortKey(d.pubkey)}` +
+      (d.multihop ? `  ${d.entry_node} → ${d.exit_node}` : '  single-hop') +
+      `  seen ${fmtSeen(d.last_seen)}`;
+    meta.appendChild(name);
+    meta.appendChild(sub);
+
+    const btn = document.createElement('button');
+    btn.className = 'btn-ghost danger';
+    btn.textContent = 'Remove';
+    btn.addEventListener('click', async () => {
+      const warning = d.this
+        ? 'Remove THIS device? The tunnel will drop and a new key is generated on next connect.'
+        : `Remove "${d.device_name || 'unnamed'}"? It stops being routed at the next sync.`;
+      if (!confirm(warning)) return;
+      btn.disabled = true;
+      btn.textContent = 'Removing…';
+      try {
+        const r = await api('/api/devices/remove', {
+          method: 'POST', body: JSON.stringify({ pubkey: d.pubkey }),
+        });
+        toast(r.removed_self ? 'Device removed — tunnel down' : 'Device removed');
+        await loadDevices();
+        await refresh();
+      } catch (e) {
+        err.textContent = e.message;
+        err.classList.remove('hidden');
+        btn.disabled = false;
+        btn.textContent = 'Remove';
+      }
+    });
+
+    row.appendChild(meta);
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+}
+
+$('devices-btn').addEventListener('click', async () => {
+  $('devices-modal').classList.remove('hidden');
+  await loadDevices();
+});
+$('devices-close').addEventListener('click', () => {
+  $('devices-modal').classList.add('hidden');
+});
+
+// ---------------------------------------------------------------------------
+// Free trial
+// ---------------------------------------------------------------------------
+
+$('trial-btn').addEventListener('click', async () => {
+  const btn = $('trial-btn');
+  const status = $('trial-status');
+  const err = $('trial-err');
+  err.classList.add('hidden');
+  status.classList.remove('hidden');
+  // The proof-of-work runs in the Go process, not here, so the page stays
+  // responsive and the puzzle finishes in a fraction of the time.
+  status.textContent = 'Solving the anti-abuse puzzle…';
+  btn.disabled = true;
+
+  try {
+    const r = await api('/api/trial', { method: 'POST', body: '{}' });
+    status.textContent =
+      `Signed in on a ${r.days}-day trial · ${r.max_devices} devices`;
+    toast('Free month activated');
+    await refresh();
+  } catch (e) {
+    status.classList.add('hidden');
+    err.textContent = e.message;
+    err.classList.remove('hidden');
+    btn.disabled = false;
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -79,6 +79,8 @@ type Status struct {
 	Status        string `json:"status"`
 	ExpiresAt     int64  `json:"expires_at"`
 	DaysRemaining int    `json:"days_remaining"`
+	Plan          string `json:"plan"`
+	MaxDevices    int    `json:"max_devices"`
 	DeviceCount   int    `json:"device_count"`
 }
 

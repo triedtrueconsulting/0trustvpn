@@ -210,6 +210,14 @@
     font-weight: 300;
   }
 
+  .hero-note {
+    margin: 22px auto 0;
+    max-width: 46rem;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--ink-faint);
+  }
+  .hero-note a { color: var(--amber); }
   .hero-actions {
     display: flex;
     gap: 16px;
@@ -1295,14 +1303,15 @@
     <a href="#jurisdictions">Jurisdictions</a>
     <a href="#apps">Apps</a>
     <a href="#pricing">Pricing</a>
-    <button class="nav-cta" onclick="openSignup()">Get account</button>
+    <a href="/surf">Surf</a>
+    <button class="nav-cta" onclick="location.href='/trial'">Free month</button>
   </div>
 </nav>
 
 <!-- ============ HERO ============ -->
 <section class="hero">
   <div class="hero-meta">
-    <span class="pulse">Mesh online · 47 nodes</span>
+    <span class="pulse" id="mesh-pill">Mesh · 3 jurisdictions</span>
     <span>WireGuard · zero-trust</span>
     <span>v0.1 — May 2026</span>
   </div>
@@ -1319,10 +1328,37 @@
   </p>
 
   <div class="hero-actions">
-    <button class="btn-primary" onclick="openSignup()">Generate account →</button>
+    <a href="/trial" class="btn-primary">Start a free month →</a>
+    <button class="btn-ghost" onclick="openSignup()">Pay in crypto</button>
     <a href="#how" class="btn-ghost">How it works</a>
   </div>
+  <p class="hero-note">
+    No email, no card, no name — a free month gets the same anonymous token a
+    paying customer gets. Just want to read one page?
+    <a href="/surf">Try /surf</a>, our page reader. It covers one browser tab
+    and is <em>not</em> the VPN.
+  </p>
 </section>
+
+<script>
+  // The hero pill reads from the live status endpoint rather than a number
+  // typed into the markup. The previous hardcoded "47 nodes across 32
+  // countries" was simply untrue, and on a product selling verifiable claims
+  // that is the most expensive kind of copy to get wrong. If the endpoint is
+  // unreachable the honest static fallback in the HTML stands.
+  (async () => {
+    try {
+      const r = await fetch('/api/v1/status/public', { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      const live = (d.regions || []).filter(x => x.state !== 'down').length;
+      if (!live) return;
+      const el = document.getElementById('mesh-pill');
+      if (el) el.textContent =
+        `Mesh ${d.service || 'online'} · ${live} jurisdiction${live === 1 ? '' : 's'}`;
+    } catch (e) { /* keep the static fallback */ }
+  })();
+</script>
 
 <!-- ============ TICKER ============ -->
 <div class="ticker">
@@ -1333,7 +1369,6 @@
     <span><span class="dot">◆</span> OPEN-SOURCE CLIENT</span>
     <span><span class="dot">◆</span> WIREGUARD PROTOCOL</span>
     <span><span class="dot">◆</span> ZERO-TRUST MESH</span>
-    <span><span class="dot">◆</span> CASH BY MAIL ACCEPTED</span>
     <span><span class="dot">◆</span> WARRANT CANARY UPDATED</span>
     <!-- duplicate for seamless loop -->
     <span><span class="dot">◆</span> NO LOGS</span>
@@ -1342,7 +1377,6 @@
     <span><span class="dot">◆</span> OPEN-SOURCE CLIENT</span>
     <span><span class="dot">◆</span> WIREGUARD PROTOCOL</span>
     <span><span class="dot">◆</span> ZERO-TRUST MESH</span>
-    <span><span class="dot">◆</span> CASH BY MAIL ACCEPTED</span>
     <span><span class="dot">◆</span> WARRANT CANARY UPDATED</span>
   </div>
 </div>
@@ -1371,7 +1405,7 @@
     <div class="principle">
       <div class="principle-num">→ 04</div>
       <h3>Crypto <span class="italic">only.</span></h3>
-      <p>We accept Monero, Bitcoin, Ethereum and Litecoin. Monero is recommended. No credit cards, no PayPal, no Stripe — they all require identity. Cash by mail also accepted.</p>
+      <p>We accept Monero, Bitcoin and Zcash. Monero is recommended. No credit cards, no PayPal, no Stripe — they all require identity.</p>
     </div>
     <div class="principle">
       <div class="principle-num">→ 05</div>
@@ -1404,7 +1438,7 @@
         <div class="step-num">ii.</div>
         <div>
           <h4>Pay in crypto</h4>
-          <p>Send Monero, Bitcoin, Ethereum, or Litecoin to the shown address. Confirmation typically within ten minutes.</p>
+          <p>Send Monero, Bitcoin, or Zcash to the shown address. Confirmation typically within ten minutes.</p>
         </div>
       </div>
       <div class="step">
@@ -1640,16 +1674,14 @@
       <ul class="pricing-feats">
         <li>Unlimited bandwidth, no throttling</li>
         <li>Up to 8 simultaneous devices</li>
-        <li>47 mesh nodes across 32 countries</li>
+        <li>3 jurisdictions outside Five/Nine/Fourteen Eyes</li>
         <li>WireGuard protocol — kernel & userspace</li>
-        <li>Port forwarding & split tunneling</li>
         <li>30-day money-back, no questions</li>
       </ul>
       <div>
         <button class="btn-primary" onclick="openSignup()">Begin →</button>
         <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-faint); margin-top: 16px; line-height: 1.6;">
-          PAID IN BTC / XMR / ZEC<br>
-          OR CASH BY POST
+          PAID IN BTC / XMR / ZEC
         </div>
       </div>
     </div>

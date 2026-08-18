@@ -113,7 +113,8 @@ USER ──▶│ 0trust.  │ ───────────▶   │  Contr
 │   ├── security-policy.html  Vulnerability disclosure policy
 │   └── vendor/               Self-hosted third-party JS (pinned, SRI-checked)
 ├── scripts/
-│   ├── bootstrap.sh          Set up control plane on Ubuntu 24
+│   ├── install.sh            One-shot VPS installer (test / production modes)
+│   ├── bootstrap.sh          Forwarder to install.sh, kept for old runbooks
 │   ├── bootstrap-node.sh     Set up a WireGuard mesh node (+ abuse egress filter)
 │   ├── audit-verify.sh       Run the full no-logs verification matrix
 │   ├── backup.sh             Encrypted nightly DB backup + rotation

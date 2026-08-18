@@ -351,3 +351,36 @@ button {
   padding: 0;
 }
 .x-btn:hover { color: var(--terra); border-color: var(--terra); }
+
+/* --- Device manager rows -------------------------------------------------- */
+/* Each row is metadata on the left, a destructive action on the right. The
+   key is long base64, so it gets its own line rather than fighting the name
+   for horizontal space. */
+.device-row {
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.device-row:last-child { border-bottom: 0; }
+.device-row > div:first-child { min-width: 0; flex: 1; }
+.device-row .hint {
+  margin: 0.2rem 0 0;
+  word-break: break-all;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.device-row button { flex: 0 0 auto; }
+
+/* Device names are user data — render them verbatim, no text-transform. */
+.device-name {
+  color: var(--ink);
+  font-size: 0.9rem;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+.device-name.is-this { color: var(--amber); font-weight: 600; }
+
+#devices-list { margin: 0.5rem 0 1rem; }
+#trial-card .hint { margin-top: 0.4rem; }
+#trial-status { color: var(--amber); }
