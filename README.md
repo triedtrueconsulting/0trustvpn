@@ -36,24 +36,23 @@ the exit node never sees your IP.
 ## Validate a change
 
 ```bash
-# Go client: vet + all six release targets
-cd client && CGO_ENABLED=0 go vet ./... && make all && cd ..
+./scripts/validate.sh          # the whole battery
+./scripts/validate.sh go api   # only checks whose id contains these
+./scripts/validate.sh -l       # list the check ids
+```
 
-# Python: parse everything
-python3 -c "import ast,glob; [ast.parse(open(f).read()) for f in glob.glob('**/*.py',recursive=True)]"
+Twelve checks: `go vet`, `go test`, all six cross-compile targets, real .deb
+packages, the control-plane smoke test, every `.py`/`.sh`/`.html`/`.xml`/`.yaml`
+parsed, and the two invariants that keep biting — only `zur`/`rey`/`buc` appear
+as region codes, and clients authenticate with `X-Account-Token` rather than a
+bearer token. Exit code is the number of failures.
 
-# Shell: syntax-check every script
-for f in $(find . -name '*.sh' -not -path './.git/*'); do bash -n "$f" || echo "FAIL: $f"; done
+Claude Code on the web provisions itself via `.claude/hooks/session-start.sh`.
+Working locally, create the venv the script expects:
 
-# Markup: web pages, Android resources, the MSI source
-python3 -c "import html.parser,glob
-class P(html.parser.HTMLParser): pass
-[P().feed(open(f).read()) for f in glob.glob('web/*.html')]"
-python3 -c "import xml.etree.ElementTree as ET,glob
-[ET.parse(f) for f in glob.glob('mobile/android/**/*.xml',recursive=True)+glob.glob('installer/**/*.wxs',recursive=True)]"
-
-# Stale region codes — only zur/rey/buc are valid
-grep -rnE '\b(ams|fra|lon|sto|nyc|sjc|sgp|tyo)-[0-9]+\b' --exclude-dir=.git .
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r api/requirements-dev.txt
+export PATH="$PWD/.venv/bin:$PATH"
 ```
 
 Android APKs need Android Studio + NDK; the MSI needs a Windows host with WiX.

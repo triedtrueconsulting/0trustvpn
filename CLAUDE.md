@@ -98,9 +98,18 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 
 ## Build & validation commands
 
-Run these from the repo root. They're the exact checks used throughout
-development — treat green across all of them as the bar before considering
-anything done.
+```bash
+./scripts/validate.sh          # everything below, in one command
+./scripts/validate.sh go api   # only checks whose id contains these
+./scripts/validate.sh -l       # list the check ids
+```
+
+Treat green across the whole battery as the bar before considering anything
+done. Exit code is the number of failed checks. In Claude Code on the web,
+`.claude/hooks/session-start.sh` provisions the venv and Go module cache the
+script needs; elsewhere, build a venv from `api/requirements-dev.txt`.
+
+The individual checks, for reference — this is what the script runs:
 
 ```bash
 # --- Go client: vet + cross-compile all 6 targets ---
@@ -113,10 +122,9 @@ for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows
 done
 cd ..
 
-# --- Python API: parse + import + smoke-test endpoints ---
+# --- Python API: parse + live endpoint smoke test ---
 python3 -c "import ast; ast.parse(open('api/main.py').read())"
-# For a live import test, set ZTV_DB_PATH to a tmp file, call main.init_db(),
-# insert rows into mesh_nodes, then call main.regions() / main.public_status().
+python3 api/smoke_test.py   # seeds a tmp DB, drives the API via TestClient
 
 # --- Bash: syntax-check every script ---
 for f in $(find . -name '*.sh'); do bash -n "$f" || echo "FAIL: $f"; done
@@ -126,9 +134,10 @@ python3 -c "import html.parser,glob
 class P(html.parser.HTMLParser): pass
 [P().feed(open(f).read()) for f in glob.glob('web/*.html')]"
 
-# --- Android XML validity (full build needs Android Studio + NDK) ---
+# --- Markup validity (full Android build needs Android Studio + NDK) ---
 python3 -c "import xml.etree.ElementTree as ET,glob
-[ET.parse(f) for f in glob.glob('mobile/android/**/*.xml',recursive=True)]"
+[ET.parse(f) for f in glob.glob('mobile/android/**/*.xml',recursive=True)
+                    + glob.glob('installer/**/*.wxs',recursive=True)]"
 
 # --- Linux packages (needs dpkg-dev; produces real .debs) ---
 make -C client linux 2>/dev/null || (cd client && for a in amd64 arm64; do \

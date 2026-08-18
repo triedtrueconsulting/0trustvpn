@@ -1,0 +1,9 @@
+# Development extras, layered on the runtime deps.
+#
+# Installed into the repo-root .venv by .claude/hooks/session-start.sh.
+# The API host does NOT get these — scripts/bootstrap.sh installs
+# requirements.txt only.
+-r requirements.txt
+
+httpx==0.28.1    # transport behind fastapi.testclient, used by api/smoke_test.py
+PyYAML==6.0.3    # parses wireguard/cloud-init-ephemeral.yaml in scripts/validate.sh
