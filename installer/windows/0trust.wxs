@@ -4,7 +4,7 @@
 
   Built with WiX Toolset v4. To compile:
 
-    dotnet tool install --global wix
+    dotnet tool install -g wix
     wix build 0trust.wxs -arch x64 -d Version=0.1.0 \
                                    -d BinaryDir=..\\..\\client\\dist \
                                    -o 0trust-0.1.0-x64.msi
