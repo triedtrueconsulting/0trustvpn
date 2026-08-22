@@ -95,8 +95,13 @@ systemctl enable --now 0trust-meshd.service
 log "Configuring NAT for exit node"
 # ----------------------------------------------------------------------------
 PRIMARY_IF=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+# Table names are ztv_*, not 0trust_*: an nftables identifier cannot start
+# with a digit. nft parses the leading 0 as a number and rejects the file
+# ("syntax error, unexpected number"), and quoting does not help. Both tables
+# here failed to load, which meant the exit node had no masquerade rule and
+# — worse — the abuse-mitigation egress filter below was never in force.
 nft -f - <<EOF
-table inet 0trust_nat {
+table inet ztv_nat {
     chain postrouting {
         type nat hook postrouting priority 100;
         oifname "$PRIMARY_IF" ip saddr 10.64.0.0/10 masquerade
@@ -105,7 +110,7 @@ table inet 0trust_nat {
 EOF
 # persist
 mkdir -p /etc/nftables.d
-nft list table inet 0trust_nat > /etc/nftables.d/0trust.nft
+nft list table inet ztv_nat > /etc/nftables.d/0trust.nft
 
 # ----------------------------------------------------------------------------
 log "Abuse-mitigation egress filter (exit nodes)"
@@ -121,7 +126,7 @@ log "Abuse-mitigation egress filter (exit nodes)"
 #     storms without affecting normal browsing.
 CLIENT_NET="10.64.0.0/10"
 nft -f - <<EOF
-table inet 0trust_egress {
+table inet ztv_egress {
     chain forward {
         type filter hook forward priority 0; policy accept;
 
@@ -140,7 +145,7 @@ table inet 0trust_egress {
     }
 }
 EOF
-nft list table inet 0trust_egress >> /etc/nftables.d/0trust.nft
+nft list table inet ztv_egress >> /etc/nftables.d/0trust.nft
 
 # ----------------------------------------------------------------------------
 log "Firewall (UFW)"

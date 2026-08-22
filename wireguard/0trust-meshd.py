@@ -42,7 +42,16 @@ WG_PORT       = int(os.environ.get("WG_PORT", "51820"))
 MESH_GATEWAY  = os.environ.get("MESH_GATEWAY", "10.64.0.1/10")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
 
-NFT_TABLE = "0trust_forward"
+# NOT "0trust_forward": nftables identifiers cannot start with a digit, and
+# nft parses the leading 0 as a number — "syntax error, unexpected number".
+# Quoting does not help; the parser rejects a quoted string there too. The
+# whole ruleset failed to load, which meant multi-hop DNAT never worked on
+# any node. Renaming is the only fix.
+NFT_TABLE = "ztv_forward"
+
+# Tables that predate the rename. Removed on first sync so a node upgrading
+# in place does not keep a stale table around forever.
+LEGACY_NFT_TABLES = ("0trust_forward",)
 
 log = logging.getLogger("meshd")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -122,6 +131,18 @@ def fetch_forwards() -> list[dict]:
     return _get(f"/api/v1/wg/forwards?node_id={NODE_ID}")["forwards"]
 
 
+def _dnat_family(endpoint: str) -> str:
+    """
+    "ip" or "ip6" for a host:port endpoint.
+
+    An inet table serves both families, so nft refuses a bare `dnat to` there:
+    "specify 'dnat ip' or 'dnat ip6' in inet table to disambiguate". Without
+    the qualifier the ruleset does not load at all.
+    """
+    host = endpoint.rsplit(":", 1)[0]
+    return "ip6" if host.startswith("[") or host.count(":") >= 2 else "ip"
+
+
 def build_nft_ruleset(forwards: list[dict]) -> str:
     """
     Build a complete nftables ruleset. Atomic replacement via nft -f.
@@ -132,7 +153,9 @@ def build_nft_ruleset(forwards: list[dict]) -> str:
         "    type nat hook prerouting priority dstnat;",
     ]
     for f in forwards:
-        lines.append(f"    udp dport {f['entry_port']} dnat to {f['exit_endpoint']}")
+        fam = _dnat_family(f["exit_endpoint"])
+        lines.append(
+            f"    udp dport {f['entry_port']} dnat {fam} to {f['exit_endpoint']}")
     lines += [
         "  }",
         "  chain postrouting {",
@@ -166,6 +189,12 @@ def reconcile_forwards(forwards: list[dict]) -> None:
     script_parts = []
     if check.returncode == 0:
         script_parts.append(f"delete table inet {NFT_TABLE}")
+    # A node upgrading in place may still have a table under the old name.
+    # It never loaded successfully, but clear it if it somehow exists.
+    for legacy in LEGACY_NFT_TABLES:
+        if subprocess.run(["nft", "list", "table", "inet", legacy],
+                          capture_output=True).returncode == 0:
+            script_parts.append(f"delete table inet {legacy}")
     script_parts.append(new_table)
     script = "\n".join(script_parts)
 
