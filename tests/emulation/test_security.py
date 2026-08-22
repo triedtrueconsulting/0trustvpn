@@ -95,6 +95,38 @@ try:
     st, r = H.call("POST", "/api/v1/account", {"months": -1})
     check("negative months rejected", st == 422, st)
 
+    print("\n[peer manifest] a node sees only what it routes")
+    # One node's PSK used to be enough to enumerate every customer, which is
+    # not compatible with "a seized node reveals nothing operational".
+    tokC, _ = H.paid_account()
+    pk_single = H.genkey()
+    H.call("POST", "/api/v1/wg/register",
+           {"pubkey": pk_single, "device_name": "s", "region": "zur"},
+           headers={"X-Account-Token": tokC})
+    pk_multi = H.genkey()
+    H.call("POST", "/api/v1/wg/register",
+           {"pubkey": pk_multi, "device_name": "m", "region": "zur",
+            "exit_region": "buc"},
+           headers={"X-Account-Token": tokC})
+
+    def at(node):
+        st, b = H.call("GET", f"/api/v1/wg/peers?node_id={node}",
+                       headers={"X-Node-Psk": H.NODE_PSK})
+        return st, {p["public_key"] for p in b.get("peers", [])}
+
+    _, zur = at("zur-01")
+    _, buc = at("buc-01")
+    _, rey = at("rey-01")
+    check("a node cannot enumerate the whole customer base",
+          not (pk_single in buc and pk_multi in buc), f"buc={buc}")
+    check("the exit of a multi-hop session gets that key", pk_multi in buc, buc)
+    check("the entry of a multi-hop session does not", pk_multi not in zur, zur)
+    check("an uninvolved node gets nothing", not rey, rey)
+
+    st, r = H.call("GET", "/api/v1/wg/peers", headers={"X-Node-Psk": H.NODE_PSK})
+    check("an unidentified node is refused rather than served everything",
+          st == 400, f"{st} {r}")
+
     print("\n[input] hostile field values")
     long_name = "x" * 100000
     st, r = H.call("POST", "/api/v1/wg/register",

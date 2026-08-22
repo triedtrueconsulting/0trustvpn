@@ -148,7 +148,7 @@ try:
     check("global-PSK heartbeat does not silently no-op",
           st != 200 or True, f"{st} {hb2}")  # informational; asserted below
 
-    st, pl = H.call("GET", "/api/v1/wg/peers", headers={"X-Node-Psk": H.NODE_PSK})
+    st, pl = H.call("GET", "/api/v1/wg/peers?node_id=zur-01", headers={"X-Node-Psk": H.NODE_PSK})
     check("node can fetch peer manifest", st == 200 and "peers" in pl, f"{st} {pl}")
     st, fw = H.call("GET", "/api/v1/wg/forwards?node_id=zur-01",
                     headers={"X-Node-Psk": H.NODE_PSK})

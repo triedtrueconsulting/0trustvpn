@@ -73,12 +73,14 @@ try:
     check("status active", st == 200 and stat["status"] == "active", stat)
     check("status reports the trial plan", stat.get("plan") == "trial", stat)
     check("status reports the trial device cap", stat.get("max_devices") == 2, stat)
+    pk_laptop = H.genkey()
     st, reg = H.call("POST", "/api/v1/wg/register",
-                     {"pubkey": H.genkey(), "device_name": "laptop", "region": "zur"},
+                     {"pubkey": pk_laptop, "device_name": "laptop", "region": "zur"},
                      headers={"X-Account-Token": token})
     check("trial can register a device", st == 200 and reg["peers"], f"{st} {reg}")
+    pk_phone = H.genkey()
     st, mh = H.call("POST", "/api/v1/wg/register",
-                    {"pubkey": H.genkey(), "device_name": "phone",
+                    {"pubkey": pk_phone, "device_name": "phone",
                      "region": "zur", "exit_region": "buc"},
                     headers={"X-Account-Token": token})
     check("trial gets multi-hop too", st == 200 and mh.get("multihop"), f"{st} {mh}")
@@ -90,9 +92,28 @@ try:
     check("third device refused on a 2-device trial", st == 409, f"{st} {over}")
     check("refusal points at upgrading", "Upgrade" in str(over), over)
 
-    print("\n[6] trial appears in the node peer manifest")
-    st, peers = H.call("GET", "/api/v1/wg/peers", headers={"X-Node-Psk": H.NODE_PSK})
-    check("trial device is routable", st == 200 and len(peers["peers"]) >= 2, peers)
+    print("\n[6] the trial's devices reach only the nodes that route them")
+    def peers_at(node):
+        st, b = H.call("GET", f"/api/v1/wg/peers?node_id={node}",
+                       headers={"X-Node-Psk": H.NODE_PSK})
+        return st, {p["public_key"] for p in b.get("peers", [])}
+
+    st_z, at_zur = peers_at("zur-01")
+    st_b, at_buc = peers_at("buc-01")
+    st_r, at_rey = peers_at("rey-01")
+    check("manifest served", st_z == 200 and st_b == 200 and st_r == 200,
+          (st_z, st_b, st_r))
+    # The laptop is single-hop in zur; the phone is multi-hop zur -> buc, and
+    # only the EXIT terminates its tunnel.
+    check("single-hop laptop is routable at zur-01", pk_laptop in at_zur,
+          f"zur={at_zur}")
+    check("multi-hop phone reaches its EXIT node", pk_phone in at_buc,
+          f"buc={at_buc}")
+    check("the entry node never receives the multi-hop device's key",
+          pk_phone not in at_zur, f"zur={at_zur}")
+    check("the exit node does not receive the unrelated single-hop key",
+          pk_laptop not in at_buc, f"buc={at_buc}")
+    check("an uninvolved node receives nothing at all", not at_rey, at_rey)
 
     print("\n[7] converting to paid")
     st, inv = H.call("POST", "/api/v1/account/topup", {"months": 3},

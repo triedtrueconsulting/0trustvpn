@@ -259,6 +259,7 @@ The full schema is in `api/main.py`. Tables and their content:
 | `mesh_nodes` | Node ID, pubkey, public IP | Persistent for static nodes; ephemeral nodes pruned 1h after last heartbeat |
 | `provision_tokens` | Token hash + region/role | Burned on use; row deleted 24h after that |
 | `trial_grants` | A random nonce we generated | 24h — long enough that a solved stamp cannot be reused, then gone |
+| `device_nodes` | Which nodes may see a device's pubkey | Rewritten on every connect; deleted with the device |
 
 Two of these deserve a note, because "we keep the minimum" only means
 something if abandoned data actually leaves.
@@ -406,11 +407,18 @@ The operator is required to declare these proactively:
    adversary observing 24h of traffic on one entry can still correlate.
    Customers wanting tighter rotation should `0trust rotate` manually
    or set the timer to 1h.
-4. **Memory forensics on a seized control-plane host could recover the
+4. **A seized mesh node still learns the customers routed through it.**
+   `/wg/peers` is scoped: a node receives only the public keys and mesh IPs
+   of devices actually routed through it, so one node's PSK no longer
+   enumerates the whole customer base. What a node cannot avoid seeing is
+   its own traffic — an exit knows the pubkeys terminating on it, and an
+   entry knows the source addresses connecting to it. Multi-hop splits those
+   two facts across jurisdictions; it does not erase either.
+5. **Memory forensics on a seized control-plane host could recover the
    in-memory database connection's state**, including recently-queried
    tokens. RAM encryption (LUKS + cold-boot protection) on the control
    plane is recommended but out of scope for this audit pack.
-5. **Static pages load Google Fonts** from `fonts.googleapis.com` and
+6. **Static pages load Google Fonts** from `fonts.googleapis.com` and
    `fonts.gstatic.com`. Lighter exposure than cdnjs was (fonts don't
    execute code) but still lets Google see page visits. Mitigation:
    self-host the three font families. Tracked in CSP comment in

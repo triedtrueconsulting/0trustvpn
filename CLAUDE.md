@@ -110,11 +110,18 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 - **Multi-hop requires entry ≠ exit.** Enforced by `_validate_regions()` in
   the API, shared by both register and rotate endpoints.
 - **RAM-only ephemeral nodes:** tmpfs paths, swap off, fresh WG keys on boot,
-  journald volatile. A seized node reveals nothing operational.
+  journald volatile. A seized node reveals nothing operational beyond the
+  customers it was itself routing — `/wg/peers` is scoped per node, so one
+  node's PSK does not enumerate the customer base. See `device_nodes`.
 - **No-logs claims must match reality.** The privacy policy (web/privacy.html),
   terms (web/terms.html), and audit pack (docs/AUDIT.md) all make the SAME
   claims. If you change what the system collects/retains, you MUST update all
   three, and `scripts/audit-verify.sh` must still pass. See discipline note below.
+- **`/wg/peers` is scoped to the calling node.** A node gets only the devices
+  routed through it, tracked in `device_nodes` and rewritten on every
+  register/rotate. The node must identify itself — its own PSK, or `node_id`
+  with the shared one. Returning the full roster to anything holding a node
+  credential is what the seizure claim above rules out.
 - **Device registration is idempotent on the pubkey.** Clients persist their
   keypair, so reconnects re-present the same key. Registering it again returns
   the existing device's config and keeps its mesh IP; it never creates a second

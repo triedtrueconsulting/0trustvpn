@@ -165,6 +165,24 @@ CREATE TABLE IF NOT EXISTS provision_tokens (
   used_node_id  TEXT
 );
 
+-- Which nodes have been handed a given device's public key.
+--
+-- /wg/peers used to return every active device to every node that asked.
+-- That made a single node's PSK enough to enumerate the entire customer
+-- base, which is flatly at odds with "a seized node reveals nothing
+-- operational". A node only ever needs to authorize the devices actually
+-- routed through it, so that is all it gets.
+--
+-- Rewritten on every register/rotate, so a device that moves stops being
+-- disclosed to the node it left at that node's next sync.
+CREATE TABLE IF NOT EXISTS device_nodes (
+  device_id   INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  node_id     TEXT NOT NULL REFERENCES mesh_nodes(id) ON DELETE CASCADE,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (device_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_device_nodes_node ON device_nodes(node_id);
+
 -- Redeemed trial stamps. A challenge is signed rather than stored, so the
 -- only thing that needs persisting is the fact that one was spent — which is
 -- what stops the same solved proof-of-work being replayed into many accounts.
@@ -245,6 +263,7 @@ def db(write: bool = False):
 # each entry is applied to databases that predate it and skipped otherwise.
 MIGRATIONS = [
     ("invoices", "checkout_url", "TEXT"),
+    # device_nodes is created by SCHEMA; nothing to add to an existing table.
     ("accounts", "plan", "TEXT NOT NULL DEFAULT 'paid'"),
     ("accounts", "trial_started_at", "INTEGER NOT NULL DEFAULT 0"),
 ]
@@ -1017,6 +1036,22 @@ def _multihop_response(mesh_ip: str, pair: dict) -> WGRegisterResponse:
     )
 
 
+def _assign_nodes(conn, device_id: int, node_ids) -> None:
+    """
+    Record exactly which nodes may see this device's pubkey, replacing any
+    previous assignment. Replacing rather than adding matters: a device that
+    rotates away from a node should stop being disclosed to it.
+    """
+    now = int(time.time())
+    conn.execute("DELETE FROM device_nodes WHERE device_id = ?", (device_id,))
+    for nid in dict.fromkeys(node_ids):        # de-duplicate, keep order
+        conn.execute(
+            """INSERT OR REPLACE INTO device_nodes (device_id, node_id, updated_at)
+               VALUES (?, ?, ?)""",
+            (device_id, nid, now),
+        )
+
+
 def _single_hop_peers(conn, region: str) -> list:
     """
     Up to 3 exit-capable peers, preferring the requested region and falling
@@ -1144,13 +1179,20 @@ def wg_register(
                 conn, device_id, req.region, req.exit_region,
                 prior_pair_id=prior["id"] if prior else None,
             )
+            # Only the exit terminates the tunnel; the entry just DNATs UDP
+            # and reads /wg/forwards, so it never needs the pubkey.
+            _assign_nodes(conn, device_id, [pair["exit"]["id"]])
             return _multihop_response(mesh_ip, pair)
 
         # ------------- SINGLE-HOP (default) -------------
         # Re-registering single-hop retires any multi-hop pair, otherwise the
         # entry node keeps a DNAT rule for a session the client abandoned.
         conn.execute("DELETE FROM hop_pairs WHERE device_id = ?", (device_id,))
-        return _single_hop_response(mesh_ip, _single_hop_peers(conn, req.region))
+        peers = _single_hop_peers(conn, req.region)
+        # The client writes every returned peer into its wg config and may
+        # hand-shake with any of them, so all of them need the key.
+        _assign_nodes(conn, device_id, [p["id"] for p in peers])
+        return _single_hop_response(mesh_ip, peers)
 
 
 class DeviceInfo(BaseModel):
@@ -1277,6 +1319,7 @@ def wg_rotate(
                 exit_region=exit_region,
                 prior_pair_id=existing["id"] if existing else None,
             )
+            _assign_nodes(conn, device["id"], [pair["exit"]["id"]])
             return _multihop_response(device["mesh_ip"], pair)
 
         # No prior pair and no exit_region: fall back to single-hop.
@@ -1286,9 +1329,9 @@ def wg_rotate(
             "UPDATE devices SET last_seen = ? WHERE id = ?",
             (int(time.time()), device["id"]),
         )
-        return _single_hop_response(
-            device["mesh_ip"], _single_hop_peers(conn, req.region)
-        )
+        peers = _single_hop_peers(conn, req.region)
+        _assign_nodes(conn, device["id"], [p["id"] for p in peers])
+        return _single_hop_response(device["mesh_ip"], peers)
 
 
 # ----------------------------------------------------------------------------
@@ -1428,18 +1471,39 @@ def node_heartbeat(
 
 
 @app.get("/api/v1/wg/peers")
-def list_peers(_: Optional[str] = Depends(require_node)):
+def list_peers(node_id: Optional[str] = None,
+               caller: Optional[str] = Depends(require_node)):
     """
-    Mesh nodes call this periodically to sync their peer list.
-    Returns all active devices so the node can authorize their pubkeys.
+    Mesh nodes call this periodically to sync their WireGuard peer list.
+
+    Scoped to the calling node. This used to return every active device to
+    anything holding a node credential, which made one node's PSK enough to
+    enumerate the whole customer base — hard to square with the claim that a
+    seized node reveals nothing operational. A node only needs the devices
+    routed through it, and that is now all it can see.
+
+    The node must identify itself: implicitly by presenting its own PSK, or
+    explicitly via node_id when using the shared NODE_API_PSK.
     """
+    node = caller or (node_id or "").strip()
+    if not node:
+        raise HTTPException(
+            400,
+            "Identify the node: send a per-node PSK, or pass node_id when "
+            "using the shared PSK.",
+        )
+    if caller is not None and node_id and node_id != caller:
+        raise HTTPException(403, "A node may only read its own peers")
+
     with db() as conn:
         rows = conn.execute(
             """SELECT d.pubkey, d.mesh_ip
                FROM devices d
-               JOIN accounts a ON a.id = d.account_id
-               WHERE a.status = 'active' AND a.expires_at > ?""",
-            (int(time.time()),),
+               JOIN accounts a     ON a.id = d.account_id
+               JOIN device_nodes n ON n.device_id = d.id
+               WHERE n.node_id = ?
+                 AND a.status = 'active' AND a.expires_at > ?""",
+            (node, int(time.time())),
         ).fetchall()
     return {
         "peers": [{"public_key": r["pubkey"], "allowed_ips": f"{r['mesh_ip']}/32"} for r in rows],

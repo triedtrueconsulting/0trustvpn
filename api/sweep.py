@@ -211,7 +211,19 @@ def main():
     if cur.rowcount:
         log.info("pruned %d spent or expired provisioning tokens", cur.rowcount)
 
-    # ---- 9. Release hop_pairs whose node references have gone stale ----
+    # ---- 9. Drop device/node assignments with dangling references ----
+    # ON DELETE CASCADE covers the normal paths; this catches rows left by a
+    # node removed by hand. A stale assignment would keep disclosing a pubkey
+    # to a node that no longer routes it.
+    cur = conn.execute(
+        """DELETE FROM device_nodes
+           WHERE device_id NOT IN (SELECT id FROM devices)
+              OR node_id   NOT IN (SELECT id FROM mesh_nodes)"""
+    )
+    if cur.rowcount:
+        log.info("dropped %d stale device/node assignments", cur.rowcount)
+
+    # ---- 10. Release hop_pairs whose node references have gone stale ----
     # Belt and braces for a control plane where a node row was removed by hand.
     cur = conn.execute(
         """DELETE FROM hop_pairs

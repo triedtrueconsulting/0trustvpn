@@ -157,7 +157,7 @@ FastAPI app on `127.0.0.1:8080`. Endpoints:
 | DELETE | `/api/v1/devices/{pubkey}`        | X-Account-Token | Deregister a device, free its slot   |
 | POST   | `/api/v1/wg/register`             | X-Account-Token | Register device, get peers (single- or multi-hop) |
 | POST   | `/api/v1/wg/rotate`               | X-Account-Token | Atomically swap to a fresh entry/exit pair        |
-| GET    | `/api/v1/wg/peers`                | X-Node-Psk      | Exit-node peer manifest              |
+| GET    | `/api/v1/wg/peers?node_id=…`      | X-Node-Psk      | Peer manifest, scoped to that node   |
 | GET    | `/api/v1/wg/forwards?node_id=…`   | X-Node-Psk      | Entry-node DNAT rules                |
 | POST   | `/api/v1/node/provision`          | X-Provision-Token (one-shot) | Ephemeral node self-registration  |
 | POST   | `/api/v1/node/heartbeat`          | X-Node-Psk      | Liveness ping (ephemeral nodes)      |

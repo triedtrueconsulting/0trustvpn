@@ -75,7 +75,10 @@ def _get(path: str) -> dict:
 # ----------------------------------------------------------------------------
 
 def fetch_peers() -> list[dict]:
-    return _get("/api/v1/wg/peers")["peers"]
+    # node_id is required: the manifest is scoped to the calling node, and a
+    # node authenticating with the shared PSK cannot be identified from the
+    # credential alone.
+    return _get(f"/api/v1/wg/peers?node_id={NODE_ID}")["peers"]
 
 
 def build_wg_config(peers: list[dict]) -> str:

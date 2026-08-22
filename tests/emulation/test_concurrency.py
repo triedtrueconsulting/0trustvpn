@@ -103,13 +103,13 @@ try:
     H.call("POST", "/api/v1/wg/register",
            {"pubkey": pk5, "device_name": "exp", "region": "zur"},
            headers={"X-Account-Token": tok5})
-    st, pl = H.call("GET", "/api/v1/wg/peers", headers={"X-Node-Psk": H.NODE_PSK})
+    st, pl = H.call("GET", "/api/v1/wg/peers?node_id=zur-01", headers={"X-Node-Psk": H.NODE_PSK})
     present = any(p["public_key"] == pk5 for p in pl["peers"])
     c = sqlite3.connect(DB)
     c.execute("UPDATE accounts SET expires_at=? WHERE token_hash=?",
               (int(time.time()) - 10, api_main.hash_token(tok5)))
     c.commit(); c.close()
-    st, pl2 = H.call("GET", "/api/v1/wg/peers", headers={"X-Node-Psk": H.NODE_PSK})
+    st, pl2 = H.call("GET", "/api/v1/wg/peers?node_id=zur-01", headers={"X-Node-Psk": H.NODE_PSK})
     gone = not any(p["public_key"] == pk5 for p in pl2["peers"])
     check("active device in manifest, expired device removed", present and gone,
           f"present={present} gone_after_expiry={gone}")
