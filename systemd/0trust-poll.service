@@ -1,0 +1,23 @@
+[Unit]
+Description=0trust watch-only invoice poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=0trust
+Group=0trust
+EnvironmentFile=/etc/0trust/api.env
+ExecStart=/opt/0trust/api/.venv/bin/python /opt/0trust/api/poll_invoices.py
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/0trust
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

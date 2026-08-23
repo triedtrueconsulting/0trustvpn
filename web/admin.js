@@ -424,8 +424,8 @@ const GROUP_LABELS = {
   other: 'Other',
 };
 const GROUP_NOTES = {
-  wallets: 'Where funds actually land. Used by whichever provider is configured to pay out to your own addresses.',
-  chain: 'Whose node we borrow. This deployment never syncs a chain locally — these name public endpoints for the providers that consult them.',
+  wallets: 'Where funds actually land. The watch-only provider derives a fresh receive address per invoice from the BTC xpub — paste the PUBLIC key (xpub/ypub/zpub), never a private one. A plain address works but is reused for every customer, which makes two payments of the same amount impossible to tell apart. The other wallet fields are reference only; no provider reads them yet.',
+  chain: 'Whose node we borrow. This deployment never syncs a chain locally. Only the BTC endpoint is consulted, by the watch-only provider; leave it blank for mempool.space. The others are reference only until a provider reads them.',
   stripe: 'Cards mean a real identity behind every payment, and a processor that can reverse one. See privacy.html before enabling.',
   square: 'Same trade-off as Stripe: identity behind the card, reversible payments, a third party in the middle.',
   ops: 'Where node-down and disk alerts get pushed. Any endpoint that takes a JSON POST — Slack, ntfy, Discord, your own. Leave it blank and events still appear under Events; the webhook is only a nudge.',

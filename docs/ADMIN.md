@@ -60,7 +60,25 @@ jurisdiction allowlist: a node in the wrong country is a broken promise, and
 `audit-verify.sh` will fail on it the next day.
 
 **Payments** — which provider is configured, whether it is reachable, and
-what is still missing from its configuration. Invoices can be credited by
+what is still missing from its configuration.
+
+The default, `watch`, needs one thing: your Bitcoin **xpub** (or ypub/zpub) in
+Settings → Business wallets. Paste the public key your wallet shows you for
+receiving; a fresh address is derived per invoice and the money goes straight
+to you. Nothing here can spend it — an extended public key cannot sign, which
+is the point of using one on an internet-facing box. Never paste an xprv; the
+control plane refuses one, but do not test that theory with a live wallet.
+
+Settlement is a timer (`0trust-poll.timer`, once a minute) asking a public
+block explorer whether the invoice's address has been paid, not a webhook.
+That is what lets it work on a box with no domain and no certificate. If the
+explorer is unreachable for a whole run you get a `payments.explorer_down`
+event, because an outage there looks exactly like nobody buying anything.
+
+It is Bitcoin only, on purpose: Monero and Zcash addresses cannot be derived
+from a public key without wallet software, and giving every customer the same
+address would break both attribution and their privacy. For more coins, run
+BTCPay and switch the provider over. Invoices can be credited by
 hand for the case every crypto operator eventually hits: the payment landed
 on chain but the webhook never arrived. That path runs through the same
 credit-once guard as a webhook, so using it twice cannot double an

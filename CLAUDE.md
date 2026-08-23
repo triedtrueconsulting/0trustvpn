@@ -81,11 +81,30 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   `payments.CURRENCIES`, the BTCPay checkout config, and web/index.html's
   crypto tabs — keep them in step.
 - **No self-hosted blockchain node.** `ZTV_PAYMENT_PROVIDER` picks between
-  `btcpay` (your own or somebody else's BTCPay instance — non-custodial, funds
-  land in your wallet) and `hosted` (a commercial gateway, no infrastructure at
-  all, but custodial and usually KYC'd). `api/payments.py` documents the
+  `watch` (default: derive a receive address per invoice from the operator's
+  own xpub and confirm via a public explorer — non-custodial, no account
+  anywhere, no chain data, BTC only), `btcpay` (your own or somebody else's
+  BTCPay instance — non-custodial, more coins, but something has to run
+  BTCPay), `hosted` (a commercial gateway, no infrastructure at all, but
+  custodial and usually KYC'd), and `stripe`/`square` (cards, which mean a
+  real identity behind every payment). `api/payments.py` documents the
   trade-off; if the audit pack ever leans on the payment path, reconcile it
   with whichever provider is actually configured.
+- **`watch` is the only provider that works on a fresh VPS**, which is why it
+  is the installer default: paste `WALLET_BTC` and paid signup works. It has
+  no webhook — settlement is `0trust-poll.timer` asking an Esplora explorer
+  once a minute — because a webhook needs a public callback URL and a TLS
+  certificate, and polling needs one outbound HTTPS request.
+- **Never put a private key anywhere near this.** `api/chainwatch.py` takes an
+  extended PUBLIC key and cannot sign. Its derivation is checked against the
+  BIP84/BIP173 vectors in `test_chainwatch.py`, and against private derivation
+  computed independently in the test — never against its own output. A bug
+  here sends customers to addresses the operator cannot spend, silently, with
+  every health check green.
+- **One address per invoice.** The index comes from the `address_index`
+  counter inside `db(write=True)`; two signups sharing an address makes two
+  payments of the same amount impossible to attribute. A plain address in
+  `WALLET_BTC` is accepted but reused, and the dashboard says so.
 - **Free trial: one week, no identity.** A browser grinds a proof-of-work
   stamp, redeems it for an ordinary anonymous token, and the account expires in
   `ZTV_TRIAL_DAYS` days (default 7) with a lower device cap. Paying converts the
