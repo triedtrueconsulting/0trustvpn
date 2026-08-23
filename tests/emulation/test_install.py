@@ -55,8 +55,12 @@ def nginx_check(site_path, zones_path, label, port_map):
     # parser still checks their syntax before the bind is attempted, and the
     # v4 equivalents keep the rest of the config under test.
     site = "\n".join(l for l in site.splitlines() if "listen [::]" not in l)
+    # /var/log/nginx is root-owned. `nginx -t` opens the log files for real,
+    # so on any unprivileged runner the committed config fails the check with
+    # a permission error that says nothing about the config being wrong.
     site = (site.replace("/etc/nginx/snippets/", f"{TMP}/snippets/")
                 .replace("/etc/letsencrypt/live/example.com", TMP)
+                .replace("/var/log/nginx/", f"{TMP}/")
                 .replace("/var/www/0trust", f"{TMP}/www")
                 .replace("/var/www/acme", f"{TMP}/www"))
     sp = os.path.join(TMP, f"site-{label}.conf")
@@ -180,7 +184,19 @@ try:
     # real box; nft and the parsers here are the same ones that would reject
     # it there, at a much more expensive moment.
     d = os.path.join(TMP, "render-test")
+    # `nft -c` parses without loading, but it still opens a netlink socket to
+    # build its cache, so without CAP_NET_ADMIN it fails with "Operation not
+    # permitted" — nothing to do with the ruleset. Probe once with a ruleset
+    # known to be good, and treat a permission failure as "cannot check here"
+    # rather than as a broken ruleset.
     have_nft = shutil.which("nft") is not None
+    if have_nft:
+        _probe = subprocess.run(
+            ["nft", "-c", "-f", "-"], capture_output=True, text=True,
+            input="table inet ztv_probe {\n  chain c {\n    type filter hook forward priority 0;\n  }\n}\n")
+        if _probe.returncode != 0:
+            have_nft = False
+            print(f"  SKIP  nft cannot run here ({(_probe.stderr or '').strip()[:60]})")
 
     for iface, node, port, gw in (("wg0", "zur-01", "51820", "10.64.0.1"),
                                   ("wg1", "rey-01", "51821", "10.64.0.2"),
@@ -216,54 +232,58 @@ try:
     for name, why in (("nat.nft", "masquerade"), ("egress.nft", "abuse filter")):
         fp = f"{d}/{name}"
         check(f"{why} ruleset rendered", os.path.exists(fp))
-    if have_nft and os.path.exists(f"{d}/nat.nft") and os.path.exists(f"{d}/egress.nft"):
-        both = open(f"{d}/nat.nft").read() + open(f"{d}/egress.nft").read()
-        r = subprocess.run(["nft", "-c", "-f", "-"], input=both,
-                           capture_output=True, text=True)
-        # This is the check that would have caught the table name starting
-        # with a digit, which nft rejects outright — so neither the exit
-        # masquerade nor the abuse filter was ever in force on any node.
-        check("nft accepts the rulesets the installer writes", r.returncode == 0,
-              (r.stderr or r.stdout)[-400:])
-        check("masquerade covers the mesh network",
-              "10.64.0.0/10 masquerade" in open(f"{d}/nat.nft").read())
-        eg = open(f"{d}/egress.nft").read()
-        check("egress filter blocks outbound mail", "25, 465, 587" in eg)
+    if os.path.exists(f"{d}/nat.nft") and os.path.exists(f"{d}/egress.nft"):
+        nat, eg = open(f"{d}/nat.nft").read(), open(f"{d}/egress.nft").read()
+        check("masquerade covers the mesh network", "10.64.0.0/10 masquerade" in nat, nat)
+        check("egress filter blocks outbound mail", "25, 465, 587" in eg, eg[:300])
         check("egress filter blocks pivoting into private ranges",
-              "169.254.0.0/16" in eg and "192.168.0.0/16" in eg)
+              "169.254.0.0/16" in eg and "192.168.0.0/16" in eg, eg[:300])
+        if have_nft:
+            r = subprocess.run(["nft", "-c", "-f", "-"], input=nat + eg,
+                               capture_output=True, text=True)
+            # This is the check that would have caught the table name starting
+            # with a digit, which nft rejects outright — so neither the exit
+            # masquerade nor the abuse filter was ever in force on any node.
+            check("nft accepts the rulesets the installer writes", r.returncode == 0,
+                  (r.stderr or r.stdout)[-400:])
+        else:
+            print("  SKIP  nft accepts the rulesets the installer writes")
 
     # meshd's own DNAT ruleset, generated the way a node would generate it.
+    # Generating and inspecting it needs no privileges; only handing it to nft
+    # does, so the generation checks run everywhere and only the parse is gated.
+    import importlib.util
+    os.environ["ZTV_NFT_TABLE"] = "ztv_fwd_wg0"
+    os.environ.setdefault("CONTROL_URL", "http://127.0.0.1:8080")
+    os.environ.setdefault("NODE_API_PSK", "x")
+    os.environ.setdefault("NODE_ID", "zur-01")
+    spec = importlib.util.spec_from_file_location(
+        "meshd", os.path.join(H.REPO, "wireguard", "0trust-meshd.py"))
+    meshd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(meshd)
+    rules = meshd.build_nft_ruleset([
+        {"entry_port": 52001, "exit_endpoint": "203.0.113.5:51821"},
+        {"entry_port": 52002, "exit_endpoint": "[2001:db8::1]:51822"},
+    ])
+    check("meshd honours a per-node table name",
+          "table inet ztv_fwd_wg0" in rules, rules[:120])
+    # An inet table serves both families, so nft refuses a bare `dnat to`.
+    check("DNAT is family-qualified for both v4 and v6",
+          "dnat ip to 203.0.113.5:51821" in rules
+          and "dnat ip6 to [2001:db8::1]:51822" in rules, rules)
+    # Routes: three interfaces in one /10 need per-peer /32s to be
+    # unambiguous, and the daemon must never delete a route it did not add.
+    check("meshd keeps peer routes inside the mesh network",
+          meshd._in_mesh("10.64.0.5/32") and not meshd._in_mesh("8.8.8.8/32"))
+    check("meshd only manages its own routes", meshd.ROUTE_PROTO == "static")
+
     if have_nft:
-        import importlib.util
-        os.environ["ZTV_NFT_TABLE"] = "ztv_fwd_wg0"
-        os.environ.setdefault("CONTROL_URL", "http://127.0.0.1:8080")
-        os.environ.setdefault("NODE_API_PSK", "x")
-        os.environ.setdefault("NODE_ID", "zur-01")
-        spec = importlib.util.spec_from_file_location(
-            "meshd", os.path.join(H.REPO, "wireguard", "0trust-meshd.py"))
-        meshd = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(meshd)
-        rules = meshd.build_nft_ruleset([
-            {"entry_port": 52001, "exit_endpoint": "203.0.113.5:51821"},
-            {"entry_port": 52002, "exit_endpoint": "[2001:db8::1]:51822"},
-        ])
         r = subprocess.run(["nft", "-c", "-f", "-"], input=rules,
                            capture_output=True, text=True)
         check("nft accepts meshd's multi-hop DNAT ruleset", r.returncode == 0,
               (r.stderr or r.stdout)[-400:])
-        check("meshd honours a per-node table name",
-              "table inet ztv_fwd_wg0" in rules, rules[:120])
-        # An inet table serves both families, so nft refuses a bare `dnat to`.
-        check("DNAT is family-qualified for both v4 and v6",
-              "dnat ip to 203.0.113.5:51821" in rules
-              and "dnat ip6 to [2001:db8::1]:51822" in rules, rules)
-
-        # Routes: three interfaces in one /10 need per-peer /32s to be
-        # unambiguous, and the daemon must never delete a route it did not add.
-        check("meshd keeps peer routes inside the mesh network",
-              meshd._in_mesh("10.64.0.5/32") and not meshd._in_mesh("8.8.8.8/32"))
-        check("meshd only manages its own routes",
-              meshd.ROUTE_PROTO == "static")
+    else:
+        print("  SKIP  nft accepts meshd's multi-hop DNAT ruleset")
 
     # The resolver. Clients are handed DNS = the mesh gateway; until this
     # existed nothing listened there and a connected customer resolved nothing.
