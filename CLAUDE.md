@@ -23,7 +23,9 @@ are anonymous 16-char tokens; there's no email/password/identity.
 
 ```
 api/            FastAPI + SQLite control plane (main.py is the core)
-                btcpay.py, sweep.py (expiry sweeper), mint-provision-token.py
+                payments.py (BTCPay / hosted gateway), btcpay.py (legacy client),
+                sweep.py (expiry sweeper), mint-provision-token.py,
+                smoke_test.py
 client/         Go module github.com/0trust/cli (Go 1.22, dep: skip2/go-qrcode)
   cmd/0trust/main.go              CLI entrypoint + help text
   internal/api/api.go             Backend HTTP client — CANONICAL wire contract
@@ -48,7 +50,12 @@ nginx/0trustvpn.com.conf          Main site config (rate limits, routes, TLS)
 scripts/                          bootstrap.sh, bootstrap-node.sh, audit-verify.sh,
                                   backup.sh, release.sh, verify-release.sh
 systemd/                          api / sweep / backup / meshd .service + .timer
-web/                              Landing + status/download/help/audit/privacy/terms/security
+proxy/                            Visitor web proxy (/surf):
+                                  guards.py (the security argument),
+                                  rewrite.py, server.py
+tests/emulation/                  Full-stack suite: boots the product, drives it
+web/                              Landing + status/download/help/audit/privacy/
+                                  terms/security + trial.html (free-trial signup)
 docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 ```
 
@@ -67,7 +74,29 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   (Norway was rejected earlier — it's in Nine Eyes. Romania replaced it.)
   **These region codes must be identical everywhere** — CLI, GUI, Android,
   iOS skeleton, API defaults, docs, landing-page terminal demo.
-- **BTCPay:** lite path (~$8/mo: pruned Bitcoin + remote Monero daemon).
+- **Currencies: BTC, XMR, ZEC.** ETH and LTC were dropped. The codes live in
+  `payments.CURRENCIES`, the BTCPay checkout config, and web/index.html's
+  crypto tabs — keep them in step.
+- **No self-hosted blockchain node.** `ZTV_PAYMENT_PROVIDER` picks between
+  `btcpay` (your own or somebody else's BTCPay instance — non-custodial, funds
+  land in your wallet) and `hosted` (a commercial gateway, no infrastructure at
+  all, but custodial and usually KYC'd). `api/payments.py` documents the
+  trade-off; if the audit pack ever leans on the payment path, reconcile it
+  with whichever provider is actually configured.
+- **Free trial: one week, no identity.** A browser grinds a proof-of-work
+  stamp, redeems it for an ordinary anonymous token, and the account expires in
+  `ZTV_TRIAL_DAYS` days (default 7) with a lower device cap. Paying converts the
+  same account and stacks the paid months on whatever the trial had left.
+  **Nothing hardcodes the length in copy.** `GET /api/v1/config` publishes
+  `trial.days` and a phrased `trial.label`; the landing page, trial page,
+  /surf banner and desktop GUI all render from it, so an operator changing the
+  setting in the dashboard never leaves a page advertising the old offer. The
+  proxy keeps a word-for-word copy of the phrasing for when the control plane
+  is unreachable, and a test asserts the two never disagree.
+- **`/surf` is a funnel, not a product.** A page reader that covers one browser
+  tab. Separate service, separate port, so it can be killed without touching
+  the control plane — and the UI must keep saying plainly what it is not.
+  Overstating it would be claim-vs-reality drift on our most visible page.
 - **iOS:** dropped from v0.1 scope. QR-export into the official WireGuard app
   covers iOS users. Do not build a branded iOS app without explicit go-ahead
   (needs Apple Developer Program + Network Extension entitlement + review).
@@ -87,11 +116,28 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 - **Multi-hop requires entry ≠ exit.** Enforced by `_validate_regions()` in
   the API, shared by both register and rotate endpoints.
 - **RAM-only ephemeral nodes:** tmpfs paths, swap off, fresh WG keys on boot,
-  journald volatile. A seized node reveals nothing operational.
+  journald volatile. A seized node reveals nothing operational beyond the
+  customers it was itself routing — `/wg/peers` is scoped per node, so one
+  node's PSK does not enumerate the customer base. See `device_nodes`.
 - **No-logs claims must match reality.** The privacy policy (web/privacy.html),
   terms (web/terms.html), and audit pack (docs/AUDIT.md) all make the SAME
   claims. If you change what the system collects/retains, you MUST update all
   three, and `scripts/audit-verify.sh` must still pass. See discipline note below.
+- **`/wg/peers` is scoped to the calling node.** A node gets only the devices
+  routed through it, tracked in `device_nodes` and rewritten on every
+  register/rotate. The node must identify itself — its own PSK, or `node_id`
+  with the shared one. Returning the full roster to anything holding a node
+  credential is what the seizure claim above rules out.
+- **Device registration is idempotent on the pubkey.** Clients persist their
+  keypair, so reconnects re-present the same key. Registering it again returns
+  the existing device's config and keeps its mesh IP; it never creates a second
+  device or errors. Deregistering is `DELETE /api/v1/devices/{pubkey}` — the
+  8-device cap needs an exit or customers get permanently stuck.
+- **The proxy never becomes a general-purpose relay.** `proxy/guards.py` is the
+  entire security argument: GET/HEAD only, http/https only, ports 80/443 only,
+  public unicast destinations re-checked on every redirect, size and time caps,
+  content-type allowlist. Read it before touching anything under `proxy/`, and
+  keep `test_proxy_guards` passing with nothing patched.
 - **The GUI is browser-based, not native.** `0trust gui` runs a localhost web
   server; it's the same code on all 3 desktop OSes. No system tray (v0.2 —
   systray libs were blocked in the original build env). No kill switch (v0.2).
@@ -174,8 +220,24 @@ code, actively check for them:
    expiry). If you change data handling, reconcile privacy.html + terms.html +
    AUDIT.md + audit-verify.sh together. Be honest over reassuring.
 5. **Empty-slice panics.** `resp.Peers[0]` panics if the peer list is empty.
-   Guard with `len(...) > 0` before indexing API responses.
-6. **Platform-specific Go.** `wg_unix.go` / `wg_windows.go` are build-tagged.
+   Guard with `len(...) > 0` before indexing API responses. The API no longer
+   hands back an empty peer list — `_single_hop_peers()` raises 503 instead —
+   but the client guard stays as defence in depth.
+6. **Read-then-write races.** Allocating a mesh IP, an entry port or a node id
+   is a read of what's free followed by an insert. Under more than one uvicorn
+   worker two requests read the same free slot and one dies on a UNIQUE
+   constraint — a 500 for the customer. Any handler that allocates must take
+   `db(write=True)`, which opens BEGIN IMMEDIATE.
+7. **Replayable side effects.** The payment webhook is the sharp one: BTCPay
+   retries deliveries and the HMAC on a captured delivery never expires, so
+   crediting has to be guarded on stored state (`invoices.status`), not on the
+   signature being valid.
+8. **Foreign keys in scheduled jobs.** `hop_pairs` references `mesh_nodes`.
+   The sweeper deletes dead nodes, and a 24h pair routinely outlives the node
+   it names, so the delete has to clear dependent pairs first — otherwise it
+   raises and takes the rest of the sweep (account expiry, device release)
+   down with it.
+9. **Platform-specific Go.** `wg_unix.go` / `wg_windows.go` are build-tagged.
    `checkRoot()` returns nil on Windows (UAC handles elevation), requires
    euid 0 on Unix. Always cross-compile all 6 targets after touching wg or gui.
 

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Free trial — 0trust</title>
+<meta name="robots" content="noindex">
+<style>
+  :root{--bg:#0c0c0a;--ink:#f4ede0;--amber:#d4a574;--terra:#c44536;--moss:#7d8f5a;--line:#2a2820}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  main{max-width:40rem;margin:0 auto;padding:4rem 1.25rem 6rem}
+  h1{font:400 2.4rem/1.15 "Instrument Serif",Georgia,serif;margin:0 0 .5rem}
+  .sub{color:#a89f8d;margin:0 0 2.5rem}
+  code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+  .card{border:1px solid var(--line);border-radius:10px;padding:1.5rem;background:#111008}
+  button{font:600 1rem/1 inherit;background:var(--amber);color:#0c0c0a;border:0;
+    border-radius:6px;padding:.85rem 1.4rem;cursor:pointer}
+  button[disabled]{opacity:.5;cursor:progress}
+  .token{font:700 1.4rem/1.5 "JetBrains Mono",ui-monospace,monospace;color:var(--amber);
+    letter-spacing:.06em;word-break:break-all;margin:.5rem 0 1rem}
+  .warn{border-left:3px solid var(--terra);padding:.6rem 0 .6rem 1rem;margin:1.5rem 0;
+    color:#d8c9b4}
+  .ok{border-left:3px solid var(--moss);padding:.6rem 0 .6rem 1rem;margin:1.5rem 0}
+  ul{padding-left:1.1rem}
+  li{margin:.35rem 0}
+  .muted{color:#8a8172;font-size:.92rem}
+  a{color:var(--amber)}
+  .bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin:1rem 0 0}
+  .bar>i{display:block;height:100%;background:var(--amber);width:0;transition:width .2s}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1><span data-trial="label-cap">One week</span>, free</h1>
+  <p class="sub">No email. No card. No name. The same anonymous token a paying
+  customer gets — it just expires in <span data-trial="days">7</span> days.</p>
+
+  <div class="card" id="startCard">
+    <p>Your browser solves a small puzzle first. That's instead of a captcha or
+    an email address: it costs you about a second and makes minting trials in
+    bulk expensive.</p>
+    <button id="go">Get my token</button>
+    <div class="bar hide" id="bar"><i></i></div>
+    <p class="muted hide" id="progress"></p>
+    <p class="muted" id="err" style="color:#c44536"></p>
+  </div>
+
+  <div class="card hide" id="doneCard">
+    <p><strong>This is your account. It is shown once.</strong></p>
+    <div class="token mono" id="token"></div>
+    <p class="muted">There is no password, no recovery and no way for us to
+    look it up. If you lose it the subscription is gone — we cannot help,
+    because we deliberately kept nothing that would let us.</p>
+    <div class="ok">
+      <strong>Next:</strong> install the client, run <code>0trust login</code>,
+      paste the token.
+      <a href="/download">Downloads →</a>
+    </div>
+    <p class="muted">Trial accounts cover <span id="devs">2</span> devices and
+    expire <span id="exp" class="mono"></span>. Top up any time with
+    <code>0trust topup</code> — paid months stack on whatever the trial has left.</p>
+  </div>
+
+  <div class="warn">
+    <strong>What the trial is not.</strong> It is the full VPN — multi-hop and
+    all three regions — on a device limit and a clock. It is not the
+    <a href="/surf">/surf</a> proxy, which only covers one browser tab.
+  </div>
+
+  <h2 style="font:400 1.4rem/1.2 'Instrument Serif',Georgia,serif;margin:2.5rem 0 .5rem">
+    What you're trusting us with</h2>
+  <ul class="muted">
+    <li>We see the IP you connect to a mesh node from. We don't record it.</li>
+    <li>We keep a token hash, an expiry date and your device public keys.
+      Nothing else identifies the account.</li>
+    <li>Paying later means a crypto payment; read
+      <a href="/privacy">what that does and doesn't reveal</a> first.</li>
+    <li>Our claims are meant to be checkable, not taken on faith —
+      <a href="/audit">the audit pack</a> says how.</li>
+  </ul>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+
+// The offer is whatever the control plane grants, not whatever this file was
+// last edited to say. Anything server-rendered here is only a fallback for the
+// half-second before the fetch lands, or for a browser that blocked it.
+(async () => {
+  try {
+    const cfg = await (await fetch('/api/v1/config')).json();
+    const t = cfg.trial || {};
+    if (!t.days) return;
+    const cap = (t.label || '').replace(/^./, c => c.toUpperCase());
+    document.querySelectorAll('[data-trial="label"]').forEach(e => e.textContent = t.label);
+    document.querySelectorAll('[data-trial="label-cap"]').forEach(e => e.textContent = cap);
+    document.querySelectorAll('[data-trial="days"]').forEach(e => e.textContent = t.days);
+    if (t.max_devices) $('#devs').textContent = t.max_devices;
+    if (t.enabled === false) {
+      $('#go').disabled = true;
+      $('#err').textContent = 'Trials are paused right now.';
+    }
+  } catch (e) { /* keep the served copy */ }
+})();
+
+// Leading-zero-bits check, matching _pow_ok in api/main.py.
+function meets(hashBytes, bits) {
+  const whole = bits >> 3, rest = bits & 7;
+  for (let i = 0; i < whole; i++) if (hashBytes[i] !== 0) return false;
+  if (rest && (hashBytes[whole] >> (8 - rest)) !== 0) return false;
+  return true;
+}
+
+async function sha256(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return new Uint8Array(buf);
+}
+
+async function solve(nonce, bits, onProgress) {
+  for (let i = 0; ; i++) {
+    if ((i & 1023) === 0) {
+      onProgress(i);
+      await new Promise(r => setTimeout(r, 0));   // keep the tab responsive
+    }
+    if (meets(await sha256(nonce + ':' + i), bits)) return String(i);
+  }
+}
+
+$('#go').addEventListener('click', async () => {
+  const btn = $('#go'), err = $('#err');
+  err.textContent = '';
+  btn.disabled = true;
+  $('#bar').classList.remove('hide');
+  $('#progress').classList.remove('hide');
+  try {
+    const ch = await (await fetch('/api/v1/trial/challenge')).json();
+    if (!ch.nonce) throw new Error(ch.detail || 'Trials are not available right now');
+
+    let width = 0;
+    const solution = await solve(ch.nonce, ch.bits, n => {
+      width = Math.min(95, width + 2);
+      $('#bar > i').style.width = width + '%';
+      $('#progress').textContent = n.toLocaleString() + ' attempts';
+    });
+    $('#bar > i').style.width = '100%';
+
+    const params = new URLSearchParams(location.search);
+    const res = await fetch('/api/v1/trial', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nonce: ch.nonce, expires_at: ch.expires_at, signature: ch.signature,
+        solution, source: params.get('from') === 'surf' ? 'proxy' : 'web',
+      }),
+    });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.detail || 'Could not create a trial');
+
+    $('#token').textContent = out.token;
+    $('#devs').textContent = out.max_devices;
+    $('#exp').textContent = new Date(out.expires_at * 1000)
+      .toISOString().slice(0, 10);
+    $('#startCard').classList.add('hide');
+    $('#doneCard').classList.remove('hide');
+  } catch (e) {
+    err.textContent = e.message;
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

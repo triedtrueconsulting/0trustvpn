@@ -1,0 +1,44 @@
+#!/bin/bash
+# Stub `wg`. Records calls and keeps just enough state that the client's own
+# up/down detection behaves the way it would against a real interface.
+echo "wg $*" >> "${STUB_LOG:-/dev/null}"
+S="${STUB_STATE:-/tmp}"
+case "$1" in
+  genkey) head -c32 /dev/urandom | base64 ;;
+  pubkey) priv=$(cat); printf '%s' "$priv" | sha256sum | head -c44 | tr '/+' 'ab'; echo ;;
+  syncconf)
+      cp "$3" "$S/wg-synced-$2.conf" 2>/dev/null
+      echo "wg syncconf $2 <$(grep -c '^\[Peer\]' "$3" 2>/dev/null || echo 0) peers>" \
+        >> "${STUB_LOG:-/dev/null}"
+      ;;
+  show)
+      # `wg show interfaces` is how the client decides whether a tunnel is up,
+      # so report the ones wg-quick has actually brought up. Returning nothing
+      # here makes a working connect look like a failed one.
+      if [ "$2" = "interfaces" ]; then
+          for f in "$S"/iface-*.up; do
+              [ -e "$f" ] || continue
+              b="${f##*/iface-}"; printf '%s ' "${b%.up}"
+          done
+          echo
+      else
+          iface="${2:-0trust0}"
+          if [ -e "$S/iface-$iface.up" ]; then
+              echo "interface: $iface"
+              echo "  public key: $(printf '%s' "$iface" | sha256sum | head -c44 | tr '/+' 'ab')"
+              echo "  listening port: 51820"
+              echo ""
+              echo "peer: $(printf 'peer%s' "$iface" | sha256sum | head -c44 | tr '/+' 'ab')"
+              echo "  endpoint: 203.0.113.10:51820"
+              echo "  allowed ips: 0.0.0.0/0, ::/0"
+              echo "  latest handshake: 12 seconds ago"
+              echo "  transfer: 1.024 KiB received, 2.048 KiB sent"
+          else
+              echo "Unable to access interface: No such device" >&2
+              exit 1
+          fi
+      fi
+      ;;
+  set) : ;;
+esac
+exit 0

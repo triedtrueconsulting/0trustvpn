@@ -1,0 +1,5 @@
+#!/bin/bash
+echo "wg-quick $*" >> "${STUB_LOG:-/dev/null}"
+[ "$1" = "up" ] && touch "${STUB_STATE:-/tmp}/iface-$2.up"
+[ "$1" = "down" ] && rm -f "${STUB_STATE:-/tmp}/iface-$2.up"
+exit 0

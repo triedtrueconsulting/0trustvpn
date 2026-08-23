@@ -31,7 +31,18 @@
              maxlength="19" autocomplete="off" spellcheck="false">
       <button id="login-btn" class="btn-primary">Sign in</button>
       <p id="login-err" class="error hidden"></p>
-      <p class="hint">No account? <a href="https://0trustvpn.com" target="_blank">Get one →</a></p>
+    </div>
+
+    <div class="card" id="trial-card">
+      <label class="label">No account yet?</label>
+      <p class="hint">Get <span data-trial="label">one week</span> free. No email,
+        no card, no name — the same anonymous token a paying customer gets, with
+        a clock on it.</p>
+      <button id="trial-btn" class="btn-ghost">Start a free
+        <span data-trial="unit">week</span></button>
+      <p id="trial-status" class="hint hidden"></p>
+      <p id="trial-err" class="error hidden"></p>
+      <p class="hint">Already paid? <a href="https://0trustvpn.com" target="_blank">0trustvpn.com →</a></p>
     </div>
   </section>
 
@@ -83,6 +94,7 @@
       <div class="kv-row"><span class="k">expires</span>       <span class="v mono" id="kv-exp">—</span></div>
       <div class="kv-row"><span class="k">devices</span>       <span class="v" id="kv-dev">—</span></div>
       <div class="btn-row">
+        <button id="devices-btn" class="btn-ghost">Manage devices</button>
         <button id="export-btn" class="btn-ghost">Add mobile device</button>
         <button id="logout-btn" class="btn-ghost danger">Sign out</button>
       </div>
@@ -91,6 +103,20 @@
   </section>
 
   <!-- EXPORT MODAL -->
+  <div id="devices-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Devices</h2>
+        <button id="devices-close" class="x-btn">×</button>
+      </div>
+      <p class="muted" id="devices-count">—</p>
+      <div id="devices-list"></div>
+      <p id="devices-err" class="error hidden"></p>
+      <p class="hint">Removing a device frees its slot and releases its mesh IP.
+        It stops being routed at the next node sync.</p>
+    </div>
+  </div>
+
   <div id="export-modal" class="modal hidden">
     <div class="modal-inner">
       <div class="modal-head">

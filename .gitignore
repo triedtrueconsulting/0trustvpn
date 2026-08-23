@@ -38,6 +38,9 @@ installer/windows/bin/
 *.AppImage
 *.deb
 
+# ─── Test emulation scratch (logs from a live stack run) ───
+tests/emulation/run/
+
 # ─── Python ───
 __pycache__/
 *.pyc

@@ -42,7 +42,16 @@ WG_PORT       = int(os.environ.get("WG_PORT", "51820"))
 MESH_GATEWAY  = os.environ.get("MESH_GATEWAY", "10.64.0.1/10")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
 
-NFT_TABLE = "0trust_forward"
+# NOT "0trust_forward": nftables identifiers cannot start with a digit, and
+# nft parses the leading 0 as a number — "syntax error, unexpected number".
+# Quoting does not help; the parser rejects a quoted string there too. The
+# whole ruleset failed to load, which meant multi-hop DNAT never worked on
+# any node. Renaming is the only fix.
+NFT_TABLE = "ztv_forward"
+
+# Tables that predate the rename. Removed on first sync so a node upgrading
+# in place does not keep a stale table around forever.
+LEGACY_NFT_TABLES = ("0trust_forward",)
 
 log = logging.getLogger("meshd")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -66,7 +75,10 @@ def _get(path: str) -> dict:
 # ----------------------------------------------------------------------------
 
 def fetch_peers() -> list[dict]:
-    return _get("/api/v1/wg/peers")["peers"]
+    # node_id is required: the manifest is scoped to the calling node, and a
+    # node authenticating with the shared PSK cannot be identified from the
+    # credential alone.
+    return _get(f"/api/v1/wg/peers?node_id={NODE_ID}")["peers"]
 
 
 def build_wg_config(peers: list[dict]) -> str:
@@ -122,6 +134,18 @@ def fetch_forwards() -> list[dict]:
     return _get(f"/api/v1/wg/forwards?node_id={NODE_ID}")["forwards"]
 
 
+def _dnat_family(endpoint: str) -> str:
+    """
+    "ip" or "ip6" for a host:port endpoint.
+
+    An inet table serves both families, so nft refuses a bare `dnat to` there:
+    "specify 'dnat ip' or 'dnat ip6' in inet table to disambiguate". Without
+    the qualifier the ruleset does not load at all.
+    """
+    host = endpoint.rsplit(":", 1)[0]
+    return "ip6" if host.startswith("[") or host.count(":") >= 2 else "ip"
+
+
 def build_nft_ruleset(forwards: list[dict]) -> str:
     """
     Build a complete nftables ruleset. Atomic replacement via nft -f.
@@ -132,12 +156,25 @@ def build_nft_ruleset(forwards: list[dict]) -> str:
         "    type nat hook prerouting priority dstnat;",
     ]
     for f in forwards:
-        lines.append(f"    udp dport {f['entry_port']} dnat to {f['exit_endpoint']}")
+        fam = _dnat_family(f["exit_endpoint"])
+        lines.append(
+            f"    udp dport {f['entry_port']} dnat {fam} to {f['exit_endpoint']}")
     lines += [
         "  }",
         "  chain postrouting {",
         "    type nat hook postrouting priority srcnat;",
-        "    udp sport >= 52000 udp sport <= 59999 masquerade",
+        # Masquerade exactly the connections prerouting just DNAT'd.
+        #
+        # The old rule matched `udp sport 52000-59999`, but by postrouting the
+        # source port is the CLIENT's ephemeral port — the 52000-59999 value
+        # was the destination port, and DNAT already rewrote it. So the rule
+        # almost never matched, and an unmasqueraded packet reaches the exit
+        # carrying the client's real source address: the exit replies straight
+        # to the client instead of back through the entry (breaking the
+        # tunnel), and it learns the client IP the multi-hop design exists to
+        # hide from it. `ct status dnat` selects precisely the forwarded
+        # flows, whatever ports they landed on.
+        "    ct status dnat masquerade",
         "  }",
         "}",
     ]
@@ -155,6 +192,12 @@ def reconcile_forwards(forwards: list[dict]) -> None:
     script_parts = []
     if check.returncode == 0:
         script_parts.append(f"delete table inet {NFT_TABLE}")
+    # A node upgrading in place may still have a table under the old name.
+    # It never loaded successfully, but clear it if it somehow exists.
+    for legacy in LEGACY_NFT_TABLES:
+        if subprocess.run(["nft", "list", "table", "inet", legacy],
+                          capture_output=True).returncode == 0:
+            script_parts.append(f"delete table inet {legacy}")
     script_parts.append(new_table)
     script = "\n".join(script_parts)
 
@@ -189,17 +232,27 @@ def do_entry_sync(state: dict) -> None:
 
 
 def heartbeat() -> None:
-    """Tell the control plane we're alive. Best-effort; failures don't block sync."""
+    """
+    Tell the control plane we're alive. Best-effort; failures don't block sync.
+
+    Always send node_id. An ephemeral node's per-node PSK identifies it on its
+    own, but a static node authenticating with the shared NODE_API_PSK has no
+    psk_hash row to match, so without the id the control plane cannot tell
+    which node just checked in.
+    """
+    body = json.dumps({"node_id": NODE_ID}).encode()
     req = urllib.request.Request(
         f"{CONTROL_URL}/api/v1/node/heartbeat",
-        data=b"{}",
+        data=body,
         headers={"X-Node-Psk": NODE_PSK, "Content-Type": "application/json"},
         method="POST",
     )
     try:
         urllib.request.urlopen(req, timeout=5).read()
     except Exception as e:
-        log.debug("heartbeat failed: %s", e)
+        # Warn, not debug: a heartbeat that never lands means the sweeper
+        # eventually marks this node dead and traffic stops being routed here.
+        log.warning("heartbeat failed: %s", e)
 
 
 def main():

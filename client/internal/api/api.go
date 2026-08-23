@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -78,6 +79,8 @@ type Status struct {
 	Status        string `json:"status"`
 	ExpiresAt     int64  `json:"expires_at"`
 	DaysRemaining int    `json:"days_remaining"`
+	Plan          string `json:"plan"`
+	MaxDevices    int    `json:"max_devices"`
 	DeviceCount   int    `json:"device_count"`
 }
 
@@ -127,4 +130,29 @@ func (c *Client) Register(req RegisterReq) (*RegisterResp, error) {
 func (c *Client) Rotate(req RotateReq) (*RegisterResp, error) {
 	var r RegisterResp
 	return &r, c.do("POST", "/api/v1/wg/rotate", req, &r)
+}
+
+// Device is one registered device on the account.
+type Device struct {
+	Pubkey     string `json:"pubkey"`
+	DeviceName string `json:"device_name"`
+	MeshIP     string `json:"mesh_ip"`
+	CreatedAt  int64  `json:"created_at"`
+	LastSeen   int64  `json:"last_seen"`
+	Multihop   bool   `json:"multihop"`
+	EntryNode  string `json:"entry_node"`
+	ExitNode   string `json:"exit_node"`
+}
+
+func (c *Client) Devices() ([]Device, error) {
+	var d []Device
+	return d, c.do("GET", "/api/v1/devices", nil, &d)
+}
+
+// DeleteDevice deregisters a device by its WireGuard public key, freeing the
+// account slot and releasing the mesh IP.
+func (c *Client) DeleteDevice(pubkey string) error {
+	// Public keys are standard base64 and routinely contain '/' and '+', so
+	// the key has to be escaped rather than pasted into the path.
+	return c.do("DELETE", "/api/v1/devices/"+url.PathEscape(pubkey), nil, nil)
 }

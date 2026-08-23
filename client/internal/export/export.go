@@ -19,13 +19,13 @@ import (
 )
 
 type Result struct {
-	Config    string  // raw wg-quick config
+	Config     string // raw wg-quick config
 	ConfigPath string // where we wrote the .conf file
-	PNGPath   string  // where we wrote the QR PNG, if requested
-	QRASCII   string  // ASCII QR for printing in the terminal
-	Multihop  bool
-	EntryNode string
-	ExitNode  string
+	PNGPath    string // where we wrote the QR PNG, if requested
+	QRASCII    string // ASCII QR for printing in the terminal
+	Multihop   bool
+	EntryNode  string
+	ExitNode   string
 }
 
 // Options controls what export produces.

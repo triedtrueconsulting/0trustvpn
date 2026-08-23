@@ -1,0 +1,11 @@
+#!/bin/bash
+echo "nft $*" >> "${STUB_LOG:-/dev/null}"
+S="${STUB_STATE:-/tmp}"
+if [ "$1" = "list" ] && [ "$2" = "table" ]; then
+  [ -f "$S/nft-table-loaded" ] && exit 0 || exit 1
+fi
+if [ "$1" = "-f" ]; then
+  cp "$2" "$S/nft-ruleset.nft"; touch "$S/nft-table-loaded"
+  grep -c 'dnat to' "$2" > "$S/nft-dnat-count" 2>/dev/null || echo 0 > "$S/nft-dnat-count"
+fi
+exit 0

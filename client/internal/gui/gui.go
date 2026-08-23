@@ -7,18 +7,23 @@
 package gui
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -54,6 +59,10 @@ func Serve(openBrowser bool) error {
 	mux.HandleFunc("/api/rotate", handleRotate)
 	mux.HandleFunc("/api/regions", handleRegions)
 	mux.HandleFunc("/api/export", handleExport)
+	mux.HandleFunc("/api/devices", handleDevices)
+	mux.HandleFunc("/api/devices/remove", handleRemoveDevice)
+	mux.HandleFunc("/api/trial", handleTrial)
+	mux.HandleFunc("/api/config", handleConfig)
 
 	srv := &http.Server{
 		Addr:         ListenAddr,
@@ -157,17 +166,59 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 
 type StateView struct {
 	LoggedIn      bool   `json:"logged_in"`
-	Token         string `json:"token,omitempty"`         // masked
+	Token         string `json:"token,omitempty"` // masked
 	APIBase       string `json:"api_base"`
-	Status        string `json:"status,omitempty"`        // active / expired / pending_payment
+	Status        string `json:"status,omitempty"` // active / expired / pending_payment
 	ExpiresAt     int64  `json:"expires_at,omitempty"`
 	DaysRemaining int    `json:"days_remaining,omitempty"`
-	DeviceCount   int    `json:"device_count,omitempty"`
-	TunnelUp      bool   `json:"tunnel_up"`
-	Multihop      bool   `json:"multihop"`
-	EntryRegion   string `json:"entry_region,omitempty"`
-	ExitRegion    string `json:"exit_region,omitempty"`
-	HopExpiresAt  int64  `json:"hop_expires_at,omitempty"`
+	// No omitempty on the counts: zero devices is a real, displayable answer,
+	// and omitting it made a brand-new account render "—" as though the load
+	// had failed.
+	DeviceCount  int    `json:"device_count"`
+	Plan         string `json:"plan,omitempty"` // trial | paid
+	MaxDevices   int    `json:"max_devices"`
+	TunnelUp     bool   `json:"tunnel_up"`
+	Multihop     bool   `json:"multihop"`
+	EntryRegion  string `json:"entry_region,omitempty"`
+	ExitRegion   string `json:"exit_region,omitempty"`
+	HopExpiresAt int64  `json:"hop_expires_at,omitempty"`
+}
+
+// The browser polls /api/state every 3s to keep the tunnel indicator live.
+// Tunnel state is local and cheap, but the subscription status is a remote
+// call — and at 20 requests a minute it burns rate limit for a value that
+// changes about once a month. Cache it and let the fast poll read local state.
+var (
+	statusMu     sync.Mutex
+	statusCache  *api.Status
+	statusCached time.Time
+)
+
+const statusCacheTTL = 60 * time.Second
+
+// cachedStatus returns the account status, refreshing at most once per TTL.
+// force bypasses the cache after an action that changes it (login, connect).
+func cachedStatus(c *api.Client, force bool) *api.Status {
+	statusMu.Lock()
+	defer statusMu.Unlock()
+	if !force && statusCache != nil && time.Since(statusCached) < statusCacheTTL {
+		return statusCache
+	}
+	s, err := c.Status()
+	if err != nil {
+		// Keep serving the last good value if the API is briefly unreachable;
+		// a network blip shouldn't blank the subscription panel.
+		return statusCache
+	}
+	statusCache, statusCached = s, time.Now()
+	return s
+}
+
+// invalidateStatus drops the cache so the next poll re-reads from the API.
+func invalidateStatus() {
+	statusMu.Lock()
+	statusCache, statusCached = nil, time.Time{}
+	statusMu.Unlock()
 }
 
 func handleState(w http.ResponseWriter, r *http.Request) {
@@ -177,23 +228,25 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := StateView{
-		LoggedIn:    st.Token != "",
-		APIBase:     st.APIBase,
-		TunnelUp:    wg.IsUp(),
-		Multihop:    st.ExitRegion != "",
-		EntryRegion: st.EntryRegion,
-		ExitRegion:  st.ExitRegion,
+		LoggedIn:     st.Token != "",
+		APIBase:      st.APIBase,
+		TunnelUp:     wg.IsUp(),
+		Multihop:     st.ExitRegion != "",
+		EntryRegion:  st.EntryRegion,
+		ExitRegion:   st.ExitRegion,
 		HopExpiresAt: st.ExpiresAt,
 	}
 	if st.Token != "" {
 		view.Token = maskToken(st.Token)
 		// Best-effort status fetch; don't fail the whole call if API is down
 		c := api.New(st.APIBase, st.Token)
-		if s, err := c.Status(); err == nil {
+		if s := cachedStatus(c, r.URL.Query().Get("refresh") == "1"); s != nil {
 			view.Status = s.Status
 			view.ExpiresAt = s.ExpiresAt
 			view.DaysRemaining = s.DaysRemaining
 			view.DeviceCount = s.DeviceCount
+			view.Plan = s.Plan
+			view.MaxDevices = s.MaxDevices
 		}
 	}
 	writeJSON(w, 200, view)
@@ -206,6 +259,7 @@ type loginReq struct {
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
@@ -238,6 +292,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 // --- /api/logout ---
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
@@ -260,6 +315,7 @@ type connectReq struct {
 }
 
 func handleConnect(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
@@ -350,6 +406,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 // --- /api/disconnect ---
 
 func handleDisconnect(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
@@ -368,6 +425,7 @@ func handleDisconnect(w http.ResponseWriter, r *http.Request) {
 // --- /api/rotate ---
 
 func handleRotate(w http.ResponseWriter, r *http.Request) {
+	invalidateStatus()
 	if r.Method != http.MethodPost {
 		writeErr(w, 405, "POST only")
 		return
@@ -465,6 +523,245 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- /api/regions ---
+
+// --- /api/devices — list what's registered on the account ---
+
+func handleDevices(w http.ResponseWriter, r *http.Request) {
+	st, err := config.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if st.Token == "" {
+		writeErr(w, 401, "not signed in")
+		return
+	}
+	devices, err := api.New(st.APIBase, st.Token).Devices()
+	if err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	// Flag the device this GUI is running on so the user can tell which row
+	// is the machine in front of them before they remove the wrong one.
+	type row struct {
+		api.Device
+		This bool `json:"this"`
+	}
+	out := make([]row, 0, len(devices))
+	for _, d := range devices {
+		out = append(out, row{Device: d, This: d.Pubkey != "" && d.Pubkey == st.PublicKey})
+	}
+	writeJSON(w, 200, out)
+}
+
+// --- /api/devices/remove ---
+
+type removeReq struct {
+	Pubkey string `json:"pubkey"`
+}
+
+func handleRemoveDevice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var req removeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pubkey == "" {
+		writeErr(w, 400, "pubkey required")
+		return
+	}
+	st, err := config.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if st.Token == "" {
+		writeErr(w, 401, "not signed in")
+		return
+	}
+	if err := api.New(st.APIBase, st.Token).DeleteDevice(req.Pubkey); err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	invalidateStatus()
+
+	// Removing the device we are running on orphans the local key: the server
+	// no longer resolves it, so keeping it would make the next connect look
+	// like a stranger's key. Drop it and tear the tunnel down.
+	if req.Pubkey == st.PublicKey {
+		if wg.IsUp() {
+			_ = wg.Down()
+		}
+		st.PrivateKey, st.PublicKey, st.InterfaceIP = "", "", ""
+		st.EntryRegion, st.ExitRegion, st.ExpiresAt = "", "", 0
+		if err := st.Save(); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "removed_self": true})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// --- /api/trial — claim a free trial without leaving the app ---
+//
+// The proof-of-work is ground here in Go rather than in the GUI's JavaScript.
+// It is the same computation either way, but a native loop finishes in a
+// fraction of the time and does not block the page while it runs.
+
+type trialChallenge struct {
+	Nonce     string `json:"nonce"`
+	Bits      int    `json:"bits"`
+	ExpiresAt int64  `json:"expires_at"`
+	Signature string `json:"signature"`
+}
+
+type trialRedeem struct {
+	Nonce     string `json:"nonce"`
+	ExpiresAt int64  `json:"expires_at"`
+	Signature string `json:"signature"`
+	Solution  string `json:"solution"`
+	Source    string `json:"source"`
+}
+
+type trialResult struct {
+	Token      string `json:"token"`
+	Plan       string `json:"plan"`
+	ExpiresAt  int64  `json:"expires_at"`
+	Days       int    `json:"days"`
+	MaxDevices int    `json:"max_devices"`
+}
+
+// powSolve finds a suffix whose SHA-256 over "nonce:solution" starts with the
+// requested number of zero bits. Mirrors _pow_ok in api/main.py.
+func powSolve(nonce string, bits int, deadline time.Time) (string, error) {
+	whole, rest := bits/8, bits%8
+	for i := 0; ; i++ {
+		if i%4096 == 0 && time.Now().After(deadline) {
+			return "", fmt.Errorf("gave up solving the puzzle after %s",
+				time.Until(deadline).Round(time.Second))
+		}
+		sol := strconv.Itoa(i)
+		sum := sha256.Sum256([]byte(nonce + ":" + sol))
+		ok := true
+		for b := 0; b < whole; b++ {
+			if sum[b] != 0 {
+				ok = false
+				break
+			}
+		}
+		if ok && rest != 0 && sum[whole]>>(8-rest) != 0 {
+			ok = false
+		}
+		if ok {
+			return sol, nil
+		}
+	}
+}
+
+func handleTrial(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	st, err := config.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if st.Token != "" {
+		writeErr(w, 409, "already signed in — sign out first to claim a trial")
+		return
+	}
+
+	base := strings.TrimRight(st.APIBase, "/")
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	resp, err := client.Get(base + "/api/v1/trial/challenge")
+	if err != nil {
+		writeErr(w, 502, "could not reach the server: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		writeErr(w, resp.StatusCode, "trials unavailable: "+string(body))
+		return
+	}
+	var ch trialChallenge
+	if err := json.NewDecoder(resp.Body).Decode(&ch); err != nil {
+		writeErr(w, 502, "malformed challenge: "+err.Error())
+		return
+	}
+
+	sol, err := powSolve(ch.Nonce, ch.Bits, time.Now().Add(60*time.Second))
+	if err != nil {
+		writeErr(w, 504, err.Error())
+		return
+	}
+
+	payload, _ := json.Marshal(trialRedeem{
+		Nonce: ch.Nonce, ExpiresAt: ch.ExpiresAt, Signature: ch.Signature,
+		Solution: sol, Source: "gui",
+	})
+	resp2, err := client.Post(base+"/api/v1/trial", "application/json",
+		bytes.NewReader(payload))
+	if err != nil {
+		writeErr(w, 502, "could not reach the server: "+err.Error())
+		return
+	}
+	defer resp2.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp2.Body, 4096))
+	if resp2.StatusCode != 200 {
+		writeErr(w, resp2.StatusCode, string(body))
+		return
+	}
+	var out trialResult
+	if err := json.Unmarshal(body, &out); err != nil {
+		writeErr(w, 502, "malformed trial response")
+		return
+	}
+
+	// Sign in with the token we were just handed, so the user lands in the
+	// app rather than being told to copy a string into a login box.
+	st.Token = out.Token
+	if err := st.Save(); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	invalidateStatus()
+	writeJSON(w, 200, out)
+}
+
+// handleConfig passes the control plane's public config through to the page.
+//
+// The trial length is an operator setting, so the GUI cannot hardcode it in
+// its copy without eventually advertising an offer we no longer give. If the
+// server is unreachable the page keeps whatever it was served with.
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	st, err := config.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	base := strings.TrimRight(st.APIBase, "/")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(base + "/api/v1/config")
+	if err != nil {
+		writeErr(w, 502, "could not reach the server: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	if resp.StatusCode != 200 {
+		writeErr(w, resp.StatusCode, "config unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = w.Write(body)
+}
 
 func handleRegions(w http.ResponseWriter, r *http.Request) {
 	// Static for v0.1; eventually fed from the control plane.

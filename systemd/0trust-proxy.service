@@ -1,0 +1,54 @@
+[Unit]
+Description=0trust visitor web proxy (/surf)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=0trust
+Group=0trust
+WorkingDirectory=/opt/0trust/proxy
+EnvironmentFile=/etc/0trust/proxy.env
+ExecStart=/opt/0trust/api/.venv/bin/uvicorn server:app \
+    --host 127.0.0.1 --port 8081 --workers 2 --no-access-log
+Restart=on-failure
+RestartSec=5
+
+# The proxy fetches arbitrary public URLs on a visitor's say-so, so it is the
+# most exposed thing we run. It gets no database, no keys, and no write access
+# to anything — a compromise here should reach nothing worth having.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+CapabilityBoundingSet=
+ReadWritePaths=
+# Outbound to the public internet only; it must never reach the control plane,
+# the mesh nodes, or anything else on the host's networks.
+IPAddressDeny=localhost link-local multicast
+IPAddressAllow=any
+RestrictAddressFamilies=AF_INET AF_INET6
+
+# No journal noise: the proxy handles visitor URLs, and logging them would
+# build exactly the browsing record the product promises not to keep.
+StandardOutput=null
+StandardError=journal
+LogLevelMax=warning
+
+[Install]
+WantedBy=multi-user.target

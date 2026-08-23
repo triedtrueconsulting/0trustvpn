@@ -127,9 +127,9 @@ check("rotate 200", r.status_code == 200, r.text)
 if r.status_code == 200:
     check("rotate moved entry to rey", r.json()["entry_node"].startswith("rey"), r.json())
 
-r = c.get("/api/v1/wg/peers", headers={"X-Node-Psk": "test-node-psk"})
+r = c.get("/api/v1/wg/peers?node_id=zur-01", headers={"X-Node-Psk": "test-node-psk"})
 check("GET /wg/peers with node PSK 200", r.status_code == 200, r.text)
-r = c.get("/api/v1/wg/peers", headers={"X-Node-Psk": "wrong"})
+r = c.get("/api/v1/wg/peers?node_id=zur-01", headers={"X-Node-Psk": "wrong"})
 check("bad node PSK -> 401", r.status_code == 401, r.text)
 
 r = c.get("/api/v1/status/public")
