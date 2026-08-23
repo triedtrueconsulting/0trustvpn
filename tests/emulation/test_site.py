@@ -156,8 +156,18 @@ try:
 
     print("\n[6] the trial page's promises match the API's")
     _, trial = get("/trial")
-    check("trial page states the real duration",
-          str(api_main.TRIAL_DAYS) in trial,
+    check("trial page's served fallback states the real duration",
+          f'data-trial="days">{api_main.TRIAL_DAYS}<' in trial,
+          f"TRIAL_DAYS={api_main.TRIAL_DAYS}")
+    st, cfg = H.call("GET", "/api/v1/config")
+    check("the API publishes the offer for pages to render", st == 200, cfg)
+    check("published trial length matches the control plane",
+          cfg["trial"]["days"] == api_main.TRIAL_DAYS, cfg)
+    check("published trial label is phrased for copy",
+          cfg["trial"]["label"] == api_main.duration_label(api_main.TRIAL_DAYS), cfg)
+    _, home = get("/")
+    check("landing page's served fallback states the real duration",
+          f'data-trial="days">{api_main.TRIAL_DAYS}<' in home,
           f"TRIAL_DAYS={api_main.TRIAL_DAYS}")
     check("trial page says no email", "No email" in trial)
     check("trial page distinguishes itself from /surf", "surf" in trial.lower())

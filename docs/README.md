@@ -152,7 +152,7 @@ FastAPI app on `127.0.0.1:8080`. Endpoints:
 | POST   | `/api/v1/payment/webhook`         | BTCPay HMAC     | Settlement notifications             |
 | GET    | `/api/v1/regions`                 | none            | Regions with at least one active node |
 | GET    | `/api/v1/trial/challenge`         | none            | Proof-of-work challenge for a free trial |
-| POST   | `/api/v1/trial`                   | solved stamp    | Redeem it for a 1-month trial account |
+| POST   | `/api/v1/trial`                   | solved stamp    | Redeem it for a trial account (length from `ZTV_TRIAL_DAYS`) |
 | GET    | `/api/v1/devices`                 | X-Account-Token | List devices on the account          |
 | DELETE | `/api/v1/devices/{pubkey}`        | X-Account-Token | Deregister a device, free its slot   |
 | POST   | `/api/v1/wg/register`             | X-Account-Token | Register device, get peers (single- or multi-hop) |
@@ -163,6 +163,7 @@ FastAPI app on `127.0.0.1:8080`. Endpoints:
 | POST   | `/api/v1/node/heartbeat`          | X-Node-Psk      | Liveness ping (ephemeral nodes)      |
 | GET    | `/api/v1/status/public`           | none            | Sanitized health for /status page (60s cache) |
 | GET    | `/api/v1/health`                  | none            | Liveness probe                       |
+| GET    | `/api/v1/config`                  | none            | Public offer: trial length + label, device cap, currencies |
 
 **Token model.** A 16-char Crockford-base32 string in 4-char groups
 (e.g. `7K2M-9X4P-AQ8R-J3WN`) ≈ 80 bits of entropy. Stored only as SHA-256

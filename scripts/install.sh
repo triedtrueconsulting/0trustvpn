@@ -160,7 +160,7 @@ NODE_API_PSK=$NODE_PSK
 
 # --- Free trial ---
 ZTV_TRIAL_ENABLED=1
-ZTV_TRIAL_DAYS=30
+ZTV_TRIAL_DAYS=7
 ZTV_TRIAL_MAX_DEVICES=2
 ZTV_TRIAL_POW_BITS=20
 ZTV_TRIAL_SECRET=$TRIAL_SECRET
@@ -184,7 +184,7 @@ ENVEOF
 elif [[ $DRY_RUN -eq 0 ]]; then
     # Re-run against an older install: add keys it predates rather than
     # clobbering the operator's edits.
-    for kv in "ZTV_TRIAL_ENABLED=1" "ZTV_TRIAL_DAYS=30" \
+    for kv in "ZTV_TRIAL_ENABLED=1" "ZTV_TRIAL_DAYS=7" \
               "ZTV_TRIAL_MAX_DEVICES=2" "ZTV_TRIAL_POW_BITS=20" \
               "ZTV_PAYMENT_PROVIDER=btcpay"; do
         grep -q "^${kv%%=*}=" "$ETC/api.env" || echo "$kv" >> "$ETC/api.env"
@@ -198,6 +198,12 @@ if [[ $DRY_RUN -eq 0 && ! -f "$ETC/proxy.env" ]]; then
     install -m 0640 -o root -g 0trust "$REPO_DIR/systemd/proxy.env.example" \
         "$ETC/proxy.env"
     ok "wrote $ETC/proxy.env"
+elif [[ $DRY_RUN -eq 0 ]]; then
+    # Same rule as api.env: add keys an older install predates, keep the edits.
+    for kv in "ZTV_API_BASE=http://127.0.0.1:8080" "ZTV_TRIAL_DAYS=7"; do
+        grep -q "^${kv%%=*}=" "$ETC/proxy.env" || echo "$kv" >> "$ETC/proxy.env"
+    done
+    ok "$ETC/proxy.env already present — left your values, added any missing keys"
 fi
 
 # 0trust-backup.service reads this unconditionally, so it has to exist even

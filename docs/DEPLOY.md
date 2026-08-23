@@ -49,7 +49,7 @@ Then:
 
 ```bash
 export ZTV_API_BASE=http://<ip>
-0trust login          # or visit http://<ip>/trial for a free month
+0trust login          # or visit http://<ip>/trial for a free trial
 ```
 
 **It is a test box, and the installer says so in its closing output:**

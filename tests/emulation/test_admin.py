@@ -2,7 +2,7 @@
 """
 The admin backend: auth, authorization, and every control it offers.
 
-This surface can ban customers, hand out free months and change where money
+This surface can ban customers, hand out free time and change where money
 lands, so it gets tested like it matters — both that the controls work and
 that they cannot be reached without credentials.
 """

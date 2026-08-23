@@ -100,8 +100,15 @@ server.check_url.__globals__["resolve_public"] = patched
 import uvicorn
 uvicorn.run(server.app, host="127.0.0.1", port={PROXY_PORT}, log_level="warning")
 ''')
-proc = subprocess.Popen([sys.executable, shim],
-                        stdout=open(f"{TMP}/proxy.log", "w"), stderr=subprocess.STDOUT)
+# A trial length the code could not have hardcoded, and a control plane that is
+# not there: this pins the phrasing to configuration and exercises the fallback
+# an operator gets when the API is briefly down.
+DEAD_API = H.pick_port()
+proc = subprocess.Popen(
+    [sys.executable, shim],
+    env={**os.environ, "ZTV_TRIAL_DAYS": "14",
+         "ZTV_API_BASE": f"http://127.0.0.1:{DEAD_API}"},
+    stdout=open(f"{TMP}/proxy.log", "w"), stderr=subprocess.STDOUT)
 
 def get(path, timeout=25):
     req = urllib.request.Request(f"http://127.0.0.1:{PROXY_PORT}{path}")
@@ -120,12 +127,29 @@ try:
     st, body, _ = get("/surf")
     check("landing renders", st == 200 and "Read a page through 0trust" in body, st)
     check("landing states it is not the VPN", "not the VPN" in body, body[:400])
+    check("landing offers the configured trial, not a hardcoded month",
+          "two weeks of the real thing" in body, body[:900])
+
+    # Two copies of the same phrasing exist on purpose: the proxy has to name
+    # the offer even when the control plane is unreachable. Two copies that
+    # disagree would put a different offer on /surf than on the trial page, so
+    # the identity is asserted rather than assumed.
+    os.environ.setdefault("ZTV_DB_PATH", os.path.join(TMP, "phrase.db"))
+    sys.path.insert(0, os.path.join(H.REPO, "api"))
+    sys.path.insert(0, os.path.join(H.REPO, "proxy"))
+    import main as api_main, server as proxy_server
+    drift = [d for d in range(1, 800)
+             if proxy_server._plain_label(d) != api_main.duration_label(d)]
+    check("the proxy's offline wording never drifts from the API's",
+          not drift, f"first mismatches: {drift[:5]}")
 
     print("\n[2] fetch and rewrite")
     st, body, hdrs = get(f"/surf?url={O}%2F")
     check("proxied page returns 200", st == 200, st)
     check("origin content present", "Hello from the origin" in body, body[:300])
     check("banner injected", "0trust" in body and "ztv-banner" in body, body[:300])
+    check("banner's CTA states the configured trial length",
+          "two weeks of the full VPN" in body, body[:1200])
     check("links rewritten back through the proxy",
           "/surf?url=http%3A%2F%2F127.0.0.1" in body, body[:900])
     check("offsite link also proxied", "elsewhere.test" in body and

@@ -1304,7 +1304,7 @@
     <a href="#apps">Apps</a>
     <a href="#pricing">Pricing</a>
     <a href="/surf">Surf</a>
-    <button class="nav-cta" onclick="location.href='/trial'">Free month</button>
+    <button class="nav-cta" onclick="location.href='/trial'">Free <span data-trial="unit">week</span></button>
   </div>
 </nav>
 
@@ -1328,13 +1328,13 @@
   </p>
 
   <div class="hero-actions">
-    <a href="/trial" class="btn-primary">Start a free month →</a>
+    <a href="/trial" class="btn-primary">Start a free <span data-trial="unit">week</span> →</a>
     <button class="btn-ghost" onclick="openSignup()">Pay in crypto</button>
     <a href="#how" class="btn-ghost">How it works</a>
   </div>
   <p class="hero-note">
-    No email, no card, no name — a free month gets the same anonymous token a
-    paying customer gets. Just want to read one page?
+    No email, no card, no name — <span data-trial="days">7</span> free days get
+    the same anonymous token a paying customer gets. Just want to read one page?
     <a href="/surf">Try /surf</a>, our page reader. It covers one browser tab
     and is <em>not</em> the VPN.
   </p>
@@ -1356,6 +1356,21 @@
       const el = document.getElementById('mesh-pill');
       if (el) el.textContent =
         `Mesh ${d.service || 'online'} · ${live} jurisdiction${live === 1 ? '' : 's'}`;
+    } catch (e) { /* keep the static fallback */ }
+  })();
+
+  // Same rule for the trial offer: the length is whatever the control plane
+  // grants. Copy that says "month" while the API hands out a week is the
+  // cheapest possible way to look like we make things up.
+  (async () => {
+    try {
+      const cfg = await (await fetch('/api/v1/config', { cache: 'no-store' })).json();
+      const t = cfg.trial || {};
+      if (!t.days) return;
+      const unit = (t.label || '').replace(/^(one|two|three|four|five|six)\s+/, '');
+      document.querySelectorAll('[data-trial="unit"]').forEach(e => e.textContent = unit);
+      document.querySelectorAll('[data-trial="label"]').forEach(e => e.textContent = t.label);
+      document.querySelectorAll('[data-trial="days"]').forEach(e => e.textContent = t.days);
     } catch (e) { /* keep the static fallback */ }
   })();
 </script>

@@ -415,7 +415,7 @@ $('trial-btn').addEventListener('click', async () => {
     const r = await api('/api/trial', { method: 'POST', body: '{}' });
     status.textContent =
       `Signed in on a ${r.days}-day trial · ${r.max_devices} devices`;
-    toast('Free month activated');
+    toast(`Trial activated — ${r.days} days`);
     await refresh();
   } catch (e) {
     status.classList.add('hidden');
@@ -429,8 +429,28 @@ $('trial-btn').addEventListener('click', async () => {
 // Boot
 // ---------------------------------------------------------------------------
 
+// The trial length is an operator setting, so the sign-in copy asks the
+// control plane rather than stating a number this file was compiled with.
+// A failure here is not worth surfacing: the served wording still stands.
+async function loadOffer() {
+  try {
+    const cfg = await api('/api/config');
+    const t = cfg.trial || {};
+    if (!t.days) return;
+    const unit = (t.label || '').replace(/^(one|two|three|four|five|six)\s+/, '');
+    document.querySelectorAll('[data-trial="label"]')
+      .forEach(e => e.textContent = t.label);
+    document.querySelectorAll('[data-trial="unit"]')
+      .forEach(e => e.textContent = unit);
+    document.querySelectorAll('[data-trial="days"]')
+      .forEach(e => e.textContent = t.days);
+    if (t.enabled === false) $('trial-card').classList.add('hidden');
+  } catch (e) { /* keep the served copy */ }
+}
+
 (async function init() {
   await loadRegions();
+  await loadOffer();
   await refresh();
   startPolling();
 })();

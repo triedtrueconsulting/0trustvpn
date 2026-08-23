@@ -43,7 +43,9 @@ try:
     check("trial redeemed", st == 200, f"{st} {tr}")
     token = tr.get("token")
     check("plan is trial", tr.get("plan") == "trial", tr)
-    check("30 days granted", 29 <= (tr["expires_at"] - int(time.time())) // 86400 <= 30, tr)
+    days = api_main.TRIAL_DAYS
+    check(f"{days} days granted",
+          days - 1 <= (tr["expires_at"] - int(time.time())) // 86400 <= days, tr)
 
     print("\n[2] the stamp is single-use")
     st, dup = H.call("POST", "/api/v1/trial", {

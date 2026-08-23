@@ -55,7 +55,7 @@ proxy/                            Visitor web proxy (/surf):
                                   rewrite.py, server.py
 tests/emulation/                  Full-stack suite: boots the product, drives it
 web/                              Landing + status/download/help/audit/privacy/
-                                  terms/security + trial.html (free-month signup)
+                                  terms/security + trial.html (free-trial signup)
 docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 ```
 
@@ -83,10 +83,16 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   all, but custodial and usually KYC'd). `api/payments.py` documents the
   trade-off; if the audit pack ever leans on the payment path, reconcile it
   with whichever provider is actually configured.
-- **Free trial: one month, no identity.** A browser grinds a proof-of-work
+- **Free trial: one week, no identity.** A browser grinds a proof-of-work
   stamp, redeems it for an ordinary anonymous token, and the account expires in
-  30 days with a lower device cap. Paying converts the same account and stacks
-  the paid months on whatever the trial had left.
+  `ZTV_TRIAL_DAYS` days (default 7) with a lower device cap. Paying converts the
+  same account and stacks the paid months on whatever the trial had left.
+  **Nothing hardcodes the length in copy.** `GET /api/v1/config` publishes
+  `trial.days` and a phrased `trial.label`; the landing page, trial page,
+  /surf banner and desktop GUI all render from it, so an operator changing the
+  setting in the dashboard never leaves a page advertising the old offer. The
+  proxy keeps a word-for-word copy of the phrasing for when the control plane
+  is unreachable, and a test asserts the two never disagree.
 - **`/surf` is a funnel, not a product.** A page reader that covers one browser
   tab. Separate service, separate port, so it can be killed without touching
   the control plane — and the UI must keep saying plainly what it is not.

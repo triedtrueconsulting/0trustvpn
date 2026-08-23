@@ -62,6 +62,7 @@ func Serve(openBrowser bool) error {
 	mux.HandleFunc("/api/devices", handleDevices)
 	mux.HandleFunc("/api/devices/remove", handleRemoveDevice)
 	mux.HandleFunc("/api/trial", handleTrial)
+	mux.HandleFunc("/api/config", handleConfig)
 
 	srv := &http.Server{
 		Addr:         ListenAddr,
@@ -603,7 +604,7 @@ func handleRemoveDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-// --- /api/trial — claim a free month without leaving the app ---
+// --- /api/trial — claim a free trial without leaving the app ---
 //
 // The proof-of-work is ground here in Go rather than in the GUI's JavaScript.
 // It is the same computation either way, but a native loop finishes in a
@@ -731,6 +732,35 @@ func handleTrial(w http.ResponseWriter, r *http.Request) {
 	}
 	invalidateStatus()
 	writeJSON(w, 200, out)
+}
+
+// handleConfig passes the control plane's public config through to the page.
+//
+// The trial length is an operator setting, so the GUI cannot hardcode it in
+// its copy without eventually advertising an offer we no longer give. If the
+// server is unreachable the page keeps whatever it was served with.
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	st, err := config.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	base := strings.TrimRight(st.APIBase, "/")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(base + "/api/v1/config")
+	if err != nil {
+		writeErr(w, 502, "could not reach the server: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	if resp.StatusCode != 200 {
+		writeErr(w, resp.StatusCode, "config unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = w.Write(body)
 }
 
 func handleRegions(w http.ResponseWriter, r *http.Request) {

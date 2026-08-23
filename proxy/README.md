@@ -1,7 +1,9 @@
 # Visitor proxy (`/surf`)
 
 A quick way to read a public page through our egress, and the top of the
-signup funnel: after a few pages the banner offers a free month of the VPN.
+signup funnel: after a few pages the banner offers a free trial of the VPN. The
+length comes from the control plane, so the banner never advertises an offer the
+API no longer grants.
 
 Runs as its own service on its own port. That isolation is the point — abuse
 complaints, blocklisting, or a crash here must not touch the control plane.

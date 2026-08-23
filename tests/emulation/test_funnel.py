@@ -94,7 +94,17 @@ try:
 
         print("[1] trial page loads")
         page.goto(f"http://127.0.0.1:{WEB_PORT}/trial?from=surf", timeout=30000)
-        check("headline rendered", "One month, free" in page.content())
+        # The headline is assembled from /api/v1/config after load, so wait for
+        # it rather than reading whatever the served fallback said.
+        headline = api_main.duration_label(api_main.TRIAL_DAYS).capitalize() + ", free"
+        try:
+            page.wait_for_function("t => document.querySelector('h1').innerText === t",
+                                   arg=headline, timeout=8000)
+        except Exception:
+            pass
+        got = page.inner_text("h1")
+        check(f"headline reflects the configured trial ({headline})",
+              got == headline, f"page says {got!r}")
         check("states there is no email or card",
               "No email" in page.content() and "No card" in page.content())
         check("distinguishes itself from the /surf proxy",

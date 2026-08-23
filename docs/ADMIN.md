@@ -17,7 +17,7 @@ password that was never written to a config file cannot leak from one.
 
 ## Lock it down
 
-The dashboard can ban customers, hand out free months and change where money
+The dashboard can ban customers, hand out free time and change where money
 lands. Treat it as the most sensitive surface you run.
 
 `nginx/0trustvpn.com.conf` ships with commented-out `allow`/`deny` lines on
@@ -71,6 +71,13 @@ account's expiry.
 **Settings** — payment credentials, wallet addresses, public chain endpoints
 and trial parameters, saved to the database and applied immediately. No
 restart. Secrets display as dots; leave them alone to keep the stored value.
+
+Changing **Trial length (days)** changes the offer everywhere at once. The
+landing page, the trial page, the `/surf` banner and the desktop GUI all read
+it from `GET /api/v1/config` rather than stating a number of their own, so
+there is no copy left behind advertising the old length. `/surf` runs as its
+own service and caches the answer for five minutes, so its banner catches up
+within that window.
 
 **Audit** — every mutation, with who and when. Secret *values* are never
 recorded, only which keys changed.

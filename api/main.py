@@ -68,10 +68,10 @@ DB_TIMEOUT_SECS = float(os.environ.get("ZTV_DB_TIMEOUT", "30"))
 MAX_DEVICES_PER_ACCOUNT = int(os.environ.get("ZTV_MAX_DEVICES", "8"))
 
 # --- Free trial -------------------------------------------------------------
-# One month, no payment, no identity. Trials are the whole top of the funnel:
+# One week, no payment, no identity. Trials are the whole top of the funnel:
 # the web proxy hands visitors a grant, they redeem it for a working tunnel.
 TRIAL_ENABLED = os.environ.get("ZTV_TRIAL_ENABLED", "1") == "1"
-TRIAL_DAYS = int(os.environ.get("ZTV_TRIAL_DAYS", "30"))
+TRIAL_DAYS = int(os.environ.get("ZTV_TRIAL_DAYS", "7"))
 TRIAL_MAX_DEVICES = int(os.environ.get("ZTV_TRIAL_MAX_DEVICES", "2"))
 # Trials cost us bandwidth and there is no identity to rate-limit against, so
 # redemption costs CPU instead: a hashcash-style stamp the browser grinds.
@@ -415,7 +415,8 @@ def allocate_mesh_ip(conn) -> str:
 # BTCPAY INTEGRATION
 # ============================================================================
 
-from payments import (  # noqa: E402  (kept next to its only users)
+import payments  # noqa: E402  (kept next to its only users)
+from payments import (  # noqa: E402
     CURRENCIES, EXPIRED, INVALID, PENDING, SETTLED, PaymentError, provider,
 )
 
@@ -613,6 +614,54 @@ def _bootstrap_admin() -> None:
 @app.get("/api/v1/health")
 def health():
     return {"status": "ok", "ts": int(time.time())}
+
+
+def duration_label(days: int) -> str:
+    """
+    Say a number of days the way a person would: 7 -> "one week".
+
+    Copy that hardcodes "free month" is copy that lies the moment an operator
+    changes ZTV_TRIAL_DAYS in the dashboard. For a product whose entire pitch
+    is that its claims are checkable, advertising a month and granting a week
+    is exactly the drift we cannot afford, so every surface renders the offer
+    from here instead of writing it out longhand.
+    """
+    if days <= 0:
+        return "no time at all"
+    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+    for size, unit in ((365, "year"), (30, "month"), (7, "week")):
+        if days % size == 0:
+            n = days // size
+            if n in words:
+                return f"{words[n]} {unit}" + ("" if n == 1 else "s")
+            return f"{n} {unit}s"
+    if days in words:
+        return f"{words[days]} day" + ("" if days == 1 else "s")
+    return f"{days} days"
+
+
+@app.get("/api/v1/config")
+def public_config() -> dict:
+    """
+    What the offer actually is, for anything that has to describe it.
+
+    The landing page, the trial page, the /surf banner and the desktop GUI all
+    used to spell the trial length out in their own words. Read from here they
+    cannot disagree with the control plane, or with each other.
+    """
+    prov = os.environ.get("ZTV_PAYMENT_PROVIDER", "btcpay").lower()
+    return {
+        "trial": {
+            "enabled": TRIAL_ENABLED,
+            "days": TRIAL_DAYS,
+            "label": duration_label(TRIAL_DAYS),
+            "max_devices": TRIAL_MAX_DEVICES,
+        },
+        "max_devices": MAX_DEVICES_PER_ACCOUNT,
+        "currencies": list(payments.currencies_for(prov)),
+        "takes_cards": payments.is_card_provider(prov),
+        "mesh_network": MESH_NETWORK,
+    }
 
 
 # Mapping from region code → display name. The set of region codes that
