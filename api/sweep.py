@@ -31,6 +31,9 @@ import sqlite3
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ops_alerts
+
 DB_PATH = os.environ.get("ZTV_DB_PATH", "/var/lib/0trust/0trust.db")
 RETAIN_FAILED_INVOICES_SECS = 30 * 86400
 
@@ -57,6 +60,9 @@ def main():
 
     now = int(time.time())
     conn = sqlite3.connect(DB_PATH, isolation_level=None, timeout=30.0)
+    # Row supports both r[0] and r["col"], so existing index access keeps
+    # working while the alerting code can read columns by name.
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
@@ -111,6 +117,13 @@ def main():
     # deactivated on the strength of a heartbeat they were never going to
     # send. A node that recovers is reactivated by its next heartbeat.
     dead_threshold = now - 300
+    # Name them before flipping them, so the operator gets "buc-01 went dark"
+    # rather than a count. A count tells you something is wrong; an id tells
+    # you what to go and look at.
+    going_dark = [r["id"] for r in conn.execute(
+        """SELECT id FROM mesh_nodes
+            WHERE active = 1 AND last_heartbeat > 0 AND last_heartbeat < ?""",
+        (dead_threshold,))]
     cur = conn.execute(
         """UPDATE mesh_nodes SET active = 0
            WHERE active = 1
@@ -121,6 +134,29 @@ def main():
     n_dead_nodes = cur.rowcount
     if n_dead_nodes:
         log.info("deactivated %d nodes (heartbeat stale)", n_dead_nodes)
+    for node_id in going_dark:
+        ops_alerts.record(
+            conn, "node.down", "critical", node_id,
+            "no heartbeat for 5 minutes — taken out of rotation, "
+            "customers are no longer routed here")
+
+    # And the other direction. A node that came back deserves to close the
+    # loop; otherwise the operator is left wondering whether it ever did.
+    for row in conn.execute(
+            """SELECT m.id FROM mesh_nodes m
+                WHERE m.active = 1 AND m.last_heartbeat >= ?
+                  AND EXISTS (SELECT 1 FROM ops_events e
+                               WHERE e.subject = m.id AND e.kind = 'node.down'
+                                 AND e.created_at > (
+                                     SELECT COALESCE(MAX(e2.created_at), 0)
+                                       FROM ops_events e2
+                                      WHERE e2.subject = m.id
+                                        AND e2.kind = 'node.up'))""",
+            (dead_threshold,)):
+        ops_alerts.record(conn, "node.up", "info", row["id"],
+                          "heartbeating again — back in rotation")
+
+    ops_alerts.check_disk(conn, DB_PATH)
 
     # Garbage-collect inactive ephemeral rows older than 1 hour.
     # Customers won't be routed to them; keeping them around is just clutter.
@@ -244,6 +280,17 @@ def main():
     )
     if cur.rowcount:
         log.info("released %d hop_pairs with dangling node refs", cur.rowcount)
+
+    # Deliver last, once every event this run could produce has been written.
+    try:
+        sent = ops_alerts.deliver_pending(conn)
+        if sent:
+            log.info("delivered %d ops alerts to the webhook", sent)
+    except Exception as e:
+        # An alerting failure must never take the sweep down with it — the
+        # sweep is what enforces data retention, and losing that to a broken
+        # webhook URL would be a far worse outcome than a missed notification.
+        log.warning("ops alert delivery failed: %s", e)
 
     log.info("sweep complete")
     conn.close()

@@ -257,6 +257,19 @@ try:
         check("the audit log does not display secret values",
               "sk_live_supersecret" not in audit_text)
 
+        print("\n[7b] operational events")
+        page.click("#tabs button[data-tab=events]")
+        page.wait_for_selector("#events-list", timeout=15000)
+        ev_text = page.inner_text("#events-list")
+        check("the events panel renders", bool(ev_text.strip()), ev_text[:200])
+        # An operator with no webhook configured should be told that, not left
+        # assuming these reach them somehow.
+        check("it says whether alerts are being pushed anywhere",
+              "webhook" in page.inner_text("#events-webhook").lower(),
+              page.inner_text("#events-webhook"))
+        check("the tab exists next to the audit log",
+              page.is_visible("#tabs button[data-tab=events]"))
+
         print("\n[8] session")
         check("no JS errors anywhere in the session", not errors, errors[:3])
         page.click("#logout")

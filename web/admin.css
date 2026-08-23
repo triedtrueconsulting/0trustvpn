@@ -167,3 +167,14 @@ td .k { font-family: var(--mono); font-size: .8rem; overflow-wrap: anywhere; }
   padding: .8rem; margin-top: .8rem; font-family: var(--mono);
   font-size: .85rem; overflow-wrap: anywhere;
 }
+
+/* Events badge. Loud on purpose — an operator who has to go looking for bad
+   news will hear it from a customer first. */
+.badge {
+  display: inline-block; min-width: 1.15rem; padding: 0 .35rem;
+  margin-left: .4rem; border-radius: 999px;
+  background: var(--terra); color: #fff;
+  font: 600 .7rem/1.3rem "JetBrains Mono", ui-monospace, monospace;
+  text-align: center; vertical-align: middle;
+}
+.badge.hidden { display: none; }

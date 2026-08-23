@@ -18,6 +18,7 @@ Endpoints:
   GET    /api/v1/regions            Public region list
   GET    /api/v1/status/public      Public, sanitized service health
   GET    /api/v1/health             Liveness probe
+  GET    /api/v1/config             Public offer: trial length, caps, currencies
 
 Idempotency:
   - wg/register is idempotent on the device pubkey. A client keeps its
@@ -56,6 +57,8 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
+
+import ops_alerts
 
 # ============================================================================
 # CONFIG
@@ -155,6 +158,23 @@ CREATE TABLE IF NOT EXISTS mesh_nodes (
   psk_hash        TEXT,                        -- SHA256 of per-node PSK
   last_heartbeat  INTEGER NOT NULL DEFAULT 0
 );
+
+-- Operational events for the operator: a node went dark, a payment provider
+-- stopped answering, the disk is filling up. Nothing here identifies a
+-- customer, and nothing may be added that does — this table is the one place
+-- the product deliberately keeps a running narrative of its own state, and an
+-- account id in it would turn that into an activity log. Node ids, counts and
+-- free-text detail about infrastructure only.
+CREATE TABLE IF NOT EXISTS ops_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at  INTEGER NOT NULL,
+  kind        TEXT NOT NULL,       -- node.down | node.up | provider.down | ...
+  severity    TEXT NOT NULL,       -- info | warn | critical
+  subject     TEXT,                -- node id, provider name; never an account
+  detail      TEXT,
+  delivered   INTEGER NOT NULL DEFAULT 0   -- webhook delivery attempted
+);
+CREATE INDEX IF NOT EXISTS idx_ops_events_time ON ops_events(created_at DESC);
 
 -- One-time provisioning tokens for ephemeral RAM nodes. Each row authorizes
 -- exactly one node registration. Burned after use.
@@ -1736,6 +1756,12 @@ def node_heartbeat(
     psk_hash = hashlib.sha256(psk.encode()).hexdigest()
     node_id_hint = body.node_id if body else None
     with db(write=True) as conn:
+        # Note who was out of rotation before this beat, so coming back can be
+        # reported the moment it happens rather than whenever the sweeper next
+        # runs — up to an hour later, by which time the operator has already
+        # been staring at a red dashboard.
+        was_down = {r["id"] for r in conn.execute(
+            "SELECT id FROM mesh_nodes WHERE active = 0")}
         cur = conn.execute(
             # active = 1 as well: the sweeper deactivates a node whose
             # heartbeat went stale, and without this a node that recovers
@@ -1761,6 +1787,13 @@ def node_heartbeat(
             )
             if cur.rowcount == 0:
                 raise HTTPException(404, "Unknown node")
+
+        if was_down:
+            for row in conn.execute(
+                    "SELECT id FROM mesh_nodes WHERE active = 1 AND id IN "
+                    "(%s)" % ",".join("?" * len(was_down)), tuple(was_down)):
+                ops_alerts.record(conn, "node.up", "info", row["id"],
+                                  "heartbeating again — back in rotation")
     return {"ok": True}
 
 

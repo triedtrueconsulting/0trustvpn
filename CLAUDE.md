@@ -181,6 +181,12 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   `|| true` or a failed teardown strands the user offline. Windows needs
   nothing (WireGuard for Windows does it natively when AllowedIPs covers both
   families); macOS is unsupported and the client says so rather than pretending.
+- **`ops_events` never holds customer data.** Node ids, provider names, counts
+  and infrastructure detail only. It is the single table that keeps a running
+  narrative of the system's state over time, so an account id in it turns it
+  into the activity log privacy.html denies keeping. Alerts fire on
+  *transitions*, not states, or the operator gets an hourly stream and silence
+  stops meaning anything.
 - **The GUI is browser-based, not native.** `0trust gui` runs a localhost web
   server; it's the same code on all 3 desktop OSes. No system tray (v0.2 —
   systray libs were blocked in the original build env).

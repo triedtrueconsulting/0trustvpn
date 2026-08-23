@@ -110,6 +110,15 @@ SETTING_SPECS: dict[str, dict] = {
                               "label": "Trial device limit"},
     "ZTV_TRIAL_POW_BITS": {"type": "int", "secret": False, "group": "trial",
                            "label": "Proof-of-work difficulty (bits)"},
+
+    # --- operations ---
+    # Where node-down and disk alerts get pushed. Any endpoint that accepts a
+    # JSON POST: a Slack incoming webhook, ntfy, Discord, or your own. There
+    # is no email alerting for the same reason there is no email anywhere
+    # else in this product. Treated as a secret because the URL is the
+    # credential — anyone holding it can post into the channel.
+    "ZTV_ALERT_WEBHOOK": {"type": "url", "secret": True, "group": "ops",
+                          "label": "Alert webhook URL"},
 }
 
 _MASK = "••••••••"

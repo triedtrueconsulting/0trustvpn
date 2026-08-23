@@ -53,6 +53,7 @@
       <button data-tab="payments">Payments</button>
       <button data-tab="notices">Notices</button>
       <button data-tab="settings">Settings</button>
+      <button data-tab="events">Events <span id="events-badge" class="badge hidden"></span></button>
       <button data-tab="audit">Audit</button>
     </nav>
     <div class="who">
@@ -238,6 +239,22 @@
           <button type="submit" class="primary wide">Change password</button>
         </form>
         <p class="note">Changing it signs out every session, including this one.</p>
+      </div>
+    </section>
+
+    <!-- EVENTS -->
+    <section data-panel="events" class="hidden">
+      <div class="card">
+        <h2>Operational events</h2>
+        <p class="note">What the system did on its own: a node going dark, a
+          payment provider refusing to answer, the disk filling up. Distinct
+          from the audit log, which records what <em>you</em> did. Nothing
+          here identifies a customer &mdash; node ids and counts only.</p>
+        <p class="note" id="events-webhook"></p>
+        <div class="toolbar">
+          <button id="events-refresh" class="primary">Refresh</button>
+        </div>
+        <div id="events-list"></div>
       </div>
     </section>
 

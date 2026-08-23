@@ -179,6 +179,38 @@ try:
     # Without this a blip removes a node permanently, until a human notices.
     check("and that puts it back in rotation", back == 1, back)
 
+    print("\n[9] the operator is told, and told only about infrastructure")
+    events = sql("SELECT kind, severity, subject, detail FROM ops_events "
+                 "ORDER BY id")
+    kinds = [e["kind"] for e in events]
+    # A node dying used to be entirely silent: the control plane kept routing
+    # into it and whether anyone noticed depended on someone opening a page.
+    check("a node going dark raises an event", "node.down" in kinds, kinds)
+    check("it is critical, not a note", any(
+        e["severity"] == "critical" for e in events if e["kind"] == "node.down"), events)
+    check("it names the node, not just a count", any(
+        e["subject"] == "buc-01" for e in events if e["kind"] == "node.down"), events)
+    check("recovery closes the loop", "node.up" in kinds, kinds)
+    # Alerting on state rather than transition produces an hourly stream that
+    # nobody reads, and silence then means nothing.
+    check("a second sweep does not repeat the same alert",
+          kinds.count("node.down") == 1, kinds)
+
+    # This table is the only running narrative of the system's own state that
+    # the product keeps. An account id in it turns that into an activity log —
+    # the record privacy.html says does not exist.
+    blob = " ".join(f"{e['subject']} {e['detail']}" for e in events)
+    leaked = [t for t in (token, token2, token3, token4, token5) if t in blob]
+    check("no account token appears in an event", not leaked, leaked)
+    check("no device pubkey appears in an event", pub not in blob, blob[:200])
+    cols = [r[1] for r in sql("PRAGMA table_info(ops_events)")]
+    check("the table has no account or device column",
+          not any(c in cols for c in ("account_id", "device_id", "pubkey",
+                                      "token", "mesh_ip", "client_ip")), cols)
+
+    st_ev, ev = H.call("GET", "/api/v1/admin/events")
+    check("the events feed needs an operator session", st_ev in (401, 403), st_ev)
+
 finally:
     H.shutdown()
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
