@@ -21,6 +21,22 @@ case "$1" in
               b="${f##*/iface-}"; printf '%s ' "${b%.up}"
           done
           echo
+      elif [ "$3" = "latest-handshakes" ]; then
+          # The real format: one "<pubkey>\t<unix seconds>" line per peer.
+          # STUB_NO_HANDSHAKE reproduces the case that matters — an interface
+          # that came up fine and is talking to nobody.
+          iface="${2:-0trust0}"
+          if [ -e "$S/iface-$iface.up" ]; then
+              key=$(printf 'peer%s' "$iface" | sha256sum | head -c44 | tr '/+' 'ab')
+              if [ -n "${STUB_NO_HANDSHAKE:-}" ]; then
+                  printf '%s\t0\n' "$key"
+              else
+                  printf '%s\t%s\n' "$key" "$(date +%s)"
+              fi
+          else
+              echo "Unable to access interface: No such device" >&2
+              exit 1
+          fi
       else
           iface="${2:-0trust0}"
           if [ -e "$S/iface-$iface.up" ]; then

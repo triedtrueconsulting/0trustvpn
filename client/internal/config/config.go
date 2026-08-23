@@ -28,6 +28,11 @@ type State struct {
 	EntryRegion string `json:"entry_region,omitempty"`
 	ExitRegion  string `json:"exit_region,omitempty"`
 	ExpiresAt   int64  `json:"expires_at,omitempty"` // hop pair expiry (epoch s)
+
+	// KillSwitch: block traffic that is not going through the tunnel.
+	// Sticky, because a kill switch you have to remember to re-enable on
+	// every connect is not a kill switch.
+	KillSwitch bool `json:"kill_switch,omitempty"`
 }
 
 func configDir() (string, error) {

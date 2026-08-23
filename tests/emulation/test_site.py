@@ -154,6 +154,29 @@ try:
               int(m.group(1)) == api_main.MAX_DEVICES_PER_ACCOUNT,
               f"site says {m.group(1)}, API cap is {api_main.MAX_DEVICES_PER_ACCOUNT}")
 
+    print("\n[5b] the help page describes features that exist")
+    _, helpp = get("/help")
+    # This page once advertised `0trust connect --port 443`, a flag the client
+    # has never had. Anything it tells a customer to type has to be real.
+    # Prose wraps, so compare against whitespace-normalised text rather than
+    # the raw bytes — otherwise a line break silently defeats the assertion.
+    flat = " ".join(helpp.split())
+    src = open(os.path.join(H.REPO, "client", "cmd", "0trust", "main.go")).read()
+    for flag in ("--kill-switch", "--no-kill-switch", "--exit"):
+        if flag in helpp:
+            check(f"help mentions {flag}, and the client implements it",
+                  f'"{flag}"' in src, f"{flag} is documented but not in main.go")
+    check("help does not advertise the --port flag we never built",
+          "--port" not in helpp, "help.html still mentions --port")
+    check("help explains the no-handshake failure",
+          "NOT carrying traffic" in flat, flat[:300])
+    check("help is honest that macOS has no kill switch",
+          "macOS" in flat and "do not have one" in flat, flat[:300])
+    check("help explains the IPv6 trade-off rather than claiming v6 support",
+          "IPv6-only sites will not load" in flat, flat[:300])
+    check("help warns the kill switch blocks the local network too",
+          "local network" in flat, flat[:300])
+
     print("\n[6] the trial page's promises match the API's")
     _, trial = get("/trial")
     check("trial page's served fallback states the real duration",

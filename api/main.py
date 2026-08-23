@@ -488,6 +488,9 @@ class WGRegisterResponse(BaseModel):
     entry_node: str | None = None
     exit_node: str | None = None
     expires_at: int | None = None   # epoch secs; multi-hop only
+    # True when entry and exit turn out to be the same machine — a one-box
+    # test deployment. The route is real; the privacy property is not.
+    same_host: bool = False
 
 
 # ============================================================================
@@ -1152,6 +1155,17 @@ async def payment_webhook(request: Request):
 
 # Multi-hop entry-port allocation range. 8000 slots per entry node is plenty —
 # at 1 slot per active device, that's 8000 simultaneous sessions per entry.
+# How long after its last heartbeat a node is still considered live.
+# meshd checks in every 30s, so five minutes is ten missed beats — long enough
+# to ride out a blip, short enough that customers stop being routed into a
+# corpse within one rotation.
+NODE_STALE_SECS = int(os.environ.get("ZTV_NODE_STALE_SECS", "300"))
+
+# The resolver address every client config names. Something has to answer here
+# or a connected customer resolves nothing; scripts/node-runtime.sh puts
+# dnsmasq on it. Keep the two in step.
+MESH_GATEWAY_IP = os.environ.get("ZTV_MESH_GATEWAY_IP", "10.64.0.1")
+
 MULTIHOP_PORT_MIN = 52000
 MULTIHOP_PORT_MAX = 59999
 HOP_PAIR_TTL_SECS = 24 * 3600  # rotate every 24h
@@ -1172,25 +1186,71 @@ def _allocate_entry_port(conn, entry_node: str) -> int:
     raise HTTPException(503, "Entry node at capacity")
 
 
-def _pick_node(conn, region: str, role: str) -> sqlite3.Row | None:
-    """Pick the best (active, in-region, role-compatible) mesh node."""
-    return conn.execute(
-        """SELECT * FROM mesh_nodes
-           WHERE active = 1
-             AND region = ?
-             AND (role = ? OR role = 'both')
-           ORDER BY capacity DESC
-           LIMIT 1""",
-        (region, role),
-    ).fetchone() or conn.execute(
-        # fallback: any active node with compatible role
-        """SELECT * FROM mesh_nodes
-           WHERE active = 1
-             AND (role = ? OR role = 'both')
-           ORDER BY capacity DESC
-           LIMIT 1""",
-        (role,),
+# Pick the node a customer's traffic will actually use.
+#
+#   SELECT ... ORDER BY capacity DESC
+#
+# was the whole of node selection, which had two problems. `capacity` is a
+# static number an operator types in, so it ranked nodes by how big they were
+# declared to be, never by how much room they had left — the largest node won
+# every request until it fell over. And nothing checked liveness, so a node
+# that stopped answering kept being handed out indefinitely; only *ephemeral*
+# nodes were ever deactivated.
+_NODE_SELECT = """
+    SELECT m.*,
+           m.capacity - (SELECT COUNT(*) FROM device_nodes d
+                          WHERE d.node_id = m.id) AS headroom,
+           (m.last_heartbeat > :fresh) AS live
+      FROM mesh_nodes m
+     WHERE m.active = 1
+       AND (m.role = :role OR m.role = 'both')
+       {region_clause}
+     ORDER BY live DESC, headroom DESC, m.id ASC
+     LIMIT 1
+"""
+
+
+def _pick_node(conn, region: str | None, role: str) -> sqlite3.Row | None:
+    """
+    The best node for this role: live before stale, roomiest first.
+
+    Ordering by `live DESC` rather than filtering on it is deliberate. A
+    control plane that hands out nothing because every heartbeat is late has
+    turned a monitoring problem into an outage; better to route into a node
+    we are unsure about and let the client's handshake check catch it.
+
+    Region is a preference, not a constraint — a customer whose chosen region
+    is down gets a working tunnel somewhere else rather than an error.
+    """
+    args = {"role": role, "fresh": int(time.time()) - NODE_STALE_SECS}
+    in_region = None
+    if region:
+        in_region = conn.execute(
+            _NODE_SELECT.format(region_clause="AND m.region = :region"),
+            {**args, "region": region},
+        ).fetchone()
+    anywhere = conn.execute(
+        _NODE_SELECT.format(region_clause=""), args
     ).fetchone()
+
+    # Order of preference, and why it is this way round:
+    #
+    #   1. a live node in the region they asked for   — what they wanted
+    #   2. a live node somewhere else                 — a working tunnel
+    #   3. the in-region node even though it is quiet — its heartbeat may
+    #      simply be late, and the response names it either way
+    #   4. anything at all
+    #
+    # Taking the requested region first regardless of liveness — the obvious
+    # reading — routes customers into a node that stopped answering while a
+    # healthy one sits idle next door. Jurisdiction still wins between two
+    # live nodes, which is the case that actually matters to someone who
+    # picked a country on purpose; the response always names the node it
+    # chose, so a fallback is visible rather than silent.
+    for candidate in (in_region, anywhere):
+        if candidate is not None and candidate["live"]:
+            return candidate
+    return in_region or anywhere
 
 
 def _allocate_hop_pair(
@@ -1249,9 +1309,14 @@ def _allocate_hop_pair(
 
 def _multihop_response(mesh_ip: str, pair: dict) -> WGRegisterResponse:
     entry, exit_, port = pair["entry"], pair["exit"], pair["port"]
+    # On a single-VPS test deployment all three "regions" are one machine, so
+    # the exit sees the client's real address and multi-hop hides nothing.
+    # The client prints that privacy claim on every multi-hop connect; tell it
+    # when the claim does not hold rather than letting it say so anyway.
+    same_host = bool(entry["public_ip"]) and entry["public_ip"] == exit_["public_ip"]
     return WGRegisterResponse(
         interface_ip=f"{mesh_ip}/32",
-        dns=["10.64.0.1"],
+        dns=[MESH_GATEWAY_IP],
         peers=[{
             "id": f"{entry['id']}→{exit_['id']}",
             "public_key": exit_["pubkey"],
@@ -1263,6 +1328,7 @@ def _multihop_response(mesh_ip: str, pair: dict) -> WGRegisterResponse:
         entry_node=entry["id"],
         exit_node=exit_["id"],
         expires_at=pair["expires_at"],
+        same_host=same_host,
     )
 
 
@@ -1282,55 +1348,51 @@ def _assign_nodes(conn, device_id: int, node_ids) -> None:
         )
 
 
-def _single_hop_peers(conn, region: str) -> list:
+def _single_hop_peer(conn, region: str):
     """
-    Up to 3 exit-capable peers, preferring the requested region and falling
-    back to any region so a single dead node doesn't strand the customer.
+    The one exit node this device will use.
+
+    It used to return three, "so a single dead node doesn't strand the
+    customer". WireGuard does not work that way. AllowedIPs is a routing
+    table, not a list of alternatives: when a second peer claims 0.0.0.0/0 the
+    kernel takes that prefix away from the first. Three peers each claiming
+    the default route left the last one holding all of it and the other two
+    inert — no failover at all, the API reporting a node the client was not
+    using, and the customer's public key sitting in three nodes' peer
+    manifests when only one was ever routing them. That last part quietly
+    tripled what a single seized node gives up.
+
+    Failover belongs where it can actually work: pick a live node here, and
+    let the client reconnect (and land somewhere else) when the handshake
+    check tells it this one is not answering.
     """
-    peers = conn.execute(
-        """SELECT id, pubkey, endpoint, region
-           FROM mesh_nodes
-           WHERE active = 1
-             AND region = ?
-             AND (role = 'exit' OR role = 'both')
-           ORDER BY capacity DESC
-           LIMIT 3""",
-        (region,),
-    ).fetchall()
-    if not peers:
-        peers = conn.execute(
-            """SELECT id, pubkey, endpoint, region
-               FROM mesh_nodes
-               WHERE active = 1 AND (role = 'exit' OR role = 'both')
-               ORDER BY capacity DESC
-               LIMIT 3"""
-        ).fetchall()
-    if not peers:
+    node = _pick_node(conn, region, "exit")
+    if node is None:
         # _validate_regions only proves the region has SOME active node. If
         # every one of them is entry-only there is nothing to terminate a
         # tunnel, and returning 200 with an empty peer list just moves the
         # failure into the client — where `resp.Peers[0]` panics.
         raise HTTPException(503, "No exit nodes are currently available")
-    return peers
+    return node
 
 
-def _single_hop_response(mesh_ip: str, peers: list) -> WGRegisterResponse:
+def _single_hop_response(mesh_ip: str, node) -> WGRegisterResponse:
     return WGRegisterResponse(
         interface_ip=f"{mesh_ip}/32",
-        dns=["10.64.0.1"],
-        peers=[
-            {
-                "id": p["id"],
-                "public_key": p["pubkey"],
-                "endpoint": p["endpoint"],
-                "allowed_ips": ["0.0.0.0/0", "::/0"],
-                "persistent_keepalive": 25,
-            }
-            for p in peers
-        ],
+        dns=[MESH_GATEWAY_IP],
+        peers=[{
+            "id": node["id"],
+            "public_key": node["pubkey"],
+            "endpoint": node["endpoint"],
+            # ::/0 with no IPv6 address on the interface is deliberate: it
+            # captures v6 into a tunnel that cannot carry it, so v6 traffic
+            # fails closed instead of leaking around us on a dual-stack host.
+            "allowed_ips": ["0.0.0.0/0", "::/0"],
+            "persistent_keepalive": 25,
+        }],
         multihop=False,
-        entry_node=peers[0]["id"],
-        exit_node=peers[0]["id"],
+        entry_node=node["id"],
+        exit_node=node["id"],
     )
 
 
@@ -1418,11 +1480,10 @@ def wg_register(
         # Re-registering single-hop retires any multi-hop pair, otherwise the
         # entry node keeps a DNAT rule for a session the client abandoned.
         conn.execute("DELETE FROM hop_pairs WHERE device_id = ?", (device_id,))
-        peers = _single_hop_peers(conn, req.region)
-        # The client writes every returned peer into its wg config and may
-        # hand-shake with any of them, so all of them need the key.
-        _assign_nodes(conn, device_id, [p["id"] for p in peers])
-        return _single_hop_response(mesh_ip, peers)
+        node = _single_hop_peer(conn, req.region)
+        # Only the node actually carrying this device gets its key.
+        _assign_nodes(conn, device_id, [node["id"]])
+        return _single_hop_response(mesh_ip, node)
 
 
 class DeviceInfo(BaseModel):
@@ -1553,15 +1614,15 @@ def wg_rotate(
             return _multihop_response(device["mesh_ip"], pair)
 
         # No prior pair and no exit_region: fall back to single-hop.
-        # Shares _single_hop_peers with register so the "no exit node" case
+        # Shares _single_hop_peer with register so the "no exit node" case
         # 503s here too instead of returning an empty peer list.
         conn.execute(
             "UPDATE devices SET last_seen = ? WHERE id = ?",
             (int(time.time()), device["id"]),
         )
-        peers = _single_hop_peers(conn, req.region)
-        _assign_nodes(conn, device["id"], [p["id"] for p in peers])
-        return _single_hop_response(device["mesh_ip"], peers)
+        node = _single_hop_peer(conn, req.region)
+        _assign_nodes(conn, device["id"], [node["id"]])
+        return _single_hop_response(device["mesh_ip"], node)
 
 
 # ----------------------------------------------------------------------------
@@ -1676,7 +1737,10 @@ def node_heartbeat(
     node_id_hint = body.node_id if body else None
     with db(write=True) as conn:
         cur = conn.execute(
-            "UPDATE mesh_nodes SET last_heartbeat = ? WHERE psk_hash = ?",
+            # active = 1 as well: the sweeper deactivates a node whose
+            # heartbeat went stale, and without this a node that recovers
+            # stays out of rotation until someone notices by hand.
+            "UPDATE mesh_nodes SET last_heartbeat = ?, active = 1 WHERE psk_hash = ?",
             (int(time.time()), psk_hash),
         )
         if cur.rowcount == 0:
@@ -1692,7 +1756,7 @@ def node_heartbeat(
                     "per-node PSK, or pass node_id when using the shared PSK.",
                 )
             cur = conn.execute(
-                "UPDATE mesh_nodes SET last_heartbeat = ? WHERE id = ?",
+                "UPDATE mesh_nodes SET last_heartbeat = ?, active = 1 WHERE id = ?",
                 (int(time.time()), node_id),
             )
             if cur.rowcount == 0:

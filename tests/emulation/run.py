@@ -38,6 +38,7 @@ MODULES = [
     ("concurrency",  "parallel writers, degenerate topologies, auth edges"),
     ("payments",     "BTC/XMR/ZEC through BTCPay and a hosted gateway"),
     ("trial",        "proof-of-work, redemption, trial limits, conversion"),
+    ("routing",      "which node a customer is routed to, and what we claim"),
     ("client",       "the compiled 0trust binary, end to end"),
     ("meshd",        "the mesh node daemon against a live control plane"),
     ("integration",  "pubkey escaping and GUI polling pressure"),

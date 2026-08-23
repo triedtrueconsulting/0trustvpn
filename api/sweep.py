@@ -95,20 +95,32 @@ def main():
     if n_pairs:
         log.info("released %d expired hop_pairs", n_pairs)
 
-    # ---- 4. Mark ephemeral nodes that stopped heartbeating as inactive ----
-    # Threshold: 5 minutes. Ephemeral nodes are RAM-only — if they reboot,
-    # they re-register with a brand new node_id, so the old row is dead weight.
+    # ---- 4. Mark nodes that stopped heartbeating as inactive ----
+    # Threshold: 5 minutes; meshd checks in every 30s, so that is ten missed
+    # beats.
+    #
+    # This used to apply to ephemeral nodes only, on the reasoning that a
+    # RAM-only node which reboots comes back with a new id and leaves a dead
+    # row behind. True, but it left the more damaging case unhandled: a
+    # permanent node that dies stays active = 1 forever, and every
+    # /wg/register keeps routing customers into it. Nothing ever noticed,
+    # because nothing else checked liveness either.
+    #
+    # `last_heartbeat > 0` spares rows that have never checked in at all —
+    # hand-inserted nodes, and a deployment not running meshd — from being
+    # deactivated on the strength of a heartbeat they were never going to
+    # send. A node that recovers is reactivated by its next heartbeat.
     dead_threshold = now - 300
     cur = conn.execute(
         """UPDATE mesh_nodes SET active = 0
-           WHERE ephemeral = 1
-             AND active = 1
+           WHERE active = 1
+             AND last_heartbeat > 0
              AND last_heartbeat < ?""",
         (dead_threshold,),
     )
     n_dead_nodes = cur.rowcount
     if n_dead_nodes:
-        log.info("deactivated %d ephemeral nodes (heartbeat stale)", n_dead_nodes)
+        log.info("deactivated %d nodes (heartbeat stale)", n_dead_nodes)
 
     # Garbage-collect inactive ephemeral rows older than 1 hour.
     # Customers won't be routed to them; keeping them around is just clutter.

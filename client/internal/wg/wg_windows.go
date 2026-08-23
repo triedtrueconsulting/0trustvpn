@@ -139,3 +139,36 @@ func run(name string, args ...string) (string, error) {
 	}
 	return stdout.String(), nil
 }
+
+// wgExe locates wg.exe, which WireGuard for Windows installs beside
+// wireguard.exe. Unlike wireguard.exe it does speak `wg show`, so the
+// handshake check works the same way it does on Unix.
+func wgExe() string {
+	for _, candidate := range []string{
+		`C:\Program Files\WireGuard\wg.exe`,
+		`C:\Program Files (x86)\WireGuard\wg.exe`,
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	if path, err := exec.LookPath("wg.exe"); err == nil {
+		return path
+	}
+	return ""
+}
+
+// LatestHandshake returns the most recent successful handshake across all
+// peers, or the zero time if none has happened yet. See the Unix build for
+// why "the service started" is not the same question.
+func LatestHandshake() (time.Time, error) {
+	exe := wgExe()
+	if exe == "" {
+		return time.Time{}, fmt.Errorf("wg.exe not found beside the WireGuard install")
+	}
+	out, err := run(exe, "show", ifname, "latest-handshakes")
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parseLatestHandshake(out), nil
+}
