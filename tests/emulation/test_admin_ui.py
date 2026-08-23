@@ -226,6 +226,41 @@ try:
         shown = page.input_value("#set-STRIPE_SECRET_KEY")
         check("the secret is masked when it comes back", "supersecret" not in shown, shown)
 
+        print("\n[5b] the settings grid stays aligned")
+        # A label long enough to wrap used to push its own input half a row
+        # below its neighbours'. Measure it precisely: group cells by the row
+        # the grid put them in, then check the inputs inside a row share a
+        # bottom edge. Anything else means a label moved a field.
+        misaligned = page.evaluate("""() => {
+          const bad = [];
+          for (const grid of document.querySelectorAll('#settings-groups .set-grid')) {
+            const rows = new Map();
+            for (const cell of grid.children) {
+              const f = cell.querySelector('input,select');
+              if (!f) continue;
+              const key = Math.round(cell.getBoundingClientRect().top / 4);
+              (rows.get(key) || rows.set(key, []).get(key))
+                .push({ id: f.id, bottom: f.getBoundingClientRect().bottom });
+            }
+            for (const [, fields] of rows) {
+              if (fields.length < 2) continue;
+              const base = fields[0].bottom;
+              for (const f of fields) {
+                if (Math.abs(f.bottom - base) > 2) bad.push(f.id);
+              }
+            }
+          }
+          return bad;
+        }""")
+        check("no field is knocked out of line by a wrapped label",
+              misaligned == [], misaligned)
+        labels = page.eval_on_selector_all(
+            "#settings-groups label",
+            "els => els.map(e => getComputedStyle(e).fontFamily)")
+        check("field labels use the technical face, like the rest of the product",
+              labels and all("JetBrains" in f or "mono" in f.lower() for f in labels),
+              sorted(set(labels))[:3])
+
         print("\n[6] notices")
         page.click("#tabs button[data-tab=notices]")
         page.wait_for_selector("#notice-form", timeout=15000)
