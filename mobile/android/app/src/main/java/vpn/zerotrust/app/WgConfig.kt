@@ -12,6 +12,13 @@ import com.wireguard.crypto.KeyPair
 data class WgConfig(
     val privateKey: String,
     val interfaceIP: String,
+    /**
+     * IPv6 mesh address, or null when the exit node cannot route v6. The
+     * peers still claim ::/0 either way: without an address here that
+     * blackholes v6 so it cannot escape the tunnel, and with one it carries
+     * it. Never drop ::/0 to "fix" v6 not working — that is the leak.
+     */
+    val interfaceIP6: String? = null,
     val dns: List<String>,
     val peers: List<WgPeer>,
 ) {
@@ -21,7 +28,8 @@ data class WgConfig(
      */
     fun toLibraryConfig(): Config {
         val iface = Interface.Builder().apply {
-            parseAddresses(interfaceIP)
+            parseAddresses(
+                listOfNotNull(interfaceIP, interfaceIP6).joinToString(", "))
             if (dns.isNotEmpty()) {
                 parseDnsServers(dns.joinToString(", "))
             }

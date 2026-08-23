@@ -201,6 +201,25 @@ upstream, or at a resolver they run themselves. If you would rather not rely
 on any of that, set your own DNS in the client&rsquo;s WireGuard config; the
 tunnel carries it either way.</p>
 
+<h2>4e. IPv6</h2>
+
+<p>Your tunnel always claims all of IPv6 as well as all of IPv4. That is what
+stops v6 traffic taking a route around us on a dual-stack network, which is
+one of the most common ways a VPN silently fails to cover everything.</p>
+
+<p>Whether v6 is <em>carried</em> depends on the exit node you land on. Where
+that node has working IPv6, you are given a v6 address inside the tunnel and
+v6 traffic is masqueraded out of the node exactly as v4 is &mdash; a site sees
+the node&rsquo;s address, not yours, and not a prefix unique to you. We
+deliberately do not hand out a per-customer IPv6 prefix: a stable prefix of
+your own would follow you between sites and networks, which is precisely the
+identifier this product exists to avoid.</p>
+
+<p>Where the exit has no IPv6, you get no v6 address and v6 traffic is dropped
+inside the tunnel. IPv6-only sites will not load on that connection. We would
+rather break those than let the traffic out around us; <code>0trust
+status</code> shows which of the two you have.</p>
+
 <h2>5. We use no third-party trackers</h2>
 <p>
   Our website serves no advertising, no analytics, and no third-party

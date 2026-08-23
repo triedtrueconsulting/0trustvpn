@@ -282,6 +282,38 @@ print(json.dumps(result))
         check("the kernel's connected route is left alone",
               res.get("connected_kept") is True, res)
 
+    print("\n[4] IPv6 is forwarded and masqueraded, not just configured")
+    # The v6 half of the mesh has to survive the same rules the v4 half does:
+    # the egress filter must police client v6 without blocking it outright,
+    # and NAT66 must rewrite it. Getting this wrong looks identical to "the
+    # customer's ISP has no v6" until someone checks.
+    lib = os.path.join(H.REPO, "scripts", "node-runtime.sh")
+    nat = subprocess.run(["bash", "-c", f'source "{lib}"; ztv_nat_ruleset eth0'],
+                         capture_output=True, text=True).stdout
+    egress = subprocess.run(["bash", "-c", f'source "{lib}"; ztv_egress_ruleset'],
+                            capture_output=True, text=True).stdout
+    check("NAT66 masquerades the v6 mesh prefix",
+          "ip6 saddr fd0e:5f7a:c21b::/48 masquerade" in nat, nat)
+    check("v4 masquerade is still there", "ip saddr 10.64.0.0/10 masquerade" in nat, nat)
+    # An "ip saddr" test cannot be evaluated against a v6 packet, so before
+    # the v6 clause every rule below it applied to forwarded v6 traffic
+    # whether or not a customer sent it.
+    check("client v6 is policed by its own family test",
+          "ip6 saddr != fd0e:5f7a:c21b::/48 accept" in egress, egress)
+    sh(f"ip netns exec {BOX_NS} nft flush ruleset", check_rc=False)
+    both = os.path.join(TMP, "dual.nft")
+    open(both, "w").write(nat + egress)
+    r = subprocess.run(["ip", "netns", "exec", BOX_NS, "nft", "-f", both],
+                       capture_output=True, text=True)
+    check("the kernel accepts the dual-stack ruleset", r.returncode == 0,
+          (r.stderr or r.stdout)[:500])
+    listing = sh(f"ip netns exec {BOX_NS} nft list ruleset").stdout
+    check("both masquerade rules are live", listing.count("masquerade") >= 2, listing[:600])
+    # fc00::/7 contains our own ULA, so this also isolates customers from each
+    # other over v6 — matching what the v4 rule does with 10.0.0.0/8.
+    check("customers cannot reach each other over v6",
+          "fc00::/7" in listing, listing[:600])
+
 finally:
     teardown()
     import shutil as _sh

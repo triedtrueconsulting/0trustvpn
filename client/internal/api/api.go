@@ -106,13 +106,18 @@ type Peer struct {
 }
 
 type RegisterResp struct {
-	InterfaceIP string   `json:"interface_ip"`
-	DNS         []string `json:"dns"`
-	Peers       []Peer   `json:"peers"`
-	Multihop    bool     `json:"multihop"`
-	EntryNode   string   `json:"entry_node"`
-	ExitNode    string   `json:"exit_node"`
-	ExpiresAt   int64    `json:"expires_at"`
+	InterfaceIP string `json:"interface_ip"`
+	// Set only when the exit node has working IPv6 egress. Empty means v6
+	// stays blackholed by the ::/0 AllowedIPs below — which is the point:
+	// the tunnel always claims v6 so it cannot leak around us, and only
+	// carries it where there is somewhere for it to go.
+	InterfaceIP6 string   `json:"interface_ip6"`
+	DNS          []string `json:"dns"`
+	Peers        []Peer   `json:"peers"`
+	Multihop     bool     `json:"multihop"`
+	EntryNode    string   `json:"entry_node"`
+	ExitNode     string   `json:"exit_node"`
+	ExpiresAt    int64    `json:"expires_at"`
 	// SameHost is set when the control plane resolved entry and exit to the
 	// same machine — a single-VPS test deployment. The route is real; the
 	// privacy property multi-hop exists for is not, and the client says so

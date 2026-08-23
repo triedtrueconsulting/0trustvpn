@@ -233,16 +233,32 @@ func cmdStatus() error {
 		}
 	}
 
+	// Whether v6 is carried depends on the exit node, so it is a property of
+	// this connection rather than of the product. Say which one you have.
+	ipv6Str := "blackholed (this exit has no IPv6 — it cannot leak)"
+	if st.InterfaceIP6 != "" {
+		ipv6Str = st.InterfaceIP6
+	}
+	killStr := "off"
+	if st.KillSwitch {
+		killStr = "on"
+		if !wg.KillSwitchSupported() {
+			killStr = "requested, but NOT available on this platform"
+		}
+	}
+
 	fmt.Printf(`  account     : %s
   status      : %s
   expires     : %s  (%d days)
   devices     : %d / 8
   tunnel      : %s
   mode        : %s
+  ipv6        : %s
+  kill switch : %s
   next rotate : %s
 `,
 		maskToken(st.Token), s.Status, expiryStr, s.DaysRemaining,
-		s.DeviceCount, tunnelState(), mode, rotateStr)
+		s.DeviceCount, tunnelState(), mode, ipv6Str, killStr, rotateStr)
 	return nil
 }
 
@@ -312,6 +328,7 @@ func cmdConnect(region, exitRegion string, killSwitch *bool) error {
 
 	if resp != nil && len(resp.Peers) > 0 {
 		st.InterfaceIP = resp.InterfaceIP
+		st.InterfaceIP6 = resp.InterfaceIP6
 		st.EntryRegion = region
 		st.ExitRegion = exitRegion
 		st.ExpiresAt = resp.ExpiresAt
@@ -319,7 +336,7 @@ func cmdConnect(region, exitRegion string, killSwitch *bool) error {
 			return err
 		}
 
-		cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers,
+		cfg := wg.BuildConfigDual(st.PrivateKey, resp.InterfaceIP, resp.InterfaceIP6, resp.DNS, resp.Peers,
 			wg.OptionsFor(st.KillSwitch)...)
 		path, err := wg.WriteConfig(cfg)
 		if err != nil {
@@ -441,7 +458,7 @@ func cmdRotate() error {
 		return err
 	}
 
-	cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers,
+	cfg := wg.BuildConfigDual(st.PrivateKey, resp.InterfaceIP, resp.InterfaceIP6, resp.DNS, resp.Peers,
 		wg.OptionsFor(st.KillSwitch)...)
 
 	// If the tunnel is up, hot-swap peers in-place. If it's down, just

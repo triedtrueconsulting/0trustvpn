@@ -388,7 +388,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers,
+	cfg := wg.BuildConfigDual(st.PrivateKey, resp.InterfaceIP, resp.InterfaceIP6, resp.DNS, resp.Peers,
 		wg.OptionsFor(st.KillSwitch)...)
 	if _, err := wg.WriteConfig(cfg); err != nil {
 		writeErr(w, 500, err.Error())
@@ -467,7 +467,7 @@ func handleRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers,
+	cfg := wg.BuildConfigDual(st.PrivateKey, resp.InterfaceIP, resp.InterfaceIP6, resp.DNS, resp.Peers,
 		wg.OptionsFor(st.KillSwitch)...)
 	if wg.IsUp() {
 		if err := wg.SyncConfig(cfg); err != nil {

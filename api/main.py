@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS mesh_nodes (
   active          INTEGER NOT NULL DEFAULT 1,
   ephemeral       INTEGER NOT NULL DEFAULT 0,  -- 1 = RAM-only, auto-prune on heartbeat loss
   psk_hash        TEXT,                        -- SHA256 of per-node PSK
+  ipv6            INTEGER NOT NULL DEFAULT 0,  -- node has working IPv6 egress
   last_heartbeat  INTEGER NOT NULL DEFAULT 0
 );
 
@@ -367,6 +368,7 @@ MIGRATIONS = [
     ("accounts", "banned_reason", "TEXT"),
     ("accounts", "banned_at", "INTEGER NOT NULL DEFAULT 0"),
     ("accounts", "note", "TEXT"),
+    ("mesh_nodes", "ipv6", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -416,6 +418,18 @@ def wg_genkey() -> tuple[str, str]:
         ["wg", "pubkey"], input=priv, capture_output=True, check=True, text=True
     ).stdout.strip()
     return priv, pub
+
+
+def mesh_ip6(v4: str) -> str:
+    """The IPv6 mesh address for a device, derived from its IPv4 one."""
+    net6 = ipaddress.ip_network(MESH_NETWORK6)
+    return str(ipaddress.IPv6Address(
+        int(net6.network_address) + int(ipaddress.IPv4Address(v4))))
+
+
+def mesh_gateway6() -> str:
+    """The gateway's v6 address — same derivation, so the two cannot drift."""
+    return mesh_ip6(MESH_GATEWAY_IP)
 
 
 def allocate_mesh_ip(conn) -> str:
@@ -502,6 +516,11 @@ class WGRegisterRequest(BaseModel):
 
 class WGRegisterResponse(BaseModel):
     interface_ip: str
+    # Set only when the exit node actually has IPv6 egress. AllowedIPs claims
+    # ::/0 either way — that is what stops v6 leaking around the tunnel on a
+    # dual-stack host — so a client without this address has v6 blackholed
+    # rather than exposed, exactly as before.
+    interface_ip6: str | None = None
     dns: list[str]
     peers: list[dict]
     multihop: bool = False
@@ -1186,6 +1205,19 @@ NODE_STALE_SECS = int(os.environ.get("ZTV_NODE_STALE_SECS", "300"))
 # dnsmasq on it. Keep the two in step.
 MESH_GATEWAY_IP = os.environ.get("ZTV_MESH_GATEWAY_IP", "10.64.0.1")
 
+# --- IPv6 inside the tunnel -------------------------------------------------
+# A ULA prefix (RFC 4193), generated randomly once and fixed here. It never
+# appears outside the mesh: the exit masquerades v6 the same way it does v4,
+# so what a website sees is the node's address, not this.
+#
+# A device's v6 address is its v4 address embedded in the low 32 bits, so
+# 10.64.0.5 becomes fd0e:5f7a:c21b::a40:5. That is deliberate. A second
+# allocator would mean a second read-then-write race to get wrong under
+# multiple workers, a second uniqueness constraint, and a second thing that
+# can drift out of step with the first. Derivation has none of those and is
+# reversible by eye once you know the trick.
+MESH_NETWORK6 = os.environ.get("ZTV_MESH_NETWORK6", "fd0e:5f7a:c21b::/48")
+
 MULTIHOP_PORT_MIN = 52000
 MULTIHOP_PORT_MAX = 59999
 HOP_PAIR_TTL_SECS = 24 * 3600  # rotate every 24h
@@ -1329,6 +1361,10 @@ def _allocate_hop_pair(
 
 def _multihop_response(mesh_ip: str, pair: dict) -> WGRegisterResponse:
     entry, exit_, port = pair["entry"], pair["exit"], pair["port"]
+    # The exit terminates the tunnel and does the masquerading, so its
+    # capability is the one that decides whether v6 works. The entry only
+    # forwards UDP it cannot read.
+    v6 = bool(exit_["ipv6"]) if "ipv6" in exit_.keys() else False
     # On a single-VPS test deployment all three "regions" are one machine, so
     # the exit sees the client's real address and multi-hop hides nothing.
     # The client prints that privacy claim on every multi-hop connect; tell it
@@ -1336,7 +1372,8 @@ def _multihop_response(mesh_ip: str, pair: dict) -> WGRegisterResponse:
     same_host = bool(entry["public_ip"]) and entry["public_ip"] == exit_["public_ip"]
     return WGRegisterResponse(
         interface_ip=f"{mesh_ip}/32",
-        dns=[MESH_GATEWAY_IP],
+        interface_ip6=f"{mesh_ip6(mesh_ip)}/128" if v6 else None,
+        dns=[MESH_GATEWAY_IP] + ([mesh_gateway6()] if v6 else []),
         peers=[{
             "id": f"{entry['id']}→{exit_['id']}",
             "public_key": exit_["pubkey"],
@@ -1397,9 +1434,11 @@ def _single_hop_peer(conn, region: str):
 
 
 def _single_hop_response(mesh_ip: str, node) -> WGRegisterResponse:
+    v6 = bool(node["ipv6"]) if "ipv6" in node.keys() else False
     return WGRegisterResponse(
         interface_ip=f"{mesh_ip}/32",
-        dns=[MESH_GATEWAY_IP],
+        interface_ip6=f"{mesh_ip6(mesh_ip)}/128" if v6 else None,
+        dns=[MESH_GATEWAY_IP] + ([mesh_gateway6()] if v6 else []),
         peers=[{
             "id": node["id"],
             "public_key": node["pubkey"],
@@ -1654,6 +1693,7 @@ class NodeProvisionRequest(BaseModel):
     public_ip: str
     region: str
     role: str = "both"
+    ipv6: bool = False
 
 
 class NodeProvisionResponse(BaseModel):
@@ -1718,13 +1758,13 @@ def node_provision(req: NodeProvisionRequest, request: Request):
         conn.execute(
             """INSERT INTO mesh_nodes
                  (id, hostname, pubkey, endpoint, region, role, public_ip,
-                  ephemeral, psk_hash, last_heartbeat, active)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1)""",
+                  ephemeral, psk_hash, last_heartbeat, active, ipv6)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?)""",
             (
                 node_id, f"{node_id}.0trust",
                 req.pubkey, f"{req.public_ip}:51820",
                 req.region, req.role, req.public_ip,
-                psk_hash, now,
+                psk_hash, now, 1 if req.ipv6 else 0,
             ),
         )
 
@@ -1738,6 +1778,11 @@ def node_provision(req: NodeProvisionRequest, request: Request):
 
 class NodeHeartbeatRequest(BaseModel):
     node_id: str | None = None
+    # Whether this node can actually route IPv6 to the internet. Reported by
+    # the node rather than configured centrally, because it is a property of
+    # the VPS the operator bought and can change under them — a provider
+    # enabling or withdrawing v6 should not need a database edit.
+    ipv6: bool | None = None
 
 
 @app.post("/api/v1/node/heartbeat")
@@ -1755,6 +1800,7 @@ def node_heartbeat(
     psk = request.headers.get("X-Node-Psk", "")
     psk_hash = hashlib.sha256(psk.encode()).hexdigest()
     node_id_hint = body.node_id if body else None
+    v6 = body.ipv6 if body else None
     with db(write=True) as conn:
         # Note who was out of rotation before this beat, so coming back can be
         # reported the moment it happens rather than whenever the sweeper next
@@ -1787,6 +1833,18 @@ def node_heartbeat(
             )
             if cur.rowcount == 0:
                 raise HTTPException(404, "Unknown node")
+
+        # Record v6 capability alongside the beat. Whichever branch above
+        # matched has already identified the node, so reuse that.
+        if v6 is not None:
+            if psk_hash:
+                conn.execute(
+                    "UPDATE mesh_nodes SET ipv6 = ? WHERE psk_hash = ?",
+                    (1 if v6 else 0, psk_hash))
+            if node_id_hint:
+                conn.execute(
+                    "UPDATE mesh_nodes SET ipv6 = ? WHERE id = ?",
+                    (1 if v6 else 0, node_id_hint.strip()))
 
         if was_down:
             for row in conn.execute(
@@ -1833,7 +1891,13 @@ def list_peers(node_id: Optional[str] = None,
             (node, int(time.time())),
         ).fetchall()
     return {
-        "peers": [{"public_key": r["pubkey"], "allowed_ips": f"{r['mesh_ip']}/32"} for r in rows],
+        # Both families, always. A node without v6 egress simply never has
+        # traffic arrive on the v6 half, and listing it keeps the manifest the
+        # same shape everywhere rather than making a node's peer list depend
+        # on its own capability.
+        "peers": [{"public_key": r["pubkey"],
+                   "allowed_ips": f"{r['mesh_ip']}/32, {mesh_ip6(r['mesh_ip'])}/128"}
+                  for r in rows],
         "generated_at": int(time.time()),
     }
 

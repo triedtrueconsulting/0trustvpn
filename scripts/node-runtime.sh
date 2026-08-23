@@ -14,8 +14,11 @@
 # node) was invisible precisely because nothing ever parsed these bytes in CI.
 # ============================================================================
 
-# Mesh addressing. Must match MESH_NETWORK in api/main.py.
+# Mesh addressing. Must match MESH_NETWORK / MESH_NETWORK6 in api/main.py.
 ZTV_CLIENT_NET="${ZTV_CLIENT_NET:-10.64.0.0/10}"
+# A ULA prefix (RFC 4193). It never appears outside the mesh — the exit
+# masquerades v6 exactly as it does v4 — so what a site sees is the node.
+ZTV_CLIENT_NET6="${ZTV_CLIENT_NET6:-fd0e:5f7a:c21b::/48}"
 
 # Resolvers dnsmasq forwards to. Quad9 by default: a documented no-logging
 # policy, which is the least we can do given customers cannot see this choice.
@@ -48,6 +51,11 @@ table inet ztv_nat {
   chain postrouting {
     type nat hook postrouting priority 100;
     oifname "$iface" ip saddr $ZTV_CLIENT_NET masquerade
+    # NAT66. Customers get a ULA inside the tunnel, not a routable prefix:
+    # handing out real /64s needs provider-assigned space we do not have, and
+    # a stable per-customer prefix would be a tracking identifier anyway. So
+    # v6 leaves as the node's address, the same as v4.
+    oifname "$iface" ip6 saddr $ZTV_CLIENT_NET6 masquerade
   }
 }
 EOF
@@ -63,8 +71,15 @@ table inet ztv_egress {
   chain forward {
     type filter hook forward priority 0; policy accept;
 
-    # Only police traffic originating from VPN clients
-    ip saddr != $ZTV_CLIENT_NET accept
+    # Only police traffic originating from VPN clients. Each family needs its
+    # own test: inside an inet table an "ip saddr" expression cannot be
+    # evaluated against a v6 packet, so the rule never matches and every rule
+    # below it applied to forwarded v6 traffic whether a customer sent it or
+    # not. (No backticks in this comment on purpose. The heredoc below is
+    # unquoted, so a backtick pair here is command substitution, not quoting,
+    # and the shell silently runs it and blanks the text.)
+    ip  saddr != $ZTV_CLIENT_NET  accept
+    ip6 saddr != $ZTV_CLIENT_NET6 accept
 
     # Block outbound mail submission (anti-spam). A node that sends spam gets
     # its address blocklisted, which breaks the product for everyone on it.
@@ -73,6 +88,8 @@ table inet ztv_egress {
     # Block pivoting into private / link-local / CGNAT ranges: the provider's
     # internal network, other tenants, cloud metadata services.
     ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 } drop
+    # fc00::/7 covers our own mesh prefix, so this also stops one customer
+    # reaching another over v6 — the same isolation the v4 rule gives.
     ip6 daddr { fc00::/7, fe80::/10 } drop
 
     # Throttle connection storms (scan mitigation) without touching browsing.
@@ -90,8 +107,9 @@ EOF
 # resolver.
 #
 # $1 = address to listen on (the node's mesh gateway address)
+# $1 = v4 gateway to listen on   $2 = v6 gateway (optional)
 ztv_dnsmasq_conf() {
-    local listen="$1"
+    local listen="$1" listen6="${2:-}"
     {
     cat <<EOF
 # 0trust mesh resolver. Managed by scripts/node-runtime.sh.
@@ -99,7 +117,7 @@ ztv_dnsmasq_conf() {
 # Answer ONLY on the mesh gateway. Without bind-interfaces dnsmasq would also
 # answer on the public address, turning the node into an open resolver — free
 # DNS amplification for whoever finds it, and an abuse report within the day.
-listen-address=$listen
+listen-address=$listen${listen6:+,$listen6}
 bind-interfaces
 
 # Never consult /etc/resolv.conf (systemd-resolved's stub) or /etc/hosts:
@@ -124,6 +142,15 @@ EOF
 }
 
 
+# The IPv6 mesh address for a given v4 one: the v4 address embedded in the low
+# 32 bits of the ULA prefix. Same rule as mesh_ip6() in api/main.py and
+# _derive_gateway6() in meshd — three implementations of one line, kept in
+# step by a test rather than by hope, because a mismatch would hand clients
+# an address the node does not answer on.
+ztv_mesh_ip6() {
+    python3 -c 'import ipaddress,sys; base=ipaddress.ip_network(sys.argv[2]).network_address; print(ipaddress.IPv6Address(int(base)+int(ipaddress.IPv4Address(sys.argv[1]))))' "$1" "$ZTV_CLIENT_NET6"
+}
+
 # --- meshd environment -----------------------------------------------------
 # $1 control url  $2 node psk  $3 node id  $4 role  $5 iface  $6 port
 # $7 mesh gateway (CIDR)  $8 nft table name
@@ -138,6 +165,7 @@ WG_PRIVKEY=/etc/wireguard/$5.key
 WG_PORT=$6
 MESH_GATEWAY=$7
 MESH_NETWORK=$ZTV_CLIENT_NET
+MESH_NETWORK6=$ZTV_CLIENT_NET6
 ZTV_NFT_TABLE=$8
 POLL_INTERVAL=30
 EOF

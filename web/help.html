@@ -348,10 +348,22 @@ a:hover { text-decoration: underline; }
     <h3>What about IPv6 and DNS leaks?</h3>
     <p>
       Your tunnel claims both <code>0.0.0.0/0</code> and <code>::/0</code>, so
-      IPv6 cannot route around us on a dual-stack network. We do not currently
-      carry IPv6 <em>inside</em> the tunnel, so v6 traffic is dropped rather
-      than forwarded &mdash; the effect is that IPv6-only sites will not load
-      while connected. We chose failing closed over leaking.
+      IPv6 cannot route around us on a dual-stack network. That much is true
+      on every connection.
+    </p>
+    <p>
+      Whether IPv6 is <em>carried</em> depends on the exit node. Where the node
+      has working IPv6, you get a v6 address inside the tunnel and v6 sites
+      load normally; where it does not, you get no v6 address and v6 traffic
+      is dropped rather than let out around us. So the failure mode is
+      IPv6-only sites not loading, never IPv6 leaking. <code>0trust
+      status</code> tells you which you have on the current connection.
+    </p>
+    <p>
+      Inside the tunnel your v6 address is a private ULA, and the exit
+      masquerades it the same way it masquerades v4. Sites see the node&rsquo;s
+      address, not a per-customer prefix &mdash; a stable prefix of your own
+      would be a tracking identifier, which is the opposite of the point.
     </p>
     <p>
       DNS goes to a resolver that only exists inside the tunnel, on the exit

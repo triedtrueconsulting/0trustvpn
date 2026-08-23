@@ -635,14 +635,17 @@ ok "masquerade on $PRIMARY_IF, egress abuse filter loaded"
 
 # --- the resolver clients are actually told to use ------------------------
 MESH_DNS="${LOCAL_NODES[0]##*:}"
+# The v6 gateway is the v4 one embedded in the ULA prefix, the same derivation
+# the control plane and meshd use — so 10.64.0.1 becomes ...::a40:1.
+MESH_DNS6="$(ztv_mesh_ip6 "$MESH_DNS")"
 if [[ $DRY_RUN -eq 0 ]]; then
     mkdir -p /etc/dnsmasq.d
-    ztv_dnsmasq_conf "$MESH_DNS" > /etc/dnsmasq.d/0trust.conf
+    ztv_dnsmasq_conf "$MESH_DNS" "$MESH_DNS6" > /etc/dnsmasq.d/0trust.conf
 fi
 if [[ -n "${ZTV_RENDER_TO:-}" ]]; then
-    ztv_dnsmasq_conf "$MESH_DNS" > "$ZTV_RENDER_TO/dnsmasq.conf"
+    ztv_dnsmasq_conf "$MESH_DNS" "$MESH_DNS6" > "$ZTV_RENDER_TO/dnsmasq.conf"
 fi
-ok "dnsmasq will answer on $MESH_DNS (the DNS every client config names)"
+ok "dnsmasq will answer on $MESH_DNS and $MESH_DNS6"
 
 # --- firewall -------------------------------------------------------------
 if [[ $DO_FIREWALL -eq 1 && $DRY_RUN -eq 0 ]]; then

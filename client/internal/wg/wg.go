@@ -106,6 +106,22 @@ func KillSwitchSupported() bool { return runtime.GOOS == "linux" || runtime.GOOS
 
 // BuildConfig serializes a wg-quick / WireGuard-for-Windows compatible config.
 func BuildConfig(privKey, interfaceIP string, dns []string, peers []api.Peer, opts ...Option) string {
+	return buildConfig(privKey, []string{interfaceIP}, dns, peers, opts...)
+}
+
+// BuildConfigDual is BuildConfig with an IPv6 address as well. An empty
+// interfaceIP6 gives exactly the v4-only config BuildConfig would.
+func BuildConfigDual(privKey, interfaceIP, interfaceIP6 string, dns []string,
+	peers []api.Peer, opts ...Option) string {
+	addrs := []string{interfaceIP}
+	if interfaceIP6 != "" {
+		addrs = append(addrs, interfaceIP6)
+	}
+	return buildConfig(privKey, addrs, dns, peers, opts...)
+}
+
+func buildConfig(privKey string, addrs []string, dns []string, peers []api.Peer,
+	opts ...Option) string {
 	var o buildOpts
 	for _, fn := range opts {
 		fn(&o)
@@ -113,7 +129,7 @@ func BuildConfig(privKey, interfaceIP string, dns []string, peers []api.Peer, op
 	var b strings.Builder
 	b.WriteString("[Interface]\n")
 	fmt.Fprintf(&b, "PrivateKey = %s\n", privKey)
-	fmt.Fprintf(&b, "Address = %s\n", interfaceIP)
+	fmt.Fprintf(&b, "Address = %s\n", strings.Join(addrs, ", "))
 	if len(dns) > 0 {
 		fmt.Fprintf(&b, "DNS = %s\n", strings.Join(dns, ", "))
 	}

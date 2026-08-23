@@ -172,8 +172,12 @@ try:
           "NOT carrying traffic" in flat, flat[:300])
     check("help is honest that macOS has no kill switch",
           "macOS" in flat and "do not have one" in flat, flat[:300])
-    check("help explains the IPv6 trade-off rather than claiming v6 support",
-          "IPv6-only sites will not load" in flat, flat[:300])
+    check("help explains that v6 is carried where the node supports it",
+          "depends on the exit node" in flat, flat[:300])
+    check("and that the failure mode is never a leak",
+          "never IPv6 leaking" in flat, flat[:300])
+    check("and that v6 is masqueraded, not a per-customer prefix",
+          "tracking identifier" in flat, flat[:300])
     check("help warns the kill switch blocks the local network too",
           "local network" in flat, flat[:300])
 
