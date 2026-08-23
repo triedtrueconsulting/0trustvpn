@@ -22,6 +22,7 @@ role=exit on another, ideally in different jurisdictions.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ WG_IFACE      = os.environ.get("WG_IFACE", "wg0")
 WG_PRIV       = Path(os.environ.get("WG_PRIVKEY", "/etc/wireguard/wg0.key"))
 WG_PORT       = int(os.environ.get("WG_PORT", "51820"))
 MESH_GATEWAY  = os.environ.get("MESH_GATEWAY", "10.64.0.1/10")
+MESH_NETWORK  = os.environ.get("MESH_NETWORK", "10.64.0.0/10")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
 
 # NOT "0trust_forward": nftables identifiers cannot start with a digit, and
@@ -47,7 +49,12 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
 # Quoting does not help; the parser rejects a quoted string there too. The
 # whole ruleset failed to load, which meant multi-hop DNAT never worked on
 # any node. Renaming is the only fix.
-NFT_TABLE = "ztv_forward"
+# One table per node, because a single-VPS test deployment runs three node
+# identities side by side. reconcile_forwards() replaces its table wholesale,
+# so three meshd processes sharing one name would each wipe the other two's
+# DNAT rules on every poll and multi-hop would work for whichever polled last.
+# The default is unchanged, so a normal one-node box is unaffected.
+NFT_TABLE = os.environ.get("ZTV_NFT_TABLE", "ztv_forward")
 
 # Tables that predate the rename. Removed on first sync so a node upgrading
 # in place does not keep a stale table around forever.
@@ -107,6 +114,83 @@ def reconcile_peers(peers: list[dict]) -> None:
         log.info("synced %d peers to %s", len(peers), WG_IFACE)
     finally:
         os.unlink(tmp_path)
+
+
+# Routes for the peers we carry.
+#
+# `wg syncconf` sets AllowedIPs, which decides which peer a packet belongs to
+# once it is already on this interface — it does not tell the kernel to send
+# anything here in the first place. A normal node gets away with that because
+# `ip addr add 10.64.0.1/10` leaves a connected route covering the whole mesh.
+# Put three interfaces on one box, as the single-VPS test deployment does, and
+# that route exists three times over: return traffic for a client peered on
+# wg2 can be handed to wg0, which has no such peer, and the packet dies. A /32
+# per peer is more specific than any /10, so the right interface always wins.
+#
+# Only routes we created are ever removed: they carry proto static, while the
+# kernel's connected route carries proto kernel.
+ROUTE_PROTO = "static"
+
+
+def _in_mesh(cidr: str) -> bool:
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+        return net.subnet_of(ipaddress.ip_network(MESH_NETWORK))
+    except ValueError:
+        return False
+
+
+def _managed_routes() -> set[str]:
+    """Mesh routes on our interface that this daemon put there."""
+    r = subprocess.run(["ip", "-j", "route", "show", "dev", WG_IFACE,
+                        "proto", ROUTE_PROTO], capture_output=True, text=True)
+    if r.returncode != 0:
+        return set()
+    try:
+        rows = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError:
+        return set()
+    found = set()
+    for row in rows:
+        dst = row.get("dst") or ""
+        if not dst or dst == "default":
+            continue
+        if "/" not in dst:
+            dst += "/32"
+        if _in_mesh(dst):
+            found.add(dst)
+    return found
+
+
+def reconcile_routes(peers: list[dict]) -> None:
+    """Make the kernel's routes match the peers we just synced."""
+    want = set()
+    for p in peers:
+        for cidr in str(p.get("allowed_ips") or "").split(","):
+            cidr = cidr.strip()
+            if not cidr:
+                continue
+            if "/" not in cidr:
+                cidr += "/32"
+            if _in_mesh(cidr):
+                want.add(cidr)
+    try:
+        have = _managed_routes()
+    except FileNotFoundError:
+        log.warning("no `ip` binary — cannot manage peer routes")
+        return
+    for dst in sorted(want - have):
+        r = subprocess.run(["ip", "route", "replace", dst, "dev", WG_IFACE,
+                            "proto", ROUTE_PROTO], capture_output=True, text=True)
+        if r.returncode != 0:
+            log.warning("could not add route %s dev %s: %s",
+                        dst, WG_IFACE, r.stderr.strip())
+    for dst in sorted(have - want):
+        subprocess.run(["ip", "route", "del", dst, "dev", WG_IFACE,
+                        "proto", ROUTE_PROTO], capture_output=True)
+    if want - have or have - want:
+        log.info("routes on %s: +%d -%d", WG_IFACE,
+                 len(want - have), len(have - want))
 
 
 def bootstrap_interface() -> None:
@@ -220,6 +304,7 @@ def do_exit_sync(state: dict) -> None:
     h = hash(tuple(sorted((p["public_key"], p["allowed_ips"]) for p in peers)))
     if h != state.get("peers_hash"):
         reconcile_peers(peers)
+        reconcile_routes(peers)
         state["peers_hash"] = h
 
 

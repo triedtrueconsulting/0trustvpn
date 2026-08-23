@@ -1,0 +1,33 @@
+# Templated form of 0trust-meshd.service, for a host running more than one
+# node identity — that is, the single-VPS test deployment, where one box is
+# entry and exit for all three regions at once. The instance name is the
+# WireGuard interface: 0trust-meshd@wg0 reads /etc/0trust/meshd-wg0.env.
+# A real node runs exactly one node and uses 0trust-meshd.service instead.
+
+[Unit]
+Description=0trust mesh node syncer (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+EnvironmentFile=/etc/0trust/meshd-%i.env
+ExecStart=/usr/bin/python3 /usr/local/bin/0trust-meshd
+Restart=on-failure
+RestartSec=5s
+
+# Needs CAP_NET_ADMIN for wg/ip commands
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/wireguard
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

@@ -178,6 +178,29 @@ about you or your device.</p>
 token, an expiry date, and the public keys of devices you register. Paying
 later converts the same account; it does not create a linked record.</p>
 
+<h2>4d. DNS while you are connected</h2>
+
+<p>Your device is told to use <code>10.64.0.1</code> for DNS &mdash; an address
+that exists only inside the tunnel, on the exit node carrying your traffic.
+That is deliberate: if your device kept using your ISP&rsquo;s resolver, every
+site you visited would be visible to them in plaintext no matter how good the
+tunnel was.</p>
+
+<p>The resolver on the node <strong>does not log queries</strong>. It holds a
+short in-memory cache and nothing on disk; the query-logging option is
+switched off, and turning it on would contradict this page and our
+<a href="/audit">audit pack</a>. What it cannot do is answer by itself: it
+forwards what it cannot serve from cache to <strong>Quad9</strong>
+(<code>9.9.9.9</code>), a public resolver with its own no-logging policy that
+we do not control and cannot audit for you. Quad9 sees the queries as coming
+from the node&rsquo;s address, not yours, and cannot tell which customer asked
+&mdash; but it does see them.</p>
+
+<p>Operators running their own deployment can point this at a different
+upstream, or at a resolver they run themselves. If you would rather not rely
+on any of that, set your own DNS in the client&rsquo;s WireGuard config; the
+tunnel carries it either way.</p>
+
 <h2>5. We use no third-party trackers</h2>
 <p>
   Our website serves no advertising, no analytics, and no third-party

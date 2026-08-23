@@ -56,6 +56,19 @@ check() {
         0)  printf '  %sPASS%s  %-22s %s\n' "$GRN" "$NC" "$id" "$desc"; PASS=$((PASS+1)) ;;
         77) printf '  %sSKIP%s  %-22s %s\n' "$YLW" "$NC" "$id" "$desc"; SKIP=$((SKIP+1)) ;;
         *)  printf '  %sFAIL%s  %-22s %s\n' "$RED" "$NC" "$id" "$desc"; FAIL=$((FAIL+1))
+            # Show the lines that actually failed, then the tail for context.
+            #
+            # A plain tail was useless for the one check that most needs a
+            # readable log: the emulation suite prints hundreds of lines, so
+            # the last 20 were the final module's PASS list and the real
+            # failure — hundreds of lines earlier — never appeared in CI at
+            # all. Diagnosing it meant reproducing the whole runner locally.
+            local hits
+            hits=$(grep -E -A3 'FAIL|FAILED|Traceback|Error:' <<<"$out" | head -60) || true
+            if [[ -n "$hits" ]]; then
+                sed 's/^/          /' <<<"$hits"
+                printf '          %s---- end of run ----%s\n' "$DIM" "$NC"
+            fi
             sed 's/^/          /' <<<"$out" | tail -20 ;;
     esac
 }

@@ -48,7 +48,10 @@ support/                          PGP support workflow (WKD, auto-reply)
 tor/                              v3 onion mirror (serves browsing, NOT /api)
 nginx/0trustvpn.com.conf          Main site config (rate limits, routes, TLS)
 scripts/                          bootstrap.sh, bootstrap-node.sh, audit-verify.sh,
-                                  backup.sh, release.sh, verify-release.sh
+                                  backup.sh, release.sh, verify-release.sh,
+                                  install.sh (one-shot VPS), node-runtime.sh
+                                  (sysctl/NAT/egress/resolver, shared by the
+                                   node bootstrap and the test installer)
 systemd/                          api / sweep / backup / meshd .service + .timer
 proxy/                            Visitor web proxy (/surf):
                                   guards.py (the security argument),
@@ -138,6 +141,28 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   public unicast destinations re-checked on every redirect, size and time caps,
   content-type allowlist. Read it before touching anything under `proxy/`, and
   keep `test_proxy_guards` passing with nothing patched.
+- **`install.sh --mode test` puts the whole product on one VPS**, VPN included:
+  three WireGuard interfaces (`wg0/wg1/wg2` = zur/rey/buc, udp 51820-51822),
+  three meshd instances via `0trust-meshd@.service`, real keys in `mesh_nodes`,
+  NAT + egress filter + resolver from `scripts/node-runtime.sh`. `--no-vpn`
+  restores the old placeholder-rows behaviour. It is a test rig and says so:
+  no TLS, one jurisdiction wearing three names, and multi-hop that routes
+  correctly but hides nothing because entry and exit are the same host. Never
+  soften that wording — it is the difference between a demo and a lie.
+- **One nftables table per node, never a shared name.** meshd replaces its
+  whole DNAT table on every poll (`ZTV_NFT_TABLE`, default `ztv_forward`), so
+  several nodes on one host must each get their own or they erase each other
+  every 30s. The test installer sets `ztv_fwd_<iface>`.
+- **meshd installs a /32 route per peer.** `wg syncconf` sets AllowedIPs, which
+  picks the peer once a packet is on the interface — it does not route anything
+  there. One node gets away with it via the `/10` connected route; three
+  interfaces in one `/10` do not, and replies go to the wrong interface. Routes
+  carry `proto static` so the daemon never deletes the kernel's own.
+- **Clients are handed `DNS = 10.64.0.1`, so something must answer there.**
+  `dnsmasq` on the mesh gateway, `bind-interfaces` (an open resolver on the
+  public IP is a DNS-amplification abuse report waiting to happen), forwarding
+  to `ZTV_DNS_UPSTREAM` (Quad9 by default). **Query logging must stay off** —
+  privacy.html §4d and `audit-verify.sh`'s `node-dns-no-query-log` both say so.
 - **The GUI is browser-based, not native.** `0trust gui` runs a localhost web
   server; it's the same code on all 3 desktop OSes. No system tray (v0.2 —
   systray libs were blocked in the original build env). No kill switch (v0.2).
