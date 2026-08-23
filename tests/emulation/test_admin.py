@@ -265,6 +265,21 @@ try:
     st, r = adm("POST", "/login",
                 {"username": "ops", "password": "correct-horse-battery-staple"})
     check("signing back in works", st == 200, r)
+    print("\n[events] the operator can see what broke")
+    st, ev = adm("GET", "/events")
+    check("events feed loads", st == 200, ev)
+    check("it reports whether a webhook is set",
+          "webhook_configured" in ev, ev)
+    check("it carries an unresolved count for the badge",
+          isinstance(ev.get("unresolved"), int), ev)
+    # Distinct from the audit log on purpose: audit is what the operator did,
+    # events are what the system did on its own.
+    st_a, aud = adm("GET", "/audit")
+    check("events are not just the audit log again",
+          set(ev.get("events", [{}])[0].keys()) != set(
+              (aud.get("entries") or [{}])[0].keys())
+          if ev.get("events") and aud.get("entries") else True, (ev, aud))
+
 finally:
     H.shutdown()
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")

@@ -49,17 +49,27 @@ func main() {
 		err = cmdStatus()
 	case "connect":
 		region, exitRegion := "zur", ""
-		// Parse positional region and --exit <region>
+		// killSwitch is a tri-state: unset means "keep whatever was chosen
+		// last time". A safety setting that silently switches itself off
+		// because the flag was not repeated is worse than not having one.
+		var killSwitch *bool
 		for i := 0; i < len(args); i++ {
 			a := args[i]
-			if a == "--exit" && i+1 < len(args) {
+			switch {
+			case a == "--exit" && i+1 < len(args):
 				exitRegion = args[i+1]
 				i++
-			} else if !strings.HasPrefix(a, "--") {
+			case a == "--kill-switch":
+				t := true
+				killSwitch = &t
+			case a == "--no-kill-switch":
+				f := false
+				killSwitch = &f
+			case !strings.HasPrefix(a, "--"):
 				region = a
 			}
 		}
-		err = cmdConnect(region, exitRegion)
+		err = cmdConnect(region, exitRegion, killSwitch)
 	case "rotate":
 		err = cmdRotate()
 	case "devices":
@@ -110,6 +120,8 @@ COMMANDS
   status                         Show subscription + tunnel state
   regions                        List available mesh regions
   connect [region] [--exit r]    Bring up the tunnel
+        [--kill-switch]          Block any traffic outside the tunnel (sticky)
+        [--no-kill-switch]       Turn that back off
                                    region:  entry region (default: zur)
                                    --exit:  enable multi-hop; exit region
   rotate                         Rotate to a fresh entry/exit pair
@@ -234,7 +246,12 @@ func cmdStatus() error {
 	return nil
 }
 
-func cmdConnect(region, exitRegion string) error {
+// How long to wait for a peer to answer before telling the user the tunnel is
+// not working. WireGuard retries a handshake every 5s, so 15s is three
+// attempts — long enough for a slow link, short enough not to feel hung.
+const handshakeTimeout = 15 * time.Second
+
+func cmdConnect(region, exitRegion string, killSwitch *bool) error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
@@ -286,6 +303,13 @@ func cmdConnect(region, exitRegion string) error {
 		}
 	}
 
+	if killSwitch != nil && *killSwitch != st.KillSwitch {
+		st.KillSwitch = *killSwitch
+		if err := st.Save(); err != nil {
+			return err
+		}
+	}
+
 	if resp != nil && len(resp.Peers) > 0 {
 		st.InterfaceIP = resp.InterfaceIP
 		st.EntryRegion = region
@@ -295,16 +319,37 @@ func cmdConnect(region, exitRegion string) error {
 			return err
 		}
 
-		cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers)
+		cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers,
+			wg.OptionsFor(st.KillSwitch)...)
 		path, err := wg.WriteConfig(cfg)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("→ config written to %s\n", path)
+		if st.KillSwitch {
+			if wg.KillSwitchSupported() {
+				fmt.Println("→ kill switch ON — traffic outside the tunnel is blocked,")
+				fmt.Println("  including your local network. Turn it off with:")
+				fmt.Println("  sudo 0trust connect --no-kill-switch")
+			} else {
+				// Saying nothing here would let someone believe a setting
+				// they explicitly turned on is protecting them.
+				fmt.Println("⚠ kill switch requested but NOT available on this platform")
+				fmt.Println("  (macOS: wg-quick drives pf, not iptables — see docs)")
+			}
+		}
 
 		if resp.Multihop {
 			fmt.Printf("→ multi-hop:  entry=%s  exit=%s\n", resp.EntryNode, resp.ExitNode)
-			fmt.Printf("              entry never decrypts; exit never sees your IP\n")
+			if resp.SameHost {
+				// A single-VPS test deployment: three region codes, one
+				// machine. The route is real, so this is worth testing, but
+				// printing the privacy claim here would be a plain lie.
+				fmt.Printf("              ⚠ entry and exit are the SAME host — this is a\n")
+				fmt.Printf("                test deployment. Routing works; nothing is hidden.\n")
+			} else {
+				fmt.Printf("              entry never decrypts; exit never sees your IP\n")
+			}
 			for _, p := range resp.Peers {
 				fmt.Printf("              relay endpoint  %s\n", p.Endpoint)
 			}
@@ -313,7 +358,7 @@ func cmdConnect(region, exitRegion string) error {
 					time.Unix(resp.ExpiresAt, 0).Format("2006-01-02 15:04 MST"))
 			}
 		} else {
-			fmt.Printf("→ entry nodes:\n")
+			fmt.Printf("→ exit node:\n")
 			for _, p := range resp.Peers {
 				fmt.Printf("    %s  %s\n", p.ID, p.Endpoint)
 			}
@@ -323,7 +368,40 @@ func cmdConnect(region, exitRegion string) error {
 	if err := wg.Up(); err != nil {
 		return fmt.Errorf("wg-quick up: %w", err)
 	}
-	fmt.Println("✓ tunnel up")
+
+	// Bringing the interface up proves nothing. wg-quick configures a device
+	// and returns; it never contacts the node. Reporting success here told the
+	// user they were protected whether or not a single packet could get
+	// through — and because AllowedIPs captures the default route, the way
+	// they found out was that their internet stopped working.
+	hs, err := wg.WaitForHandshake(handshakeTimeout)
+	if err != nil {
+		// Could not ask (no wg binary, odd platform). Say so rather than
+		// claiming either outcome.
+		fmt.Println("⚠ tunnel configured, but the handshake could not be verified")
+		fmt.Printf("  %v\n", err)
+		fmt.Println("  check it yourself with: 0trust status")
+		return nil
+	}
+	if hs.IsZero() {
+		fmt.Printf("✗ no handshake after %s — the tunnel is NOT carrying traffic\n",
+			handshakeTimeout)
+		fmt.Println()
+		fmt.Println("  The interface is up and still holds the default route, so")
+		fmt.Println("  traffic is being dropped rather than leaking in the clear.")
+		fmt.Println("  That is deliberate. To get back online either fix this or")
+		fmt.Println("  run: sudo 0trust disconnect")
+		fmt.Println()
+		fmt.Println("  Most likely causes, in order:")
+		fmt.Println("    - UDP is blocked on this network (hotel/corporate wifi).")
+		fmt.Println("      Try a different region, or multi-hop, which uses a")
+		fmt.Println("      different port: sudo 0trust connect zur --exit rey")
+		fmt.Println("    - the node is down — check https://0trustvpn.com/status")
+		fmt.Println("    - the subscription lapsed: 0trust status")
+		return fmt.Errorf("tunnel up but no handshake")
+	}
+	fmt.Printf("✓ tunnel up — handshake %s ago\n",
+		time.Since(hs).Round(time.Second))
 	return nil
 }
 
@@ -363,7 +441,8 @@ func cmdRotate() error {
 		return err
 	}
 
-	cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers)
+	cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers,
+		wg.OptionsFor(st.KillSwitch)...)
 
 	// If the tunnel is up, hot-swap peers in-place. If it's down, just
 	// write the new config — next `connect` picks it up.

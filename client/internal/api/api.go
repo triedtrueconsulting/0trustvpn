@@ -113,6 +113,11 @@ type RegisterResp struct {
 	EntryNode   string   `json:"entry_node"`
 	ExitNode    string   `json:"exit_node"`
 	ExpiresAt   int64    `json:"expires_at"`
+	// SameHost is set when the control plane resolved entry and exit to the
+	// same machine — a single-VPS test deployment. The route is real; the
+	// privacy property multi-hop exists for is not, and the client says so
+	// rather than printing the usual claim.
+	SameHost bool `json:"same_host"`
 }
 
 // --- Calls ---

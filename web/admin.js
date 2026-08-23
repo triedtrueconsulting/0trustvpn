@@ -154,12 +154,15 @@ function loadTab(name) {
     (p) => p.classList.toggle('hidden', p.dataset.panel !== name));
   ({ overview: loadOverview, accounts: loadAccounts, nodes: loadNodes,
      payments: loadPayments, notices: loadNotices, settings: loadSettings,
-     audit: loadAudit }[name] || (() => {}))();
+     events: loadEvents, audit: loadAudit }[name] || (() => {}))();
 }
 
 /* --- overview ------------------------------------------------------------ */
 async function loadOverview() {
   const d = await api('/overview');
+  // Refresh the badge whenever the dashboard is opened, so bad news is
+  // visible from the first screen rather than only inside its own tab.
+  api('/events?limit=1').then((e) => paintEventsBadge(e.unresolved)).catch(() => {});
   const a = d.accounts, r = d.revenue;
   const stats = [
     ['Active', a.active, 'good'], ['On trial', a.trial, ''],
@@ -417,13 +420,15 @@ const GROUP_LABELS = {
   payments: 'Active provider', btcpay: 'BTCPay Server',
   hosted: 'Hosted crypto gateway', stripe: 'Stripe (cards)',
   square: 'Square (cards)', wallets: 'Business wallets',
-  chain: 'Public chain endpoints', trial: 'Free trial', other: 'Other',
+  chain: 'Public chain endpoints', trial: 'Free trial', ops: 'Operations',
+  other: 'Other',
 };
 const GROUP_NOTES = {
   wallets: 'Where funds actually land. Used by whichever provider is configured to pay out to your own addresses.',
   chain: 'Whose node we borrow. This deployment never syncs a chain locally — these name public endpoints for the providers that consult them.',
   stripe: 'Cards mean a real identity behind every payment, and a processor that can reverse one. See privacy.html before enabling.',
   square: 'Same trade-off as Stripe: identity behind the card, reversible payments, a third party in the middle.',
+  ops: 'Where node-down and disk alerts get pushed. Any endpoint that takes a JSON POST — Slack, ntfy, Discord, your own. Leave it blank and events still appear under Events; the webhook is only a nudge.',
 };
 
 async function loadSettings() {
@@ -433,7 +438,7 @@ async function loadSettings() {
     (groups[spec.group] ||= []).push([key, spec]);
   }
   const order = ['payments', 'wallets', 'chain', 'btcpay', 'hosted', 'stripe',
-                 'square', 'trial', 'other'];
+                 'square', 'trial', 'ops', 'other'];
   const container = $('settings-groups');
   container.replaceChildren(...order.filter((g) => groups[g]).map((g) =>
     el('div', { class: 'set-group' }, [
@@ -488,6 +493,32 @@ $('pw-form').addEventListener('submit', async (e) => {
   } catch (err) { toast(err.message, true); }
 });
 
+/* --- operational events --------------------------------------------------- */
+async function loadEvents() {
+  const d = await api('/events?limit=200');
+  $('events-webhook').textContent = d.webhook_configured
+    ? 'A webhook is configured; new events are pushed to it as well.'
+    : 'No webhook configured — set one under Settings → Operations to be told '
+      + 'about these without opening the dashboard.';
+  $('events-list').replaceChildren(
+    d.events.length
+      ? table(['When', 'Severity', 'Kind', 'Subject', 'Detail'],
+          d.events.map((x) => [
+            fmtTime(x.created_at), x.severity, x.kind, x.subject || '',
+            x.detail || '']))
+      : el('p', { class: 'note', text: 'Nothing has gone wrong yet.' }));
+  paintEventsBadge(d.unresolved);
+}
+
+// The badge is the whole point: an operator who has to open a tab to find out
+// something broke will find out from a customer instead.
+function paintEventsBadge(n) {
+  const b = $('events-badge');
+  if (!b) return;
+  b.textContent = n > 99 ? '99+' : String(n);
+  b.classList.toggle('hidden', !n);
+}
+
 /* --- audit --------------------------------------------------------------- */
 async function loadAudit() {
   const d = await api(`/audit?limit=200&action=${encodeURIComponent($('audit-filter').value.trim())}`);
@@ -497,6 +528,7 @@ async function loadAudit() {
       d.entries.map((x) => [
         fmtTime(x.at), x.username, x.action, short(x.target, 30), x.detail || ''])));
 }
+$('events-refresh').addEventListener('click', loadEvents);
 $('audit-refresh').addEventListener('click', loadAudit);
 $('audit-filter').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadAudit(); });
 

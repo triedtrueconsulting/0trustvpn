@@ -119,6 +119,37 @@ try:
               page.inner_text("#kv-dev").strip().startswith("1"),
               page.inner_text("#kv-dev"))
 
+        print("\n[3b] the kill switch is reachable without the CLI")
+        # A safety control that only exists as a command-line flag is one most
+        # customers will never turn on.
+        check("kill-switch toggle is present", page.is_visible("#ks-toggle"))
+        check("it starts off", page.is_checked("#ks-toggle") is False)
+        hint = page.inner_text("#ks-hint")
+        check("the off state says what that means",
+              "falls back" in hint or "not available" in hint.lower(), hint)
+        if not page.is_disabled("#ks-toggle"):
+            page.check("#ks-toggle")
+            page.wait_for_function(
+                "() => document.getElementById('ks-label').textContent === 'on'",
+                timeout=8000)
+            check("turning it on sticks", page.is_checked("#ks-toggle"))
+            # The rules are wg-quick PostUp/PreDown, so they land on the next
+            # connect. Tearing a live tunnel down under someone who ticked a
+            # box would be a worse surprise than the delay.
+            check("and it says the running tunnel is not covered yet",
+                  "next time you connect" in page.inner_text("#ks-hint"),
+                  page.inner_text("#ks-hint"))
+            # The message has to survive the 3s poll repainting the panel.
+            page.wait_for_timeout(3500)
+            check("and keeps saying so after the next poll",
+                  "next time you connect" in page.inner_text("#ks-hint"),
+                  page.inner_text("#ks-hint"))
+            page.uncheck("#ks-toggle")
+            page.wait_for_function(
+                "() => document.getElementById('ks-label').textContent === 'off'",
+                timeout=8000)
+            check("and off again", page.is_checked("#ks-toggle") is False)
+
         print("\n[4] device manager lists and removes")
         page.click("#devices-btn")
         page.wait_for_selector("#devices-modal:not(.hidden)", timeout=15000)

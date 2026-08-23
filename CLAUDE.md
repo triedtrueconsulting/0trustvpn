@@ -163,9 +163,33 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   public IP is a DNS-amplification abuse report waiting to happen), forwarding
   to `ZTV_DNS_UPSTREAM` (Quad9 by default). **Query logging must stay off** —
   privacy.html §4d and `audit-verify.sh`'s `node-dns-no-query-log` both say so.
+- **One peer per config, never a list.** WireGuard's AllowedIPs is a routing
+  table: a second peer claiming `0.0.0.0/0` takes that prefix off the first.
+  Handing the client three "for failover" left one working peer, two inert
+  ones, an API naming a node it was not using, and the customer's key in three
+  nodes' manifests. `_pick_node` returns exactly one — live before stale,
+  roomiest first (`capacity` minus assigned devices, not the declared number),
+  requested region preferred between two live nodes. Failover is the client
+  reconnecting after its handshake check fails.
+- **`0trust connect` proves the tunnel works before saying so.** `wg-quick up`
+  never contacts the node, so its exit code means nothing. The client waits for
+  a handshake and, if none arrives, says the tunnel is NOT carrying traffic and
+  exits non-zero — leaving the interface up, because it still holds the default
+  route and dropping traffic beats leaking it.
+- **Kill switch is opt-in, sticky, and Linux-only.** `--kill-switch` writes
+  wg-quick `PostUp`/`PreDown` iptables rules; `PreDown` must always end in
+  `|| true` or a failed teardown strands the user offline. Windows needs
+  nothing (WireGuard for Windows does it natively when AllowedIPs covers both
+  families); macOS is unsupported and the client says so rather than pretending.
+- **`ops_events` never holds customer data.** Node ids, provider names, counts
+  and infrastructure detail only. It is the single table that keeps a running
+  narrative of the system's state over time, so an account id in it turns it
+  into the activity log privacy.html denies keeping. Alerts fire on
+  *transitions*, not states, or the operator gets an hourly stream and silence
+  stops meaning anything.
 - **The GUI is browser-based, not native.** `0trust gui` runs a localhost web
   server; it's the same code on all 3 desktop OSes. No system tray (v0.2 —
-  systray libs were blocked in the original build env). No kill switch (v0.2).
+  systray libs were blocked in the original build env).
 
 ## Build & validation commands
 
@@ -297,8 +321,8 @@ encrypted DB backup + DR runbook, abuse/DMCA runbook, legal pages
 5. Commission a third-party audit (Cure53 / Assured AB) — the audit pack is
    built to be their starting point.
 
-**Explicit v0.2 backlog:** system tray icon, kill switch, native desktop
-window, branded iOS app, APT repo for auto-updates.
+**Explicit v0.2 backlog:** system tray icon, native desktop window, branded
+iOS app, APT repo for auto-updates, a macOS kill switch (pf, not iptables).
 
 ## Conventions
 

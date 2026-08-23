@@ -63,6 +63,7 @@ func Serve(openBrowser bool) error {
 	mux.HandleFunc("/api/devices/remove", handleRemoveDevice)
 	mux.HandleFunc("/api/trial", handleTrial)
 	mux.HandleFunc("/api/config", handleConfig)
+	mux.HandleFunc("/api/killswitch", handleKillSwitch)
 
 	srv := &http.Server{
 		Addr:         ListenAddr,
@@ -182,6 +183,10 @@ type StateView struct {
 	EntryRegion  string `json:"entry_region,omitempty"`
 	ExitRegion   string `json:"exit_region,omitempty"`
 	HopExpiresAt int64  `json:"hop_expires_at,omitempty"`
+	// No omitempty: the page renders a switch from this, and a missing field
+	// would draw it "off" whatever the real setting is.
+	KillSwitch          bool `json:"kill_switch"`
+	KillSwitchSupported bool `json:"kill_switch_supported"`
 }
 
 // The browser polls /api/state every 3s to keep the tunnel indicator live.
@@ -235,6 +240,9 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 		EntryRegion:  st.EntryRegion,
 		ExitRegion:   st.ExitRegion,
 		HopExpiresAt: st.ExpiresAt,
+
+		KillSwitch:          st.KillSwitch,
+		KillSwitchSupported: wg.KillSwitchSupported(),
 	}
 	if st.Token != "" {
 		view.Token = maskToken(st.Token)
@@ -380,7 +388,8 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers)
+	cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers,
+		wg.OptionsFor(st.KillSwitch)...)
 	if _, err := wg.WriteConfig(cfg); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -458,7 +467,8 @@ func handleRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers)
+	cfg := wg.BuildConfig(st.PrivateKey, resp.InterfaceIP, resp.DNS, resp.Peers,
+		wg.OptionsFor(st.KillSwitch)...)
 	if wg.IsUp() {
 		if err := wg.SyncConfig(cfg); err != nil {
 			writeErr(w, 500, err.Error())
@@ -732,6 +742,46 @@ func handleTrial(w http.ResponseWriter, r *http.Request) {
 	}
 	invalidateStatus()
 	writeJSON(w, 200, out)
+}
+
+// handleKillSwitch flips the persisted kill-switch setting.
+//
+// It deliberately does NOT rewrite the live tunnel. The rules go in as
+// wg-quick PostUp/PreDown, so they are applied when the interface comes up;
+// changing them under a running tunnel would mean tearing it down and back
+// up, and doing that silently to someone who just clicked a checkbox is how
+// you drop their connection mid-download. The page says it applies on the
+// next connect, and it means it.
+func handleKillSwitch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		writeErr(w, 400, "malformed request")
+		return
+	}
+	if body.Enabled && !wg.KillSwitchSupported() {
+		writeErr(w, 400, "the kill switch is not available on this platform")
+		return
+	}
+	st, err := config.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	st.KillSwitch = body.Enabled
+	if err := st.Save(); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok": true, "kill_switch": st.KillSwitch,
+		"applies": "next connect",
+	})
 }
 
 // handleConfig passes the control plane's public config through to the page.

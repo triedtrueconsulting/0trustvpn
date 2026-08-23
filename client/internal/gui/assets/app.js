@@ -4,6 +4,10 @@
 
 const $ = (id) => document.getElementById(id);
 
+// True when the kill-switch setting has changed under a tunnel that is
+// already up, so the running tunnel does not yet reflect it.
+let ksPending = false;
+
 let state = null;
 let pollHandle = null;
 
@@ -31,6 +35,33 @@ function render() {
   $('view-login').classList.toggle('hidden', loggedIn);
   $('view-main').classList.toggle('hidden', !loggedIn);
   if (!loggedIn) return;
+
+  // Kill switch. Rendered from state every poll so it can never drift from
+  // what the client will actually write on the next connect. ksPending
+  // carries the one thing state cannot tell us — that the running tunnel was
+  // built before the setting changed, so the change is not in force yet.
+  const ks = $('ks-toggle'), ksLabel = $('ks-label'), ksHint = $('ks-hint');
+  if (ks) {
+    ks.checked = !!state.kill_switch;
+    ks.disabled = !state.kill_switch_supported;
+    ksLabel.textContent = state.kill_switch ? 'on' : 'off';
+    if (!state.kill_switch_supported) {
+      ksHint.textContent =
+        'Not available on this platform — wg-quick here drives pf, not iptables.';
+    } else if (state.kill_switch) {
+      ksHint.textContent =
+        'Traffic outside the tunnel is blocked, including your local network.';
+    } else {
+      ksHint.textContent =
+        'If the tunnel drops, traffic falls back to your normal connection.';
+    }
+    if (ksPending) {
+      // The rules go in as wg-quick PostUp/PreDown, so they land when the
+      // interface next comes up. Someone who ticked the box and saw nothing
+      // else would reasonably assume they were already covered.
+      ksHint.textContent += ' Not in force yet — applies the next time you connect.';
+    }
+  }
 
   // Status block
   const light = $('status-light');
@@ -212,6 +243,7 @@ $('toggle-btn').addEventListener('click', async () => {
         exit_region: $('exit-select').value,
       };
       const r = await api('/api/connect', { method: 'POST', body: JSON.stringify(body) });
+      ksPending = false;   // this tunnel was built with the current setting
       toast(r.multihop ? `Connected — multi-hop via ${r.entry_node} → ${r.exit_node}` : 'Connected');
     }
     await refresh();
@@ -394,6 +426,34 @@ $('devices-btn').addEventListener('click', async () => {
 });
 $('devices-close').addEventListener('click', () => {
   $('devices-modal').classList.add('hidden');
+});
+
+// ---------------------------------------------------------------------------
+// Kill switch
+// ---------------------------------------------------------------------------
+
+$('ks-toggle').addEventListener('change', async (e) => {
+  const want = e.target.checked;
+  const hint = $('ks-hint');
+  e.target.disabled = true;
+  try {
+    await api('/api/killswitch', {
+      method: 'POST', body: JSON.stringify({ enabled: want }),
+    });
+    // Tearing a live tunnel down under someone who ticked a box is not a
+    // thing to do quietly, so the change waits for the next connect — and
+    // the page has to keep saying so, not just once before the next poll
+    // repaints over it.
+    ksPending = !!(state && state.tunnel_up);
+    toast(want ? 'Kill switch enabled' : 'Kill switch disabled');
+  } catch (err) {
+    e.target.checked = !want;
+    ksPending = false;
+    hint.textContent = err.message;
+  } finally {
+    e.target.disabled = false;
+    await refresh();
+  }
 });
 
 // ---------------------------------------------------------------------------

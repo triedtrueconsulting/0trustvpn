@@ -45,12 +45,14 @@ CLI_ENV = {
     "PATH": os.path.join(EMU, "bin") + ":" + os.environ["PATH"],
     "STUB_LOG": os.path.join(TMP, "stub.log"),
     "STUB_STATE": TMP,
-    "WG_CONFIG_DIR": TMP,
+    # Keep the real binary's config writes inside the temp dir. Without this
+    # the suite writes into the host's /etc/wireguard when run as root.
+    "ZTV_WG_CONFIG_DIR": TMP,
 }
 
-def cli(*args, stdin=None):
-    r = subprocess.run([BIN, *args], env=CLI_ENV, capture_output=True,
-                       text=True, input=stdin, timeout=60)
+def cli(*args, stdin=None, env=None):
+    r = subprocess.run([BIN, *args], env={**CLI_ENV, **(env or {})},
+                       capture_output=True, text=True, input=stdin, timeout=90)
     return r.returncode, (r.stdout + r.stderr)
 
 try:
@@ -85,6 +87,53 @@ try:
         rc, out = cli("connect", "zur")
         check("first connect succeeds", rc == 0, out)
         check("wrote a wg config", "config written" in out, out)
+
+        # `wg-quick up` configures an interface and returns; it never talks to
+        # the node. Reporting success on its exit code told the user they were
+        # protected whether or not anything got through — and since AllowedIPs
+        # captures the default route, the symptom is "my internet broke".
+        check("connect reports a verified handshake",
+              "handshake" in out and "✓" in out, out)
+
+        print("\n[3b] a node that never answers must not be reported as working")
+        rc, out = cli("connect", "zur", env={"STUB_NO_HANDSHAKE": "1"})
+        check("connect exits non-zero when no handshake arrives", rc != 0, out)
+        check("and says the tunnel is not carrying traffic",
+              "NOT carrying traffic" in out, out)
+        # Leaving the interface up is deliberate: it still holds the default
+        # route, so traffic is dropped instead of leaking in the clear.
+        check("it explains that traffic is dropped, not leaked",
+              "dropped rather than leaking" in out, out)
+        check("and tells the user how to get back online",
+              "0trust disconnect" in out, out)
+        check("and suggests what usually causes it",
+              "UDP is blocked" in out, out)
+
+        print("\n[3c] the kill switch is off unless asked for, and sticky once asked")
+        rc, out = cli("connect", "zur")
+        cfg_path = os.path.join(TMP, "0trust0.conf")
+        check("the client wrote its config where we told it to",
+              os.path.exists(cfg_path), sorted(os.listdir(TMP)))
+        conf = open(cfg_path).read()
+        check("no kill-switch rules by default", "PostUp" not in conf, conf[:300])
+        rc, out = cli("connect", "zur", "--kill-switch")
+        check("--kill-switch succeeds", rc == 0, out)
+        conf = open(cfg_path).read()
+        check("kill-switch rules are written", "PostUp = iptables" in conf, conf[:400])
+        check("PreDown cannot fail and strand the user",
+              all(l.endswith("|| true")
+                  for l in conf.splitlines() if l.startswith("PreDown")), conf[:400])
+        check("the client says the local network is blocked too",
+              "including your local network" in out, out)
+        # A safety setting that turns itself off because you did not repeat
+        # the flag is not a safety setting.
+        rc, out = cli("connect", "zur")
+        conf = open(cfg_path).read()
+        check("the setting sticks across a plain reconnect",
+              "PostUp = iptables" in conf, conf[:400])
+        rc, out = cli("connect", "zur", "--no-kill-switch")
+        conf = open(cfg_path).read()
+        check("--no-kill-switch turns it back off", "PostUp" not in conf, conf[:400])
 
         print("\n[4] SECOND connect — the bug that used to 500")
         rc2, out2 = cli("connect", "zur")

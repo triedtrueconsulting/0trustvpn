@@ -288,9 +288,77 @@ a:hover { text-decoration: underline; }
       (<code>--exit</code>) to compare.
     </p>
     <p>
-      Real bottlenecks we've seen: ISP throttling of WireGuard on UDP/51820
-      (try <code>0trust connect --port 443</code> if available), or
-      MTU issues (some carrier networks fragment WireGuard packets badly).
+      Real bottlenecks we&rsquo;ve seen: ISP throttling of WireGuard on
+      UDP/51820, and MTU problems (some carrier networks fragment WireGuard
+      packets badly). Multi-hop uses a port in the 52000&ndash;59999 range
+      rather than 51820, so <code>0trust connect zur --exit rey</code> is
+      worth trying on a network that appears to single out the default port.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>It says &ldquo;no handshake &mdash; the tunnel is NOT carrying
+      traffic&rdquo;.</h3>
+    <p>
+      The tunnel interface came up, but the node never answered, so nothing is
+      getting through. We tell you rather than printing a tick, because the
+      alternative is believing you are protected while you are not.
+    </p>
+    <p>
+      We deliberately leave the interface up. It still holds your default
+      route, so traffic is dropped instead of quietly going out in the clear.
+      That is why the internet looks broken rather than merely unprotected.
+      To get back online, fix the cause or run
+      <code>sudo 0trust disconnect</code>.
+    </p>
+    <p>
+      Usual causes, in order: the network blocks UDP (common on hotel and
+      corporate wifi) &mdash; try multi-hop, which uses a different port range;
+      the node is down &mdash; check <a href="/status">the status page</a>; or
+      the subscription lapsed &mdash; <code>0trust status</code>.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>Is there a kill switch?</h3>
+    <p>
+      On Linux and Windows, yes. <code>sudo 0trust connect --kill-switch</code>
+      blocks any traffic that is not going through the tunnel, so if the tunnel
+      drops your connection stops rather than silently falling back to your
+      normal one. The desktop app has a toggle for the same setting. It is
+      sticky &mdash; you do not have to repeat the flag &mdash; and
+      <code>--no-kill-switch</code> turns it off.
+    </p>
+    <p>
+      It blocks your <strong>local network too</strong>: printers, NAS boxes
+      and casting to a TV will stop working while it is on. That is what a
+      strict kill switch means, and we would rather say so than surprise you.
+    </p>
+    <p>
+      On Windows the official WireGuard service does this itself whenever the
+      tunnel carries all traffic, which ours does, so it is already on.
+      <strong>On macOS we do not have one.</strong> wg-quick there drives pf
+      rather than iptables, and we would rather ship nothing than ship a
+      setting that looks enabled and is not. The client tells you if you ask
+      for it on a platform where it does nothing.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3>What about IPv6 and DNS leaks?</h3>
+    <p>
+      Your tunnel claims both <code>0.0.0.0/0</code> and <code>::/0</code>, so
+      IPv6 cannot route around us on a dual-stack network. We do not currently
+      carry IPv6 <em>inside</em> the tunnel, so v6 traffic is dropped rather
+      than forwarded &mdash; the effect is that IPv6-only sites will not load
+      while connected. We chose failing closed over leaking.
+    </p>
+    <p>
+      DNS goes to a resolver that only exists inside the tunnel, on the exit
+      node carrying your traffic. It keeps no query log. See
+      <a href="/privacy">the privacy policy, section 4d</a> for what that
+      resolver does and does not know, including the upstream we forward to
+      and cannot audit for you.
     </p>
   </div>
 

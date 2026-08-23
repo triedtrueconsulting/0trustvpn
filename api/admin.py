@@ -40,6 +40,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+import ops_alerts
 import settings_store as st
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -942,6 +943,28 @@ def withdraw_notice(notice_id: int, admin: dict = Depends(csrf_guard)):
 # ---------------------------------------------------------------------------
 # Audit log
 # ---------------------------------------------------------------------------
+
+@router.get("/events")
+def get_events(limit: int = 100, hours: int = 168,
+               admin: dict = Depends(current_admin)):
+    """
+    Operational events: what broke, and when.
+
+    Distinct from /audit, which records what an operator did. This is what the
+    system did on its own — a node going dark, a payment provider refusing to
+    answer, the disk filling up. Before it existed, the only way to learn a
+    node had died was to notice the status page had gone amber.
+    """
+    limit = max(1, min(limit, 500))
+    since = int(time.time()) - max(1, min(hours, 24 * 90)) * 3600
+    with _db() as conn:
+        return {
+            "events": ops_alerts.recent(conn, limit=limit, since=since),
+            "unresolved": ops_alerts.unresolved_count(conn),
+            "webhook_configured": bool(
+                os.environ.get(ops_alerts.WEBHOOK_URL, "").strip()),
+        }
+
 
 @router.get("/audit")
 def get_audit(limit: int = 100, offset: int = 0, action: str = "",

@@ -126,6 +126,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
     install -o 0trust -g 0trust -m 0644 \
         "$REPO_DIR/api/main.py" "$REPO_DIR/api/payments.py" \
         "$REPO_DIR/api/admin.py" "$REPO_DIR/api/settings_store.py" \
+        "$REPO_DIR/api/ops_alerts.py" \
         "$REPO_DIR/api/btcpay.py" "$REPO_DIR/api/sweep.py" \
         "$REPO_DIR/api/requirements.txt" \
         "$PREFIX/api/"

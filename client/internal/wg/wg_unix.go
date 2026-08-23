@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Up brings the tunnel up. Requires root.
@@ -71,4 +72,21 @@ func run(name string, args ...string) (string, error) {
 		return "", fmt.Errorf("%s %s: %s", name, strings.Join(args, " "), stderr.String())
 	}
 	return stdout.String(), nil
+}
+
+// LatestHandshake returns the most recent successful handshake across all
+// peers, or the zero time if none has happened yet.
+//
+// `wg-quick up` configures an interface; it does not talk to anybody. So it
+// succeeds whether or not the node is reachable, and a client that reports
+// success on its exit code tells the user they are protected when the tunnel
+// may be carrying nothing. With AllowedIPs capturing the default route, the
+// visible symptom is "my internet is broken", which is the worst way to find
+// out. A handshake is the only proof the tunnel actually works.
+func LatestHandshake() (time.Time, error) {
+	out, err := run("wg", "show", ifname, "latest-handshakes")
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parseLatestHandshake(out), nil
 }

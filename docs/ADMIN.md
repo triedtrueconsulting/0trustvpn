@@ -79,6 +79,24 @@ there is no copy left behind advertising the old length. `/surf` runs as its
 own service and caches the answer for five minutes, so its banner catches up
 within that window.
 
+**Events** — what the system did on its own, as opposed to what you did. A
+node that stopped heartbeating and was taken out of rotation, the same node
+coming back, the database filesystem running low. The tab carries a badge so
+bad news is visible from the first screen.
+
+Set **Alert webhook URL** under Settings → Operations and new events are also
+POSTed there as JSON. Any endpoint that accepts one works — a Slack incoming
+webhook, ntfy, Discord, your own handler. There is no email alerting, for the
+same reason there is no email anywhere else here. A failed delivery is not
+retried: a queue that grows through an outage and then floods the channel on
+recovery is worse than a missed ping, and the event stays in this tab either
+way.
+
+Nothing in this table identifies a customer, and nothing that does may be
+added to it. It is the one place the product keeps a running narrative of its
+own state over time; an account id in it would turn that into the activity log
+privacy.html says does not exist. A test asserts it.
+
 **Audit** — every mutation, with who and when. Secret *values* are never
 recorded, only which keys changed.
 
