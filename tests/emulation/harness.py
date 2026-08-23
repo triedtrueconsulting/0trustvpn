@@ -6,18 +6,49 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 EMU  = os.path.dirname(os.path.abspath(__file__))
 RUN  = os.path.join(EMU, "run")
 
-API_PORT     = 8099
-BTCPAY_PORT  = 8098
+def pick_port() -> int:
+    """
+    An unused port, chosen by the kernel.
+
+    Fixed ports made modules interfere: whatever was still listening from an
+    adjacent module answered the next one's requests, and the suite failed
+    intermittently in a way that looked like a product bug. Asking for :0 and
+    reading back what we got removes the class entirely.
+    """
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+API_PORT     = pick_port()
+BTCPAY_PORT  = pick_port()
 API          = f"http://127.0.0.1:{API_PORT}"
+
+# The fake BTCPay / gateway / card servers read CONTROL_URL at import time to
+# learn where the control plane is. Set it here, before any test imports them
+# in-process, so a signed callback fired from the test process reaches the API
+# we actually booted. With fixed ports this worked by accident; with kernel-
+# chosen ones the stale default is simply a refused connection.
+os.environ["CONTROL_URL"] = API
 WEBHOOK_SEC  = "test-webhook-secret"
 NODE_PSK     = "global-node-psk"
 
 _procs = []
 
 
-def free_port_wait(port, timeout=25):
+def free_port_wait(port, timeout=25, proc=None):
+    """
+    Wait for something to listen on `port`.
+
+    Pass `proc` and it also fails fast if that process died — otherwise a
+    server that crashed on startup shows up as a 25-second hang followed by a
+    confusing downstream error.
+    """
     end = time.time() + timeout
     while time.time() < end:
+        if proc is not None and proc.poll() is not None:
+            return False
         with socket.socket() as s:
             if s.connect_ex(("127.0.0.1", port)) == 0:
                 return True
@@ -36,13 +67,22 @@ def env_for_api(db):
         NODE_API_PSK=NODE_PSK,
         PYTHONUNBUFFERED="1",
     )
+    # Carry across payment/admin configuration a test has set on this process.
+    for k, v in os.environ.items():
+        if k.startswith(("ZTV_PAYMENT_", "STRIPE_", "SQUARE_", "ZTV_TRIAL_",
+                         "ZTV_ADMIN_", "WALLET_", "NODE_RPC_")):
+            e[k] = v
     return e
 
 
-def boot(db, workers=1, log_level="warning"):
+def boot(db, workers=1, log_level="warning", env_extra=None):
     os.makedirs(RUN, exist_ok=True)
     e = env_for_api(db)
     e["CONTROL_URL"] = API
+    # Providers read their configuration from the environment, and the API
+    # runs in its own process, so anything a test reconfigures has to be
+    # handed across rather than set in this one.
+    e.update({k: str(v) for k, v in (env_extra or {}).items()})
     py = sys.executable
     bt = subprocess.Popen([py, os.path.join(EMU, "fake_btcpay.py"), str(BTCPAY_PORT)],
                           env=e, stdout=open(f"{RUN}/btcpay.log", "w"), stderr=subprocess.STDOUT)
@@ -53,7 +93,7 @@ def boot(db, workers=1, log_level="warning"):
         cwd=os.path.join(REPO, "api"), env=e,
         stdout=open(f"{RUN}/api.log", "w"), stderr=subprocess.STDOUT)
     _procs.append(api)
-    if not free_port_wait(BTCPAY_PORT) or not free_port_wait(API_PORT):
+    if not free_port_wait(BTCPAY_PORT, proc=bt) or not free_port_wait(API_PORT, proc=api):
         dump_logs(); raise SystemExit("stack failed to boot")
     return api, bt
 

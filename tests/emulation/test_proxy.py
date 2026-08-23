@@ -18,8 +18,8 @@ def check(n, ok, d=""):
     (PASS if ok else FAIL).append(n)
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
-ORIGIN_PORT = 8097
-PROXY_PORT  = 8096
+ORIGIN_PORT = H.pick_port()
+PROXY_PORT  = H.pick_port()
 
 PAGE = """<!doctype html><html><head><title>Origin</title>
 <link rel="stylesheet" href="/style.css">

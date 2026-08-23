@@ -119,6 +119,7 @@ log "Installing application code"
 if [[ $DRY_RUN -eq 0 ]]; then
     install -o 0trust -g 0trust -m 0644 \
         "$REPO_DIR/api/main.py" "$REPO_DIR/api/payments.py" \
+        "$REPO_DIR/api/admin.py" "$REPO_DIR/api/settings_store.py" \
         "$REPO_DIR/api/btcpay.py" "$REPO_DIR/api/sweep.py" \
         "$REPO_DIR/api/requirements.txt" \
         "$PREFIX/api/"
@@ -295,6 +296,30 @@ render_common_locations() {
     }
 
     location = /trial   { try_files /trial.html =404; }
+
+    # --- Operations dashboard ---
+    # Restricted by default. This page can ban customers and move money, so it
+    # is the one part of the site that should not be reachable from the open
+    # internet. Replace the allow lines with your own address, or front it with
+    # a VPN or an SSH tunnel and leave it on 127.0.0.1.
+    location = /admin {
+        # allow 203.0.113.7;    # <- your address
+        # deny all;
+        try_files /admin.html =404;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-store" always;
+    }
+    location = /admin.css { try_files /admin.css =404; }
+    location = /admin.js  { try_files /admin.js  =404; }
+    location /api/v1/admin/ {
+        # allow 203.0.113.7;    # <- same restriction as the page itself
+        # deny all;
+        limit_req zone=admin burst=20 nodelay;
+        proxy_pass http://127.0.0.1:8080;
+        include /etc/nginx/snippets/0trust-proxy.conf;
+        add_header Cache-Control "no-store" always;
+    }
+
     location = /status  { try_files /status.html =404; }
     location = /download{ try_files /download.html =404; }
     location = /help    { try_files /help.html =404; }
@@ -311,6 +336,7 @@ limit_req_zone $binary_remote_addr zone=api:10m     rate=60r/m;
 limit_req_zone $binary_remote_addr zone=webhook:10m rate=120r/m;
 limit_req_zone $binary_remote_addr zone=surf:10m    rate=30r/m;
 limit_req_zone $binary_remote_addr zone=trial:10m   rate=3r/m;
+limit_req_zone $binary_remote_addr zone=admin:10m   rate=120r/m;
 limit_conn_zone $binary_remote_addr zone=surfconn:10m;
 ZONEEOF
 }
@@ -532,6 +558,7 @@ ${GRN}  Test deployment is up.${NC}
   Site        http://$IP/
   Free trial  http://$IP/trial
   Proxy       http://$IP/surf
+  Operations  http://$IP/admin      <- create the operator account here
   Status      http://$IP/api/v1/status/public
 
   ${YLW}This is a test box.${NC}
@@ -551,6 +578,13 @@ EOF
 else
     cat <<EOF
 ${GRN}  Production deployment is up at https://$DOMAIN${NC}
+
+  Operations dashboard: https://$DOMAIN/admin
+    Open it and create the first operator account. Until you do, anyone who
+    finds that URL can — so do it now, before anything else.
+    ${YLW}Restrict it.${NC} The nginx config has commented-out allow/deny lines
+    for /admin and /api/v1/admin/; put your own address in them, or keep the
+    dashboard behind a VPN. It can ban customers and change where money goes.
 
   Still to do before customers arrive:
     1. Payments — fill in $ETC/api.env, then: systemctl restart 0trust-api

@@ -35,17 +35,37 @@ path, reconcile them with whichever provider is actually configured.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import os
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Optional
 
-# The three chains we accept. XMR is the private default; BTC is the one
-# everyone already has; ZEC is here for shielded senders.
-CURRENCIES = ("BTC", "XMR", "ZEC")
+# The chains we accept. XMR is the private default; BTC is the one everyone
+# already has; ZEC is here for shielded senders; ETH because enough customers
+# hold nothing else.
+#
+# None of these requires us to run a node. Which is true for a different
+# reason per provider, and worth being precise about:
+#   btcpay  — the BTCPay instance holds the chain data. Point BTCPAY_URL at a
+#             hosted one and it is somebody else's disk.
+#   hosted  — the gateway does it all.
+#   stripe/square — no chain involved; these are card rails.
+# NODE_RPC_* settings name the public endpoints an operator wants used where
+# a provider consults them. We never sync a chain locally.
+CURRENCIES = ("BTC", "ETH", "XMR", "ZEC")
+
+# Card processors. Kept separate because they are a different product, not a
+# different coin: they need a real identity behind the card, they can reverse
+# a payment months later, and they are the one payment route that breaks the
+# "no name, no identity" property the rest of this system is built around.
+# Offering them is a business decision; web/privacy.html has to say so.
+CARD_PROVIDERS = ("stripe", "square")
 
 # Normalized invoice lifecycle, so main.py never sees provider vocabulary.
 SETTLED = "settled"
@@ -183,6 +203,18 @@ class BTCPayProvider:
             "Settled": SETTLED, "Complete": SETTLED, "Confirmed": SETTLED,
             "Expired": EXPIRED, "Invalid": INVALID,
         }.get(status, PENDING)
+
+    def health(self) -> tuple[bool, str]:
+        if not self.base_url:
+            return False, "BTCPAY_URL is not set"
+        if not self.store_id or not self.api_key:
+            return False, "Store ID or API key missing"
+        try:
+            _http("GET", f"{self.base_url}/api/v1/stores/{self.store_id}",
+                  self._headers(), None, self.timeout)
+            return True, f"BTCPay reachable at {self.base_url}"
+        except PaymentError as e:
+            return False, str(e)[:200]
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +354,23 @@ class HostedProvider:
         ).lower()
         return self.STATUS.get(status, PENDING)
 
+    def health(self) -> tuple[bool, str]:
+        if not self.base_url:
+            return False, "ZTV_PAYMENT_API_URL is not set"
+        if not self.api_key:
+            return False, "ZTV_PAYMENT_API_KEY is not set"
+        try:
+            # Most gateways expose a status endpoint; a 404 still proves we
+            # reached the host, which is what this check is really asking.
+            _http("GET", f"{self.base_url}/v1/status", self._headers(),
+                  None, self.timeout)
+            return True, "Gateway reachable"
+        except PaymentError as e:
+            msg = str(e)
+            if msg.startswith("404"):
+                return True, "Gateway reachable (no /v1/status endpoint)"
+            return False, msg[:200]
+
 
 def _header(headers, name: str) -> str:
     """Case-insensitive lookup across dicts and Starlette Headers alike."""
@@ -339,8 +388,265 @@ def _header(headers, name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Card processors
+# ---------------------------------------------------------------------------
 
-_PROVIDERS = {"btcpay": BTCPayProvider, "hosted": HostedProvider}
+class StripeProvider:
+    """
+    Stripe Checkout.
+
+    A hosted payment page, so no card data ever touches this server and PCI
+    scope stays with Stripe. Settlement arrives as a signed webhook.
+
+    Two things to be clear-eyed about before enabling it. Stripe requires a
+    verified business identity and can freeze or claw back funds, which is the
+    opposite of the property crypto gives here. And a card ties a real person
+    to an account: that account is no longer anonymous in any meaningful
+    sense, whatever the token says. Both belong in the privacy policy, not in
+    a code comment alone.
+    """
+
+    name = "stripe"
+    API = "https://api.stripe.com/v1"
+
+    def __init__(self, secret_key=None, webhook_secret=None, success_url=None,
+                 api_base=None, timeout: float = 20.0):
+        # Overridable so the adapter can be exercised against a stand-in.
+        # Defaults to Stripe; nothing changes in production.
+        self.api = (api_base or os.environ.get("STRIPE_API_BASE")
+                    or self.API).rstrip("/")
+        self.secret_key = secret_key or os.environ.get("STRIPE_SECRET_KEY", "")
+        self.webhook_secret = (
+            webhook_secret if webhook_secret is not None
+            else os.environ.get("STRIPE_WEBHOOK_SECRET", ""))
+        self.success_url = success_url or os.environ.get(
+            "STRIPE_SUCCESS_URL", "https://0trustvpn.com/welcome")
+        self.timeout = timeout
+
+    def _form(self, method: str, path: str, fields: list[tuple[str, str]] | None = None):
+        """Stripe's API is form-encoded, not JSON."""
+        data = urllib.parse.urlencode(fields).encode() if fields else None
+        req = urllib.request.Request(
+            f"{self.api}{path}", data=data, method=method,
+            headers={"Authorization": f"Bearer {self.secret_key}",
+                     "Content-Type": "application/x-www-form-urlencoded",
+                     "Stripe-Version": "2024-06-20"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                return json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            raise PaymentError(
+                f"{e.code}: {e.read().decode('utf-8', 'replace')[:400]}") from e
+        except urllib.error.URLError as e:
+            raise PaymentError(f"Stripe unreachable: {e.reason}") from e
+
+    def create_invoice(self, amount_usd: float, account_id: int, months: int,
+                       redirect_url: str | None = None) -> dict:
+        cents = int(round(amount_usd * 100))
+        fields = [
+            ("mode", "payment"),
+            ("success_url", redirect_url or self.success_url),
+            ("cancel_url", (redirect_url or self.success_url)),
+            ("line_items[0][quantity]", "1"),
+            ("line_items[0][price_data][currency]", "usd"),
+            ("line_items[0][price_data][unit_amount]", str(cents)),
+            ("line_items[0][price_data][product_data][name]",
+             f"0trust VPN — {months} month{'s' if months != 1 else ''}"),
+            ("metadata[account_id]", str(account_id)),
+            ("metadata[months]", str(months)),
+            # Nothing is collected that we do not need. Stripe will still see
+            # the cardholder; we decline to receive it.
+            ("payment_intent_data[metadata][account_id]", str(account_id)),
+        ]
+        raw = self._form("POST", "/checkout/sessions", fields)
+        return {"id": raw["id"], "checkout_url": raw.get("url", ""),
+                "status": PENDING, "raw": raw}
+
+    def get_invoice(self, invoice_id: str) -> dict:
+        raw = self._form("GET", f"/checkout/sessions/{invoice_id}")
+        paid = raw.get("payment_status") == "paid"
+        expired = raw.get("status") == "expired"
+        return {"id": invoice_id,
+                "status": SETTLED if paid else (EXPIRED if expired else PENDING),
+                "raw": raw}
+
+    def get_payment_methods(self, invoice_id: str) -> list[dict]:
+        return []          # Stripe hosts its own checkout page
+
+    def verify_webhook(self, payload: bytes, headers) -> bool:
+        """
+        Stripe-Signature: t=<ts>,v1=<hmac>. The timestamp is part of the
+        signed payload and is checked for freshness, which is what stops a
+        captured delivery being replayed forever.
+        """
+        if not self.webhook_secret:
+            return False
+        sig = _header(headers, "Stripe-Signature")
+        if not sig:
+            return False
+        parts = dict(p.split("=", 1) for p in sig.split(",") if "=" in p)
+        ts, v1 = parts.get("t"), parts.get("v1")
+        if not ts or not v1:
+            return False
+        try:
+            if abs(time.time() - int(ts)) > 300:
+                return False
+        except ValueError:
+            return False
+        expected = hmac.new(self.webhook_secret.encode(),
+                            ts.encode() + b"." + payload, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, v1)
+
+    def parse_webhook(self, payload: bytes) -> tuple[Optional[str], str]:
+        event = json.loads(payload)
+        etype = event.get("type", "")
+        obj = (event.get("data") or {}).get("object") or {}
+        inv = obj.get("id")
+        if etype == "checkout.session.completed":
+            return inv, (SETTLED if obj.get("payment_status") == "paid" else PENDING)
+        if etype == "checkout.session.async_payment_succeeded":
+            return inv, SETTLED
+        if etype in ("checkout.session.expired",):
+            return inv, EXPIRED
+        if etype in ("checkout.session.async_payment_failed",):
+            return inv, INVALID
+        # A chargeback is not an invoice event and must not silently settle
+        # anything; surfaced as pending so the caller ignores it.
+        return inv, PENDING
+
+    def health(self) -> tuple[bool, str]:
+        if not self.secret_key:
+            return False, "STRIPE_SECRET_KEY is not set"
+        try:
+            self._form("GET", "/balance")
+            return True, "Stripe reachable, key accepted"
+        except PaymentError as e:
+            return False, str(e)[:200]
+
+
+class SquareProvider:
+    """
+    Square hosted checkout (Payment Links).
+
+    Same trade-offs as Stripe: identity behind the card, reversible payments,
+    a third party in the middle. Square is here because plenty of small
+    operators already have a Square account for other parts of the business.
+    """
+
+    name = "square"
+
+    def __init__(self, access_token=None, location_id=None, webhook_key=None,
+                 environment=None, notification_url=None, timeout: float = 20.0):
+        self.access_token = access_token or os.environ.get("SQUARE_ACCESS_TOKEN", "")
+        self.location_id = location_id or os.environ.get("SQUARE_LOCATION_ID", "")
+        self.webhook_key = (
+            webhook_key if webhook_key is not None
+            else os.environ.get("SQUARE_WEBHOOK_KEY", ""))
+        env = (environment or os.environ.get("SQUARE_ENV", "production")).lower()
+        self.base = (os.environ.get("SQUARE_API_BASE")
+                     or ("https://connect.squareupsandbox.com"
+                         if env == "sandbox" else "https://connect.squareup.com")
+                     ).rstrip("/")
+        self.notification_url = notification_url or os.environ.get(
+            "SQUARE_NOTIFICATION_URL", "")
+        self.timeout = timeout
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json",
+                "Square-Version": "2024-06-04",
+                "Accept": "application/json"}
+
+    def create_invoice(self, amount_usd: float, account_id: int, months: int,
+                       redirect_url: str | None = None) -> dict:
+        body = {
+            # Square deduplicates on this, so a retried request cannot create
+            # a second payment link for the same intent.
+            "idempotency_key": f"0trust-{account_id}-{months}-{int(time.time())}",
+            "quick_pay": {
+                "name": f"0trust VPN — {months} month{'s' if months != 1 else ''}",
+                "price_money": {"amount": int(round(amount_usd * 100)),
+                                "currency": "USD"},
+                "location_id": self.location_id,
+            },
+            "checkout_options": {
+                "redirect_url": redirect_url or os.environ.get(
+                    "STRIPE_SUCCESS_URL", "https://0trustvpn.com/welcome"),
+                "ask_for_shipping_address": False,
+            },
+            "payment_note": f"account:{account_id} months:{months}",
+        }
+        raw = _http("POST", f"{self.base}/v2/online-checkout/payment-links",
+                    self._headers(), body, self.timeout)
+        link = (raw or {}).get("payment_link") or {}
+        if not link.get("id"):
+            raise PaymentError(f"Square returned no payment link: {raw}")
+        return {"id": link["id"], "checkout_url": link.get("url", ""),
+                "status": PENDING, "raw": raw}
+
+    def get_invoice(self, invoice_id: str) -> dict:
+        raw = _http("GET",
+                    f"{self.base}/v2/online-checkout/payment-links/{invoice_id}",
+                    self._headers(), None, self.timeout)
+        link = (raw or {}).get("payment_link") or {}
+        # A payment link carries no terminal state of its own; settlement is
+        # only ever learned from the webhook.
+        return {"id": invoice_id,
+                "status": SETTLED if link.get("order_id") and
+                link.get("payment_status") == "COMPLETED" else PENDING,
+                "raw": raw}
+
+    def get_payment_methods(self, invoice_id: str) -> list[dict]:
+        return []
+
+    def verify_webhook(self, payload: bytes, headers) -> bool:
+        """
+        Square signs HMAC-SHA256 over (notification URL + body), base64. The
+        URL is part of the signed material, so it has to match exactly what is
+        configured in the Square dashboard.
+        """
+        if not self.webhook_key or not self.notification_url:
+            return False
+        sig = _header(headers, "x-square-hmacsha256-signature")
+        if not sig:
+            return False
+        mac = hmac.new(self.webhook_key.encode(),
+                       self.notification_url.encode() + payload, hashlib.sha256)
+        expected = base64.b64encode(mac.digest()).decode()
+        return hmac.compare_digest(expected, sig)
+
+    def parse_webhook(self, payload: bytes) -> tuple[Optional[str], str]:
+        event = json.loads(payload)
+        etype = event.get("type", "")
+        obj = ((event.get("data") or {}).get("object") or {})
+        link = obj.get("payment_link") or {}
+        payment = obj.get("payment") or {}
+        inv = link.get("id") or payment.get("order_id") or obj.get("id")
+        if etype in ("payment.updated", "payment.created"):
+            status = str(payment.get("status", "")).upper()
+            if status == "COMPLETED":
+                return inv, SETTLED
+            if status in ("FAILED", "CANCELED"):
+                return inv, INVALID
+        return inv, PENDING
+
+    def health(self) -> tuple[bool, str]:
+        if not self.access_token:
+            return False, "SQUARE_ACCESS_TOKEN is not set"
+        if not self.location_id:
+            return False, "SQUARE_LOCATION_ID is not set"
+        try:
+            _http("GET", f"{self.base}/v2/locations", self._headers(),
+                  None, self.timeout)
+            return True, "Square reachable, token accepted"
+        except PaymentError as e:
+            return False, str(e)[:200]
+
+
+# ---------------------------------------------------------------------------
+
+_PROVIDERS = {"btcpay": BTCPayProvider, "hosted": HostedProvider,
+              "stripe": StripeProvider, "square": SquareProvider}
 _instance = None
 
 
@@ -360,6 +666,37 @@ def provider():
 
 
 def reset_provider():
-    """Drop the cached provider. Tests reconfigure between cases."""
+    """Drop the cached provider. Tests and the settings editor reconfigure."""
     global _instance
     _instance = None
+
+
+# Which settings each provider cannot work without. The dashboard uses this to
+# tell an operator what is still missing instead of letting signup 502.
+REQUIRED_SETTINGS = {
+    "btcpay": ("BTCPAY_URL", "BTCPAY_STORE_ID", "BTCPAY_API_KEY",
+               "BTCPAY_WEBHOOK_SECRET"),
+    "hosted": ("ZTV_PAYMENT_API_URL", "ZTV_PAYMENT_API_KEY",
+               "ZTV_PAYMENT_IPN_SECRET"),
+    "stripe": ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"),
+    "square": ("SQUARE_ACCESS_TOKEN", "SQUARE_LOCATION_ID", "SQUARE_WEBHOOK_KEY"),
+}
+
+
+def required_settings(name: str) -> tuple[str, ...]:
+    return REQUIRED_SETTINGS.get((name or "").lower(), ())
+
+
+def currencies_for(name: str) -> tuple[str, ...]:
+    """
+    What a customer can actually pay with under this provider.
+
+    Card providers do not take coins, and saying "BTC, ETH, XMR, ZEC" on a
+    checkout page that only accepts Visa would be a lie the dashboard is in a
+    position to prevent.
+    """
+    return ("USD (card)",) if (name or "").lower() in CARD_PROVIDERS else CURRENCIES
+
+
+def is_card_provider(name: str) -> bool:
+    return (name or "").lower() in CARD_PROVIDERS

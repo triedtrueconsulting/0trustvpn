@@ -103,6 +103,37 @@ td{color:var(--ink-dim)}td:first-child{color:var(--ink)}
 </tbody>
 </table>
 
+<h2>4a. If you pay by card</h2>
+
+<p><strong>Paying by card is not anonymous, and we will not pretend
+otherwise.</strong> Everything else on this page describes a service that
+holds no identity. A card payment is the one route that breaks that, and it
+breaks it completely.</p>
+
+<p>When an operator has enabled Stripe or Square, choosing that option means:</p>
+<ul>
+  <li>the processor receives your name, card number and billing address, and
+      keeps them under its own policies, not ours;</li>
+  <li>the processor knows you bought a VPN subscription, and from whom;</li>
+  <li>the payment is reversible, which means the processor can be compelled
+      to identify you after the fact;</li>
+  <li>the processor can be asked for that record by a party who would get
+      nothing from asking us.</li>
+</ul>
+
+<p><strong>What we receive</strong> is unchanged: a notification that an
+invoice was paid. We do not store your name, card number, or billing address,
+and no card data touches our servers &mdash; the payment happens on the
+processor's own page. But your identity now exists in a record that links to
+your subscription, held by someone else. We cannot delete it and cannot
+promise anything about it.</p>
+
+<p>If anonymity is why you are here, <strong>pay in Monero, Bitcoin, Zcash or
+Ethereum instead.</strong> Monero is the strongest of those by a distance.
+Cards exist as an option because some people would rather have a VPN bought
+with a card than no VPN at all &mdash; that is a legitimate choice, and it
+should be made knowingly.</p>
+
 <h2>4b. The /surf visitor proxy</h2>
 
 <p><a href="/surf">/surf</a> is a free page reader on this website. It is not

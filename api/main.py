@@ -107,6 +107,9 @@ CREATE TABLE IF NOT EXISTS accounts (
                   -- pending_payment | active | expired | banned
   plan            TEXT NOT NULL DEFAULT 'paid',   -- paid | trial
   trial_started_at INTEGER NOT NULL DEFAULT 0,
+  banned_reason   TEXT,                           -- set when status = 'banned'
+  banned_at       INTEGER NOT NULL DEFAULT 0,
+  note            TEXT,                           -- operator note, never shown
   ip_allocation   TEXT,    -- mesh IPv4 like 10.64.12.7
   notes           TEXT
 );
@@ -163,6 +166,81 @@ CREATE TABLE IF NOT EXISTS provision_tokens (
   expires_at    INTEGER NOT NULL,
   used_at       INTEGER,                      -- NULL = unused
   used_node_id  TEXT
+);
+
+-- Operator accounts for the admin dashboard. Separate from customer
+-- accounts in every way: a real username, a slow password hash, and
+-- sessions that expire. Nothing here is ever exposed to a customer.
+CREATE TABLE IF NOT EXISTS admins (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username      TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,          -- scrypt, salted, see admin.hash_password
+  created_at    INTEGER NOT NULL,
+  last_login    INTEGER NOT NULL DEFAULT 0,
+  disabled      INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash  TEXT PRIMARY KEY,
+  admin_id    INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin ON admin_sessions(admin_id);
+
+-- Every state-changing admin action. This is the counterweight to a
+-- dashboard that can ban accounts and move money: whatever an operator does,
+-- there is a record of who did it and when. Deliberately append-only in
+-- practice — nothing in the app deletes from it.
+CREATE TABLE IF NOT EXISTS admin_audit (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  admin_id    INTEGER,
+  username    TEXT,
+  action      TEXT NOT NULL,
+  target      TEXT,
+  detail      TEXT,
+  at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at);
+
+-- Operator-editable settings, so payment credentials, wallet addresses and
+-- public node endpoints can be changed from the dashboard without editing
+-- api.env and restarting. Values here take precedence over the environment.
+CREATE TABLE IF NOT EXISTS settings (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  updated_by  TEXT
+);
+
+-- Notices to customers.
+--
+-- There is no email address on any account — that is the product, not an
+-- oversight — so "email the customer" is not a thing this system can do.
+-- What it can do is hand a message to the client the next time it checks in.
+-- The CLI and GUI surface these on `status`; broadcast notices go to
+-- everyone, targeted ones to a single account.
+CREATE TABLE IF NOT EXISTS notices (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id  INTEGER REFERENCES accounts(id) ON DELETE CASCADE,  -- NULL = all
+  severity    TEXT NOT NULL DEFAULT 'info',   -- info | warning | urgent
+  subject     TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL DEFAULT 0,     -- 0 = until withdrawn
+  created_by  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notices_account ON notices(account_id);
+CREATE INDEX IF NOT EXISTS idx_notices_created ON notices(created_at);
+
+-- Which notices an account has already been shown, so the client can mark
+-- one read rather than being nagged forever.
+CREATE TABLE IF NOT EXISTS notice_reads (
+  notice_id   INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+  account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  read_at     INTEGER NOT NULL,
+  PRIMARY KEY (notice_id, account_id)
 );
 
 -- Which nodes have been handed a given device's public key.
@@ -266,6 +344,9 @@ MIGRATIONS = [
     # device_nodes is created by SCHEMA; nothing to add to an existing table.
     ("accounts", "plan", "TEXT NOT NULL DEFAULT 'paid'"),
     ("accounts", "trial_started_at", "INTEGER NOT NULL DEFAULT 0"),
+    ("accounts", "banned_reason", "TEXT"),
+    ("accounts", "banned_at", "INTEGER NOT NULL DEFAULT 0"),
+    ("accounts", "note", "TEXT"),
 ]
 
 
@@ -385,6 +466,7 @@ class AccountStatusResponse(BaseModel):
     device_count: int
     plan: str = "paid"
     max_devices: int = MAX_DEVICES_PER_ACCOUNT
+    notices: int = 0          # unread; fetch them from /api/v1/notices
 
 
 class WGRegisterRequest(BaseModel):
@@ -482,14 +564,50 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://0trustvpn.com", "https://www.0trustvpn.com"],
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-Account-Token"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH"],
+    allow_headers=["Content-Type", "X-Account-Token", "X-Admin-CSRF"],
+    allow_credentials=True,
 )
+
+
+# Mounted after the app exists so admin.py can import main without a cycle.
+import admin as admin_module          # noqa: E402
+import settings_store as settings     # noqa: E402
+
+app.include_router(admin_module.router)
 
 
 @app.on_event("startup")
 def startup():
     init_db()
+    # Settings the dashboard owns live in the database and take precedence
+    # over the environment. Push them out before the first request builds a
+    # payment provider, or the API runs on stale credentials until a restart.
+    with db() as conn:
+        settings.apply_to_environ(conn)
+    _bootstrap_admin()
+
+
+def _bootstrap_admin() -> None:
+    """
+    Create the first operator from the environment, if asked.
+
+    ZTV_ADMIN_USER / ZTV_ADMIN_PASSWORD let the installer seed an account for
+    an unattended deploy. Without them the dashboard shows a one-time setup
+    screen instead, which is the better default: a password that was never in
+    a config file cannot leak from one.
+    """
+    user = os.environ.get("ZTV_ADMIN_USER", "").strip()
+    password = os.environ.get("ZTV_ADMIN_PASSWORD", "")
+    if not user or not password:
+        return
+    with db(write=True) as conn:
+        exists = conn.execute("SELECT 1 FROM admins WHERE username = ?",
+                              (user,)).fetchone()
+        if exists:
+            return
+        admin_module.ensure_admin(conn, user, password)
+        admin_module.audit(conn, None, "admin.setup", user, "seeded from environment")
 
 
 @app.get("/api/v1/health")
@@ -743,6 +861,14 @@ def account_status(account: dict = Depends(require_account)):
             (account["id"],),
         ).fetchone()["n"]
     plan = account["plan"] if "plan" in account.keys() else "paid"
+    with db() as conn:
+        unread = conn.execute(
+            """SELECT COUNT(*) FROM notices n
+               WHERE (n.account_id IS NULL OR n.account_id = ?)
+                 AND (n.expires_at = 0 OR n.expires_at > ?)
+                 AND n.id NOT IN (SELECT notice_id FROM notice_reads
+                                  WHERE account_id = ?)""",
+            (account["id"], now, account["id"])).fetchone()[0]
     return AccountStatusResponse(
         status=account["status"],
         expires_at=expires or None,
@@ -750,7 +876,62 @@ def account_status(account: dict = Depends(require_account)):
         device_count=device_count,
         plan=plan,
         max_devices=_device_cap(plan),
+        notices=unread,
     )
+
+
+class NoticeOut(BaseModel):
+    id: int
+    severity: str
+    subject: str
+    body: str
+    created_at: int
+
+
+@app.get("/api/v1/notices", response_model=list[NoticeOut])
+def get_notices(account: dict = Depends(require_account)):
+    """
+    Messages waiting for this account.
+
+    The delivery half of the admin notice system. There is no email address to
+    send to, so a notice sits here until the client asks — `0trust status`,
+    the GUI, or the mobile app. Broadcasts and account-specific messages come
+    back together, newest first, minus anything already marked read.
+    """
+    now = int(time.time())
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT n.id, n.severity, n.subject, n.body, n.created_at
+               FROM notices n
+               WHERE (n.account_id IS NULL OR n.account_id = ?)
+                 AND (n.expires_at = 0 OR n.expires_at > ?)
+                 AND n.id NOT IN (SELECT notice_id FROM notice_reads
+                                  WHERE account_id = ?)
+               ORDER BY
+                 CASE n.severity WHEN 'urgent' THEN 0
+                                 WHEN 'warning' THEN 1 ELSE 2 END,
+                 n.created_at DESC
+               LIMIT 20""",
+            (account["id"], now, account["id"]),
+        ).fetchall()
+    return [NoticeOut(**dict(r)) for r in rows]
+
+
+@app.post("/api/v1/notices/{notice_id}/read")
+def mark_notice_read(notice_id: int, account: dict = Depends(require_account)):
+    """Acknowledge a notice so it stops coming back."""
+    with db(write=True) as conn:
+        exists = conn.execute(
+            """SELECT 1 FROM notices WHERE id = ?
+               AND (account_id IS NULL OR account_id = ?)""",
+            (notice_id, account["id"])).fetchone()
+        if not exists:
+            raise HTTPException(404, "No such notice")
+        conn.execute(
+            """INSERT OR IGNORE INTO notice_reads (notice_id, account_id, read_at)
+               VALUES (?, ?, ?)""",
+            (notice_id, account["id"], int(time.time())))
+    return {"ok": True}
 
 
 @app.post("/api/v1/account/topup", response_model=AccountCreateResponse)

@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0trust — operations</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+
+<!-- ============ SIGN IN / FIRST RUN ============ -->
+<section id="gate" class="gate hidden">
+  <div class="gate-box">
+    <div class="brand"><span class="mark">0</span>trust <span class="dim">operations</span></div>
+
+    <form id="login-form" class="hidden" autocomplete="on">
+      <label for="li-user">Username</label>
+      <input id="li-user" name="username" autocomplete="username" required>
+      <label for="li-pass">Password</label>
+      <input id="li-pass" name="password" type="password"
+             autocomplete="current-password" required>
+      <button type="submit" class="primary">Sign in</button>
+    </form>
+
+    <form id="setup-form" class="hidden" autocomplete="on">
+      <p class="lead">No operator account exists yet. Create the first one.</p>
+      <label for="su-user">Username</label>
+      <input id="su-user" name="username" autocomplete="username" required
+             minlength="3" maxlength="64">
+      <label for="su-pass">Password <span class="dim">— 12 characters minimum</span></label>
+      <input id="su-pass" name="password" type="password"
+             autocomplete="new-password" required minlength="12">
+      <label for="su-pass2">Repeat password</label>
+      <input id="su-pass2" type="password" autocomplete="new-password" required>
+      <button type="submit" class="primary">Create operator</button>
+      <p class="note">There is no password reset. Losing this means editing the
+        database by hand.</p>
+    </form>
+
+    <p id="gate-err" class="err hidden"></p>
+  </div>
+</section>
+
+<!-- ============ DASHBOARD ============ -->
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div class="brand"><span class="mark">0</span>trust <span class="dim">operations</span></div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="overview" class="active">Overview</button>
+      <button data-tab="accounts">Accounts</button>
+      <button data-tab="nodes">Nodes</button>
+      <button data-tab="payments">Payments</button>
+      <button data-tab="notices">Notices</button>
+      <button data-tab="settings">Settings</button>
+      <button data-tab="audit">Audit</button>
+    </nav>
+    <div class="who">
+      <span id="who-name" class="dim"></span>
+      <button id="logout" class="ghost small">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- OVERVIEW -->
+    <section data-panel="overview">
+      <div class="grid stats" id="stat-row"></div>
+      <div class="two-col">
+        <div class="card">
+          <h2>Mesh</h2>
+          <div id="node-health"></div>
+        </div>
+        <div class="card">
+          <h2>Recent activity</h2>
+          <div id="recent"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACCOUNTS -->
+    <section data-panel="accounts" class="hidden">
+      <div class="card">
+        <h2>Accounts</h2>
+        <div class="toolbar">
+          <input id="acct-q" placeholder="Token, account id, mesh IP, or device key">
+          <select id="acct-status">
+            <option value="">Any status</option>
+            <option value="active">Active</option>
+            <option value="expired">Expired</option>
+            <option value="banned">Banned</option>
+            <option value="pending_payment">Pending payment</option>
+          </select>
+          <select id="acct-plan">
+            <option value="">Any plan</option>
+            <option value="paid">Paid</option>
+            <option value="trial">Trial</option>
+          </select>
+          <button id="acct-search" class="primary">Search</button>
+        </div>
+        <p class="note">There is no name or email on an account — by design.
+          Search by the token the customer gives you, or by something from an
+          abuse report.</p>
+        <div id="acct-list"></div>
+      </div>
+      <div class="card hidden" id="acct-detail"></div>
+    </section>
+
+    <!-- NODES -->
+    <section data-panel="nodes" class="hidden">
+      <div class="card">
+        <h2>Mesh nodes</h2>
+        <div id="node-list"></div>
+      </div>
+      <div class="two-col">
+        <div class="card">
+          <h2>Add a static node</h2>
+          <form id="node-form" class="form-grid">
+            <label>Node id <input name="id" placeholder="zur-02" required></label>
+            <label>Region
+              <select name="region" id="node-region"></select>
+            </label>
+            <label>Role
+              <select name="role">
+                <option value="both">both</option>
+                <option value="entry">entry</option>
+                <option value="exit">exit</option>
+              </select>
+            </label>
+            <label>Public IP <input name="public_ip" placeholder="203.0.113.10" required></label>
+            <label>WireGuard port <input name="wg_port" type="number" value="51820"></label>
+            <label>Capacity <input name="capacity" type="number" value="1000"></label>
+            <label class="wide">Public key
+              <input name="pubkey" placeholder="44-character base64 key" required
+                     minlength="44" maxlength="44">
+            </label>
+            <button type="submit" class="primary wide">Add node</button>
+          </form>
+          <p class="note">Take the public key from <code>wg show wg0 public-key</code>
+            on the node itself.</p>
+        </div>
+        <div class="card">
+          <h2>Ephemeral node token</h2>
+          <p class="note">One-shot token for a RAM-only node to register itself
+            on first boot. Shown once.</p>
+          <form id="ptok-form" class="form-grid">
+            <label>Region <select name="region" id="ptok-region"></select></label>
+            <label>Role
+              <select name="role">
+                <option value="both">both</option>
+                <option value="entry">entry</option>
+                <option value="exit">exit</option>
+              </select>
+            </label>
+            <label>Valid for (hours) <input name="ttl_hours" type="number" value="1" min="1" max="168"></label>
+            <button type="submit" class="primary wide">Mint token</button>
+          </form>
+          <div id="ptok-out"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAYMENTS -->
+    <section data-panel="payments" class="hidden">
+      <div class="card">
+        <h2>Provider</h2>
+        <div id="pay-health"></div>
+        <button id="pay-recheck" class="ghost small">Re-check</button>
+      </div>
+      <div class="card">
+        <h2>Invoices</h2>
+        <div class="toolbar">
+          <select id="inv-status">
+            <option value="">Any status</option>
+            <option value="pending">Pending</option>
+            <option value="settled">Settled</option>
+            <option value="expired">Expired</option>
+            <option value="invalid">Invalid</option>
+          </select>
+          <button id="inv-refresh" class="primary">Refresh</button>
+        </div>
+        <div id="inv-list"></div>
+      </div>
+    </section>
+
+    <!-- NOTICES -->
+    <section data-panel="notices" class="hidden">
+      <div class="card">
+        <h2>Send a notice</h2>
+        <p class="note">
+          There is no email address on any account, so nothing is sent
+          anywhere. The message waits until the customer's client checks in —
+          <code>0trust status</code>, the desktop app, or the phone. Someone
+          who never opens the client never sees it.
+        </p>
+        <form id="notice-form" class="form-grid">
+          <label>Severity
+            <select name="severity">
+              <option value="info">info</option>
+              <option value="warning">warning</option>
+              <option value="urgent">urgent</option>
+            </select>
+          </label>
+          <label>Account id <span class="dim">— blank for everyone</span>
+            <input name="account_id" type="number" placeholder="all customers">
+          </label>
+          <label>Expires after (days) <input name="expires_days" type="number" value="30" min="1" max="365"></label>
+          <label class="wide">Subject <input name="subject" maxlength="120" required></label>
+          <label class="wide">Message
+            <textarea name="body" rows="5" maxlength="4000" required></textarea>
+          </label>
+          <button type="submit" class="primary wide">Post notice</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Posted</h2>
+        <div id="notice-list"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section data-panel="settings" class="hidden">
+      <div class="card">
+        <h2>Settings</h2>
+        <p class="note">Saved to the database and applied immediately — no
+          restart. Secrets show as dots; leave them alone to keep the stored
+          value.</p>
+        <form id="settings-form"><div id="settings-groups"></div>
+          <button type="submit" class="primary">Save settings</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Change your password</h2>
+        <form id="pw-form" class="form-grid">
+          <label class="wide">Current password
+            <input name="current_password" type="password" autocomplete="current-password" required></label>
+          <label class="wide">New password <span class="dim">— 12 characters minimum</span>
+            <input name="new_password" type="password" autocomplete="new-password" required minlength="12"></label>
+          <button type="submit" class="primary wide">Change password</button>
+        </form>
+        <p class="note">Changing it signs out every session, including this one.</p>
+      </div>
+    </section>
+
+    <!-- AUDIT -->
+    <section data-panel="audit" class="hidden">
+      <div class="card">
+        <h2>Audit log</h2>
+        <p class="note">Every state-changing action, with who did it. Values of
+          secrets are never recorded — only which keys changed.</p>
+        <div class="toolbar">
+          <input id="audit-filter" placeholder="Filter by action, e.g. account.">
+          <button id="audit-refresh" class="primary">Refresh</button>
+        </div>
+        <div id="audit-list"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/admin.js"></script>
+</body>
+</html>

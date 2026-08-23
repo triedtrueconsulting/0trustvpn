@@ -49,6 +49,8 @@ MODULES = [
     ("site",         "website links, and copy that matches the code"),
     ("security",       "authorization boundaries under adversarial input"),
     ("multihop_netns", "real packets through entry->exit NAT (needs CAP_NET_ADMIN)"),
+    ("admin",          "the operations backend: auth, controls, audit trail"),
+    ("admin_ui",       "the operations dashboard in a real browser"),
 ]
 
 def main(argv):

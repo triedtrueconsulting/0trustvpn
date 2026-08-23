@@ -1404,8 +1404,12 @@
     </div>
     <div class="principle">
       <div class="principle-num">→ 04</div>
-      <h3>Crypto <span class="italic">only.</span></h3>
-      <p>We accept Monero, Bitcoin and Zcash. Monero is recommended. No credit cards, no PayPal, no Stripe — they all require identity.</p>
+      <h3>Crypto <span class="italic">first.</span></h3>
+      <p>Monero, Bitcoin, Zcash and Ethereum. Monero is recommended — it is the
+      only one of the four that hides the amount and the counterparty by
+      default. Cards are available where the operator has enabled them, and
+      they are <em>not</em> anonymous: the processor learns who you are and
+      that you bought a VPN. <a href="/privacy#cards">What that means →</a></p>
     </div>
     <div class="principle">
       <div class="principle-num">→ 05</div>
@@ -1438,7 +1442,7 @@
         <div class="step-num">ii.</div>
         <div>
           <h4>Pay in crypto</h4>
-          <p>Send Monero, Bitcoin, or Zcash to the shown address. Confirmation typically within ten minutes.</p>
+          <p>Send Monero, Bitcoin, Zcash or Ethereum to the shown address. Confirmation typically within ten minutes.</p>
         </div>
       </div>
       <div class="step">
@@ -1681,7 +1685,7 @@
       <div>
         <button class="btn-primary" onclick="openSignup()">Begin →</button>
         <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-faint); margin-top: 16px; line-height: 1.6;">
-          PAID IN BTC / XMR / ZEC
+          PAID IN BTC / XMR / ZEC / ETH
         </div>
       </div>
     </div>
@@ -1795,6 +1799,7 @@
           <button class="crypto-tab active" onclick="selectCrypto(this, 'XMR')">XMR</button>
           <button class="crypto-tab" onclick="selectCrypto(this, 'BTC')">BTC</button>
           <button class="crypto-tab" onclick="selectCrypto(this, 'ZEC')">ZEC</button>
+          <button class="crypto-tab" onclick="selectCrypto(this, 'ETH')">ETH</button>
         </div>
 
         <div class="crypto-payment">

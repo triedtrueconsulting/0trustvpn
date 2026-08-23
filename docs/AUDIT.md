@@ -97,9 +97,25 @@ region code is a regression.
 
 ### 3.2 At payment
 
-All payment processing happens on **BTCPay Server**, hosted on a separate
-box. The 0trust control plane never sees a customer's wallet address,
-transaction ID, or coin choice — only that an invoice was "Settled".
+Payment processing happens at whichever provider the operator has configured
+(`ZTV_PAYMENT_PROVIDER`). The control plane never sees a wallet address,
+transaction ID or coin choice — only that an invoice settled.
+
+**Which provider is configured changes what an auditor should conclude here,
+and it is the first thing to check:**
+
+| Provider | Custody | What a third party learns |
+|---|---|---|
+| `btcpay` | non-custodial, funds go to the operator's wallet | whoever hosts the BTCPay instance sees the addresses |
+| `hosted` | custodial, usually KYC'd | the gateway holds the funds and its own records |
+| `stripe` / `square` | custodial card rails | **the processor holds the customer's real identity** |
+
+The last row is a genuine break in the no-identity property, not a nuance. A
+customer who pays by card is identified to the processor, and that record
+links a person to a VPN subscription. It is disclosed on web/privacy.html
+§4a in those words. An auditor should confirm the card option is either
+disabled or disclosed, and should treat a deployment that accepts cards while
+advertising anonymity as non-compliant with its own claims.
 
 | Field | Stored? | Where | Retention | Justification |
 |-------|---------|-------|-----------|---------------|

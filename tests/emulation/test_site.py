@@ -17,7 +17,7 @@ def check(n, ok, d=""):
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
 WEB = os.path.join(H.REPO, "web")
-PORT = 8093
+PORT = H.pick_port()
 TMP = tempfile.mkdtemp(prefix="0trust-site-")
 DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
@@ -118,12 +118,21 @@ try:
     # explains a past mistake is not a claim made to a visitor.
     idx = re.sub(r"<!--.*?-->", "", raw_idx, flags=re.S)
     idx = re.sub(r"^\s*//.*$", "", idx, flags=re.M)
+    # Derived from the code, not a hardcoded list — the supported set has
+    # changed twice now, and a test that names currencies by hand goes stale
+    # silently the moment it changes again.
     from payments import CURRENCIES
-    for gone in ("Ethereum", "Litecoin", " ETH ", " LTC "):
-        check(f"dropped currency not advertised: {gone.strip()}", gone not in idx,
-              [l for l in idx.splitlines() if gone in l][:2])
+    NAMES = {"BTC": "Bitcoin", "ETH": "Ethereum", "XMR": "Monero",
+             "ZEC": "Zcash", "LTC": "Litecoin"}
     for cur in CURRENCIES:
         check(f"{cur} is advertised", cur in idx)
+    for code, name in NAMES.items():
+        if code in CURRENCIES:
+            continue
+        check(f"unsupported currency not advertised: {name}",
+              name not in idx and f" {code} " not in idx,
+              [l.strip() for l in idx.splitlines()
+               if name in l or f" {code} " in l][:2])
 
     # Nothing implements these; AllowedIPs is always 0.0.0.0/0.
     for claim in ("Port forwarding", "split tunnel", "CASH BY", "Cash by mail"):

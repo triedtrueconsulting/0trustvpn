@@ -24,7 +24,7 @@ def check(n, ok, d=""):
     (PASS if ok else FAIL).append(n)
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
-WEB_PORT = 8094
+WEB_PORT = H.pick_port()
 TMP = tempfile.mkdtemp(prefix="0trust-funnel-"); DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 os.environ["ZTV_TRIAL_SECRET"] = "funnel-secret"
