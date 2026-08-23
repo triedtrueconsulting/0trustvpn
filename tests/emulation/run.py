@@ -49,6 +49,7 @@ MODULES = [
     ("site",         "website links, and copy that matches the code"),
     ("security",       "authorization boundaries under adversarial input"),
     ("multihop_netns", "real packets through entry->exit NAT (needs CAP_NET_ADMIN)"),
+    ("onebox_netns",   "the single-VPS mesh: same-host DNAT, 3 tables, peer routes"),
     ("admin",          "the operations backend: auth, controls, audit trail"),
     ("admin_ui",       "the operations dashboard in a real browser"),
 ]

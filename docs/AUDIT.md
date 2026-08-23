@@ -392,6 +392,7 @@ is fixed; a backup cannot contain data the schema doesn't store.
 | BTCPay Server | 0trust (separate host) | Crypto addresses, TX IDs, USD amounts. Sends webhook to control plane on settle. |
 | Let's Encrypt | LE / EFF | The domain `0trustvpn.com`. No customer data. |
 | DNS provider | (operator's choice) | DNS queries for `0trustvpn.com`. No customer data. |
+| Quad9 (`9.9.9.9`) | Upstream for the in-tunnel resolver | Customer DNS queries, sourced from the exit node's address. Not attributable to an account, but not invisible either. Configurable per deployment (`ZTV_DNS_UPSTREAM`). |
 | Hosting provider | (operator's choice) | Network metadata visible at the IP layer; no application data. |
 | cdnjs.cloudflare.com | n/a | RESOLVED — the landing page now self-hosts vendored JS from `/vendor/`. See `scripts/vendor-third-party.sh`. |
 

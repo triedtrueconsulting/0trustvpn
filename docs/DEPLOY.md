@@ -29,6 +29,8 @@ see what a run would do before letting it near a live box.
 | nginx | TLS termination, rate limits, static site |
 | `/etc/0trust/api.env` | generated with fresh `NODE_API_PSK` and `ZTV_TRIAL_SECRET` |
 | `/var/lib/0trust/0trust.db` | SQLite, schema initialised |
+| `0trust-meshd@wg0/1/2` | **test mode only** — three mesh nodes on this box |
+| `dnsmasq` | **test mode only** — the mesh resolver on 10.64.0.1 |
 
 Secrets are generated once. A re-run never rotates them — rotating
 `NODE_API_PSK` would lock out every mesh node, and rotating
@@ -37,30 +39,74 @@ add any config keys your `api.env` predates, leaving your edits alone.
 
 ## Mode 1 — test
 
-For seeing the thing work. It:
+For seeing the thing work. One VPS becomes the entire product: website,
+control plane, admin dashboard, `/surf` proxy, **and a real WireGuard mesh
+carrying real traffic.** `0trust connect` works the moment the installer
+finishes — there is no second box to build first.
+
+It:
 
 - serves plain HTTP on port 80 on the box's IP, no domain needed;
-- seeds `zur-01`, `rey-01`, `buc-01` so `/api/v1/regions` and the trial flow
-  work immediately;
+- brings up three WireGuard interfaces, one per region code, and registers
+  each as a node with its real public key:
+
+  | node | region | interface | port | mesh gateway |
+  | --- | --- | --- | --- | --- |
+  | `zur-01` | zur | `wg0` | 51820 | 10.64.0.1 |
+  | `rey-01` | rey | `wg1` | 51821 | 10.64.0.2 |
+  | `buc-01` | buc | `wg2` | 51822 | 10.64.0.3 |
+
+- opens udp 52000-59999 for multi-hop entry ports, which nftables DNATs to
+  whichever exit the control plane picked;
+- masquerades customer traffic out the primary interface and loads the same
+  abuse-mitigation egress filter a production node runs — no outbound SMTP, no
+  pivoting into private ranges, connection-storm rate limit;
+- runs `dnsmasq` on 10.64.0.1, the resolver every client config names;
 - leaves ssh alone, because locking password auth on a box you are holding
   open with a password is how you lose the box.
 
-Then:
+Then, from your laptop:
 
 ```bash
 export ZTV_API_BASE=http://<ip>
-0trust login          # or visit http://<ip>/trial for a free trial
+0trust login                                  # or http://<ip>/trial
+sudo 0trust connect --region zur              # single hop
+sudo 0trust connect --entry zur --exit rey    # multi-hop
+curl https://api.ipify.org                    # should print <ip>
 ```
 
-**It is a test box, and the installer says so in its closing output:**
+### What a one-box deployment cannot prove
 
-- **No TLS.** Account tokens cross the network in clear. Do not put a customer
-  on it, and do not reuse a token you created here on the real deployment.
-- The three seeded nodes are **placeholder rows, not WireGuard peers**.
-  `0trust connect` returns a config that cannot carry traffic. Run
-  `scripts/bootstrap-node.sh` on a real node to change that.
-- Payments are unconfigured, so `POST /api/v1/account` returns 502. Free
-  trials work, because they need no payment provider.
+The installer prints all of this at the end too. It matters because the
+product's claims are about topology, and this topology is not the product's.
+
+- **No TLS.** Account tokens, the admin password and everything else cross the
+  network in clear. Do not put a customer on it, and do not reuse a token you
+  created here on the real deployment.
+- **One machine, one jurisdiction.** `zur`/`rey`/`buc` are three interfaces on
+  one host, not three countries. Nothing about the multi-jurisdiction argument
+  is being demonstrated.
+- **Multi-hop does not hide you here.** On a real deployment the entry node
+  forwards UDP it cannot decrypt to an exit node elsewhere, so the exit never
+  learns the client's address. Entry and exit are the same host here, so it
+  does. The routing is real and worth testing; the privacy property is not.
+- **Everything shares one IP.** Control plane, website, proxy and VPN egress.
+  Seizing it gets all of them — the exact concentration the production
+  topology exists to avoid.
+- Payments are unconfigured, so `POST /api/v1/account` returns 502 until you
+  fill them in at `/admin`. Free trials work, because they need no provider.
+
+Pass `--no-vpn` to skip the mesh entirely and get the older behaviour:
+placeholder node rows, no WireGuard, no packet forwarding. Useful when you
+only care about the web side.
+
+### Moving to real nodes
+
+Nothing about the control plane changes. Build each node with
+`scripts/bootstrap-node.sh` on its own VPS, then point the `mesh_nodes` rows at
+them — or add them from the dashboard's Nodes tab, which mints a one-shot
+provisioning token so the node registers itself. Delete the local rows when
+the real ones are live.
 
 ## Mode 2 — production
 
@@ -100,6 +146,26 @@ A region shows `degraded` when it has entry capacity but no exit, or the other
 way round; `down` when it has neither. One healthy node per region reads
 `operational` — that is the intended topology, not a warning.
 
+On a test box the mesh is local, so check it too:
+
+```bash
+systemctl status '0trust-meshd@*'
+wg show                             # three interfaces, peers appear as clients connect
+nft list table inet ztv_fwd_wg0     # multi-hop DNAT for zur-01
+nft list table inet ztv_nat         # masquerade
+nft list table inet ztv_egress      # abuse filter
+ss -ulnp | grep 10.64.0.1:53        # the resolver clients are told to use
+```
+
+Each node has its **own** nftables table (`ztv_fwd_wg0`, `..._wg1`, `..._wg2`).
+They must not share one: meshd replaces its table wholesale on every poll, so
+three daemons on one name would erase each other's rules every thirty seconds
+and multi-hop would work only for whichever polled last.
+
+`wg show` listing no peers is normal until a client connects. `wg0` not
+existing at all means meshd has not completed a poll — check
+`journalctl -u 0trust-meshd@wg0`.
+
 ## Firewall and ssh
 
 `--no-firewall` skips UFW, for providers that firewall at the edge.
@@ -110,6 +176,10 @@ password auth when it can find an `authorized_keys` to fall back on.
 
 ```bash
 systemctl disable --now 0trust-api 0trust-proxy 0trust-sweep.timer
+systemctl disable --now '0trust-meshd@*'          # test-mode mesh, if present
+nft delete table inet ztv_nat    2>/dev/null || true
+nft delete table inet ztv_egress 2>/dev/null || true
+for i in wg0 wg1 wg2; do nft delete table inet "ztv_fwd_$i" 2>/dev/null || true; done
 rm -f /etc/systemd/system/0trust-*.{service,timer}
 systemctl daemon-reload
 rm -f /etc/nginx/sites-enabled/0trust /etc/nginx/conf.d/0trust-zones.conf

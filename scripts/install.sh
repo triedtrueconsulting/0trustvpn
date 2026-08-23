@@ -5,8 +5,11 @@
 # Two modes:
 #
 #   test        No domain, no TLS. Serves over plain HTTP on the box's IP, and
-#               seeds a local mesh node so the stack is usable end to end the
-#               moment it finishes. For kicking the tyres — never for customers.
+#               turns this one VPS into the ENTIRE product: control plane,
+#               website, admin dashboard, /surf proxy, and a real WireGuard
+#               mesh carrying real traffic. One box is all three regions at
+#               once, so `0trust connect` works the moment the installer ends.
+#               For kicking the tyres — never for customers. See --no-vpn.
 #
 #   production  Real domain, Let's Encrypt certificate, HSTS, firewall.
 #
@@ -22,12 +25,14 @@
 #   --email <address>        (production, for Let's Encrypt expiry notices)
 #   --no-firewall            skip UFW (useful when the provider firewalls for you)
 #   --no-ssh-hardening       leave sshd alone
+#   --no-vpn                 (test) skip the on-box mesh; seed placeholder rows
+#                            instead, as earlier versions did
 #   --dry-run                render everything, touch no system state
 # ============================================================================
 set -euo pipefail
 
 MODE="" DOMAIN="" EMAIL=""
-DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0
+DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -36,6 +41,7 @@ while [[ $# -gt 0 ]]; do
         --email) EMAIL="${2:-}"; shift 2 ;;
         --no-firewall) DO_FIREWALL=0; shift ;;
         --no-ssh-hardening) DO_SSH=0; shift ;;
+        --no-vpn) DO_VPN=0; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
         *) echo "unknown flag: $1" >&2; exit 64 ;;
@@ -193,6 +199,15 @@ elif [[ $DRY_RUN -eq 0 ]]; then
         || echo "ZTV_TRIAL_SECRET=$(gen)" >> "$ETC/api.env"
     ok "$ETC/api.env already present — left your values, added any missing keys"
 fi
+
+# The on-box mesh below needs the PSK its nodes will authenticate with. On a
+# fresh install it was just generated; on a re-run it only exists in api.env,
+# and an empty value here would write meshd configs that can never authenticate
+# — nodes silently failing to sync while the installer reports success.
+if [[ $DRY_RUN -eq 0 && -z "${NODE_PSK:-}" && -f "$ETC/api.env" ]]; then
+    NODE_PSK="$(sed -n 's/^NODE_API_PSK=//p' "$ETC/api.env" | head -n1)"
+fi
+NODE_PSK="${NODE_PSK:-RENDER-ONLY-NO-PSK}"
 
 if [[ $DRY_RUN -eq 0 && ! -f "$ETC/proxy.env" ]]; then
     install -m 0640 -o root -g 0trust "$REPO_DIR/systemd/proxy.env.example" \
@@ -529,26 +544,183 @@ fi
 
 # ----------------------------------------------------------------------------
 if [[ "$MODE" == "test" ]]; then
-log "Seeding a local mesh node so the stack works out of the box"
+
+# The three region codes are fixed product-wide (zur/rey/buc). On a real
+# deployment each is a separate VPS in a separate jurisdiction; here all three
+# live on this box as three WireGuard interfaces on three ports, so single-hop
+# and multi-hop both have somewhere real to route. Fields:
+#   region : interface : udp port : mesh gateway address
+LOCAL_NODES=(
+    "zur:wg0:51820:10.64.0.1"
+    "rey:wg1:51821:10.64.0.2"
+    "buc:wg2:51822:10.64.0.3"
+)
+# shellcheck source=scripts/node-runtime.sh
+source "$REPO_DIR/scripts/node-runtime.sh"
+
+PUBIP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+         || hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
+
+if [[ $DO_VPN -eq 1 ]]; then
+# ----------------------------------------------------------------------------
+log "Turning this box into the mesh as well (test mode)"
+# ----------------------------------------------------------------------------
+note "one VPS, three node identities — see the warnings at the end"
+
 if [[ $DRY_RUN -eq 0 ]]; then
-    PUBIP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
-             || hostname -I | awk '{print $1}')"
-    sudo -u 0trust env ZTV_DB_PATH="$VARLIB/0trust.db" "$VENV/bin/python" - <<PYEOF
-import base64, hashlib, os, sqlite3, time
-db = os.environ["ZTV_DB_PATH"]
-c = sqlite3.connect(db)
-for nid, region in (("zur-01", "zur"), ("rey-01", "rey"), ("buc-01", "buc")):
-    c.execute("""INSERT OR IGNORE INTO mesh_nodes
-                 (id, hostname, pubkey, endpoint, region, role, public_ip,
-                  capacity, active, ephemeral, last_heartbeat)
-                 VALUES (?,?,?,?,?, 'both', ?, 1000, 1, 0, ?)""",
-              (nid, f"{nid}.local",
-               base64.b64encode(hashlib.sha256(nid.encode()).digest()).decode(),
-               "${PUBIP}:51820", region, "${PUBIP}", int(time.time())))
-c.commit(); c.close()
-PYEOF
+    apt-get install -y -qq wireguard wireguard-tools nftables dnsmasq >/dev/null
 fi
-ok "zur-01, rey-01, buc-01 seeded (placeholder keys — not real tunnels)"
+
+# --- kernel ---------------------------------------------------------------
+if [[ $DRY_RUN -eq 0 ]]; then
+    ztv_sysctl_conf > /etc/sysctl.d/99-0trust.conf
+    sysctl -p /etc/sysctl.d/99-0trust.conf >/dev/null
+fi
+ok "ip forwarding on, anti-spoofing sysctls applied"
+
+# --- keys, meshd, one systemd instance per node ---------------------------
+run install -m 0755 "$REPO_DIR/wireguard/0trust-meshd.py" /usr/local/bin/0trust-meshd
+run install -m 0644 "$REPO_DIR/systemd/0trust-meshd@.service" \
+    /etc/systemd/system/0trust-meshd@.service
+
+for spec in "${LOCAL_NODES[@]}"; do
+    IFS=: read -r nregion niface nport ngw <<<"$spec"
+    if [[ $DRY_RUN -eq 0 ]]; then
+        mkdir -p /etc/wireguard
+        umask 077
+        if [[ ! -s "/etc/wireguard/$niface.key" ]]; then
+            wg genkey | tee "/etc/wireguard/$niface.key" \
+                | wg pubkey > "/etc/wireguard/$niface.pub"
+        fi
+        chmod 600 "/etc/wireguard/$niface.key"
+        chmod 644 "/etc/wireguard/$niface.pub"
+        # A /32, not the usual /10. Three interfaces each claiming the whole
+        # mesh network would give the kernel three equally-good routes to any
+        # client, and return traffic for a peer on wg2 would be handed to wg0,
+        # which has never heard of it. meshd installs a /32 per peer instead,
+        # which is unambiguous. A real one-node box keeps the /10 default.
+        ztv_meshd_env "http://127.0.0.1:8080" "$NODE_PSK" "$nregion-01" both \
+                      "$niface" "$nport" "$ngw/32" "ztv_fwd_$niface" \
+                      > "/etc/0trust/meshd-$niface.env"
+        chmod 600 "/etc/0trust/meshd-$niface.env"
+    fi
+done
+if [[ -n "${ZTV_RENDER_TO:-}" ]]; then
+    mkdir -p "$ZTV_RENDER_TO"
+    for spec in "${LOCAL_NODES[@]}"; do
+        IFS=: read -r nregion niface nport ngw <<<"$spec"
+        ztv_meshd_env "http://127.0.0.1:8080" RENDER-PSK "$nregion-01" both \
+                      "$niface" "$nport" "$ngw/32" "ztv_fwd_$niface" \
+                      > "$ZTV_RENDER_TO/meshd-$niface.env"
+    done
+fi
+ok "keys + meshd units for ${#LOCAL_NODES[@]} local nodes"
+
+# --- NAT and the abuse filter, identical to a real node -------------------
+PRIMARY_IF="$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -n1)"
+PRIMARY_IF="${PRIMARY_IF:-eth0}"
+if [[ $DRY_RUN -eq 0 ]]; then
+    mkdir -p /etc/nftables.d
+    ztv_nat_ruleset "$PRIMARY_IF" | nft -f -
+    ztv_egress_ruleset | nft -f -
+    nft list table inet ztv_nat    >  /etc/nftables.d/0trust.nft
+    nft list table inet ztv_egress >> /etc/nftables.d/0trust.nft
+fi
+if [[ -n "${ZTV_RENDER_TO:-}" ]]; then
+    ztv_nat_ruleset "$PRIMARY_IF" >  "$ZTV_RENDER_TO/nat.nft"
+    ztv_egress_ruleset            >  "$ZTV_RENDER_TO/egress.nft"
+fi
+ok "masquerade on $PRIMARY_IF, egress abuse filter loaded"
+
+# --- the resolver clients are actually told to use ------------------------
+MESH_DNS="${LOCAL_NODES[0]##*:}"
+if [[ $DRY_RUN -eq 0 ]]; then
+    mkdir -p /etc/dnsmasq.d
+    ztv_dnsmasq_conf "$MESH_DNS" > /etc/dnsmasq.d/0trust.conf
+fi
+if [[ -n "${ZTV_RENDER_TO:-}" ]]; then
+    ztv_dnsmasq_conf "$MESH_DNS" > "$ZTV_RENDER_TO/dnsmasq.conf"
+fi
+ok "dnsmasq will answer on $MESH_DNS (the DNS every client config names)"
+
+# --- firewall -------------------------------------------------------------
+if [[ $DO_FIREWALL -eq 1 && $DRY_RUN -eq 0 ]]; then
+    for spec in "${LOCAL_NODES[@]}"; do
+        IFS=: read -r _ niface nport _ <<<"$spec"
+        ufw allow "$nport/udp" comment "0trust $niface" >/dev/null
+        ufw allow in on "$niface" >/dev/null
+    done
+    # Multi-hop entry ports. Nothing on this host listens here — nftables
+    # DNATs each one straight to the exit node the control plane picked.
+    ufw allow 52000:59999/udp comment '0trust multi-hop' >/dev/null
+    ok "udp 51820-51822 and 52000-59999 opened"
+fi
+
+# --- start it -------------------------------------------------------------
+if [[ $DRY_RUN -eq 0 ]]; then
+    systemctl daemon-reload
+    for spec in "${LOCAL_NODES[@]}"; do
+        IFS=: read -r _ niface _ _ <<<"$spec"
+        systemctl enable --now "0trust-meshd@$niface.service" >/dev/null 2>&1 || \
+            note "0trust-meshd@$niface did not start — journalctl -u 0trust-meshd@$niface"
+    done
+    systemctl enable dnsmasq >/dev/null 2>&1 || true
+    # dnsmasq cannot bind the gateway address until meshd has created wg0, and
+    # meshd only does that on its first poll. Retry briefly rather than leaving
+    # a dead resolver behind a "successful" install.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        systemctl restart dnsmasq >/dev/null 2>&1 && break
+        sleep 2
+    done
+fi
+if [[ $DRY_RUN -eq 0 ]]; then ok "meshd running for all three nodes"; fi
+fi   # DO_VPN
+
+# ----------------------------------------------------------------------------
+log "Registering the local nodes with the control plane"
+# ----------------------------------------------------------------------------
+if [[ $DRY_RUN -eq 0 ]]; then
+    ZTV_SEED_SPEC=""
+    for spec in "${LOCAL_NODES[@]}"; do
+        IFS=: read -r nregion niface nport _ <<<"$spec"
+        if [[ $DO_VPN -eq 1 && -s "/etc/wireguard/$niface.pub" ]]; then
+            npub="$(cat "/etc/wireguard/$niface.pub")"
+        else
+            # --no-vpn: a placeholder row so the API has something to route to.
+            # It cannot carry traffic and the summary below says so.
+            npub="PLACEHOLDER-$nregion"
+        fi
+        ZTV_SEED_SPEC+="$nregion-01|$nregion|$npub|$PUBIP:$nport|$PUBIP"$'\n'
+    done
+    ZTV_SEED_SPEC="$ZTV_SEED_SPEC" sudo -u 0trust --preserve-env=ZTV_SEED_SPEC \
+        env ZTV_DB_PATH="$VARLIB/0trust.db" "$VENV/bin/python" - <<'PYSEED'
+import os, sqlite3, time
+rows = [l.split("|") for l in os.environ["ZTV_SEED_SPEC"].splitlines() if l.strip()]
+c = sqlite3.connect(os.environ["ZTV_DB_PATH"])
+now = int(time.time())
+for nid, region, pub, endpoint, ip in rows:
+    # Upsert: re-running the installer must refresh the keys it just rotated,
+    # not silently leave the control plane pointing at the previous ones.
+    c.execute(
+        """INSERT INTO mesh_nodes
+             (id, hostname, pubkey, endpoint, region, role, public_ip,
+              capacity, active, ephemeral, last_heartbeat)
+           VALUES (?,?,?,?,?, 'both', ?, 1000, 1, 0, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             pubkey=excluded.pubkey, endpoint=excluded.endpoint,
+             public_ip=excluded.public_ip, active=1,
+             last_heartbeat=excluded.last_heartbeat""",
+        (nid, f"{nid}.local", pub, endpoint, region, ip, now))
+c.commit(); c.close()
+PYSEED
+fi
+if [[ $DRY_RUN -eq 1 ]]; then
+    ok "zur-01, rey-01, buc-01 would be registered"
+elif [[ $DO_VPN -eq 1 ]]; then
+    ok "zur-01, rey-01, buc-01 registered with real WireGuard keys"
+else
+    ok "zur-01, rey-01, buc-01 seeded (placeholder keys — not real tunnels)"
+fi
 fi
 
 rm -f "$TMP_SITE" "$TMP_ZONES"
@@ -556,10 +728,15 @@ rm -f "$TMP_SITE" "$TMP_ZONES"
 # ----------------------------------------------------------------------------
 echo
 if [[ "$MODE" == "test" ]]; then
-    IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
-          || hostname -I 2>/dev/null | awk '{print $1}' || echo YOUR-IP)"
+    IP="${PUBIP:-$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+          || hostname -I 2>/dev/null | awk '{print $1}' || echo YOUR-IP)}"
+    if [[ $DO_VPN -eq 1 ]]; then
+        HEADLINE="Test deployment is up. This one box is the whole product."
+    else
+        HEADLINE="Test deployment is up (no VPN — --no-vpn was passed)."
+    fi
     cat <<EOF
-${GRN}  Test deployment is up.${NC}
+${GRN}  $HEADLINE${NC}
 
   Site        http://$IP/
   Free trial  http://$IP/trial
@@ -567,16 +744,52 @@ ${GRN}  Test deployment is up.${NC}
   Operations  http://$IP/admin      <- create the operator account here
   Status      http://$IP/api/v1/status/public
 
-  ${YLW}This is a test box.${NC}
-    - No TLS. Tokens and everything else cross the network in clear.
-    - The three mesh nodes are placeholder rows, not real WireGuard peers, so
-      \`0trust connect\` will hand out a config that cannot carry traffic.
-      Run scripts/bootstrap-node.sh on a real node to fix that.
-    - Payments are unconfigured, so signup returns 502. Free trials work.
+EOF
+    if [[ $DO_VPN -eq 1 ]]; then cat <<EOF
+  ${GRN}The VPN works.${NC} Three node identities run on this box:
+    zur-01  wg0  udp 51820      rey-01  wg1  udp 51821
+    buc-01  wg2  udp 51822      multi-hop entry ports udp 52000-59999
+  Traffic is masqueraded out $PRIMARY_IF, the abuse-mitigation egress filter
+  is loaded, and dnsmasq answers on $MESH_DNS — the resolver every client
+  config points at.
 
-  Point a client at it:
+  Try it end to end, from your laptop:
     export ZTV_API_BASE=http://$IP
-    0trust login
+    0trust login                        # or claim a free trial at /trial
+    sudo 0trust connect --region zur    # single hop
+    sudo 0trust connect --entry zur --exit rey   # multi-hop
+    curl https://api.ipify.org          # should print $IP
+
+EOF
+    else cat <<EOF
+  ${YLW}No VPN on this box.${NC} zur-01, rey-01 and buc-01 are placeholder
+  rows with fake keys, so \`0trust connect\` hands out a config that cannot
+  carry traffic. Re-run without --no-vpn, or point the control plane at real
+  nodes built with scripts/bootstrap-node.sh.
+
+EOF
+    fi
+    cat <<EOF
+  ${YLW}What this box is NOT.${NC} It is a test rig, and it cannot pretend
+  otherwise:
+    - ${YLW}No TLS.${NC} Account tokens, the admin password and everything
+      else cross the network in clear. Never put a real customer on it.
+    - ${YLW}One machine, one jurisdiction.${NC} zur/rey/buc are three
+      interfaces on this host, not three countries. Nothing about the
+      multi-jurisdiction argument is being demonstrated.
+    - ${YLW}Multi-hop does not hide you here.${NC} On a real deployment the
+      entry node forwards UDP it cannot decrypt to an exit node elsewhere,
+      so the exit never learns the client's address. Entry and exit are the
+      same host on this box, so it does. The routing is real and worth
+      testing; the privacy property is not.
+    - The control plane, the website, the proxy and the VPN egress all share
+      one IP. Seizing it gets everything at once — the exact concentration
+      the production topology exists to avoid.
+    - Payments are unconfigured, so paid signup returns 502 until you fill
+      them in at /admin. Free trials work now.
+
+  Rebuild as three separate nodes when you are done kicking the tyres:
+  scripts/bootstrap-node.sh, one per VPS. docs/DEPLOY.md has the walkthrough.
 
   Logs   journalctl -u 0trust-api -f
   DB     sqlite3 $VARLIB/0trust.db

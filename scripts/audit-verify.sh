@@ -243,6 +243,25 @@ check node-nat-table "Exit NAT table is loaded (mesh nodes)" -- bash -c "
     }
 "
 
+check node-dns-no-query-log "In-tunnel resolver keeps no query log (mesh nodes)" -- bash -c "
+    # privacy.html \u00a74d says the resolver on the node does not log what
+    # customers look up. That is a claim about a config file, so check it.
+    ip link show wg0 >/dev/null 2>&1 || exit 77
+    conf=/etc/dnsmasq.d/0trust.conf
+    [[ -f \$conf ]] || {
+        echo 'clients are handed DNS=10.64.0.1 but no resolver is configured there'
+        exit 1
+    }
+    if grep -REq '^[[:space:]]*log-queries' \$conf /etc/dnsmasq.conf 2>/dev/null; then
+        echo 'log-queries is on - every hostname a customer resolves is recorded'
+        exit 1
+    fi
+    grep -q '^bind-interfaces' \$conf || {
+        echo 'resolver is not bound to the mesh gateway - open resolver on the public IP'
+        exit 1
+    }
+"
+
 check db-no-abandoned-signups "No unpaid signups retained past 7 days" -- bash -c "
     [[ -f '$DB_PATH' ]] || exit 77
     stale=\$(sqlite3 '$DB_PATH' \"

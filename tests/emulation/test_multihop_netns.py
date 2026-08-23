@@ -259,39 +259,52 @@ try:
           luck_exit.get("src") == ENTRY_OUT,
           f"exit={luck_exit}")
     print("          so the old rule leaked or not depending on an ephemeral port")
-    print("\n[6] the rules scripts/bootstrap-node.sh installs on a node")
-    # Same defect, same blast radius: both of that script's tables were named
+    print("\n[6] the rules a node actually installs, from the shared library")
+    # Same defect, same blast radius: both of these tables were once named
     # 0trust_*, so nft rejected them. The exit node got no masquerade, and the
-    # abuse-mitigation egress filter — the thing that stops a customer
-    # reaching RFC1918 or sending spam from our IP — was never in force.
-    import re as _re
-    boot = open(os.path.join(H.REPO, "scripts", "bootstrap-node.sh")).read()
-    blocks = _re.findall(r"nft -f - <<EOF\n(.*?)\nEOF", boot, _re.S)
-    check("found the nft blocks in bootstrap-node.sh", len(blocks) >= 2, len(blocks))
+    # abuse-mitigation egress filter — the thing that stops a customer reaching
+    # RFC1918 or sending spam from our IP — was never in force.
+    #
+    # They now live in scripts/node-runtime.sh, which both bootstrap-node.sh
+    # (a real node) and install.sh --mode test (the one-box deployment) source.
+    # Rendering them from the library is what keeps those two identical: a test
+    # box whose rules differ from production predicts nothing.
+    lib = os.path.join(H.REPO, "scripts", "node-runtime.sh")
+    check("bootstrap-node.sh sources the shared runtime",
+          "node-runtime.sh" in open(
+              os.path.join(H.REPO, "scripts", "bootstrap-node.sh")).read())
 
-    for i, blk in enumerate(blocks):
-        # The script interpolates these at run time.
-        rendered = (blk.replace("$PRIMARY_IF", "eth0")
-                       .replace("$CLIENT_NET", "10.64.0.0/10"))
+    def render(fn, *args):
+        r = subprocess.run(["bash", "-c",
+                            f'source "{lib}"; {fn} ' + " ".join(map(str, args))],
+                           capture_output=True, text=True)
+        return r.stdout if r.returncode == 0 else ""
+
+    blocks = {"nat": render("ztv_nat_ruleset", "eth0"),
+              "egress": render("ztv_egress_ruleset")}
+    check("the library renders both rulesets",
+          all(blocks.values()), {k: bool(v) for k, v in blocks.items()})
+
+    import re as _re
+    for label, rendered in blocks.items():
+        if not rendered:
+            continue
         name_match = _re.search(r"table\s+\w+\s+(\S+)\s*\{", rendered)
         tname = name_match.group(1) if name_match else "?"
-        check(f"bootstrap table {tname!r} is a valid nft identifier",
+        check(f"node table {tname!r} is a valid nft identifier",
               tname[0].isalpha() or tname[0] == "_", tname)
 
         sh("ip netns exec ztv-entry nft flush ruleset", check_rc=False)
-        bp = os.path.join(TMP, f"boot{i}.nft")
+        bp = os.path.join(TMP, f"node-{label}.nft")
         open(bp, "w").write(rendered)
         r = subprocess.run(["ip", "netns", "exec", "ztv-entry", "nft", "-f", bp],
                            capture_output=True, text=True)
-        check(f"nft loads bootstrap table {tname!r}", r.returncode == 0,
+        check(f"nft loads node table {tname!r}", r.returncode == 0,
               (r.stderr or r.stdout)[:500])
 
     print("\n[7] the egress filter actually blocks what it claims to")
-    egress = None
-    for blk in blocks:
-        if "egress" in blk:
-            egress = blk.replace("$CLIENT_NET", "10.64.0.0/10")
-    check("egress block found", egress is not None)
+    egress = blocks["egress"]
+    check("egress ruleset rendered", bool(egress))
     if egress:
         sh("ip netns exec ztv-entry nft flush ruleset", check_rc=False)
         ep2 = os.path.join(TMP, "egress.nft")
