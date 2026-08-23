@@ -126,7 +126,8 @@ if [[ $DRY_RUN -eq 0 ]]; then
     install -o 0trust -g 0trust -m 0644 \
         "$REPO_DIR/api/main.py" "$REPO_DIR/api/payments.py" \
         "$REPO_DIR/api/admin.py" "$REPO_DIR/api/settings_store.py" \
-        "$REPO_DIR/api/ops_alerts.py" \
+        "$REPO_DIR/api/ops_alerts.py" "$REPO_DIR/api/chainwatch.py" \
+        "$REPO_DIR/api/poll_invoices.py" \
         "$REPO_DIR/api/btcpay.py" "$REPO_DIR/api/sweep.py" \
         "$REPO_DIR/api/requirements.txt" \
         "$PREFIX/api/"
@@ -173,9 +174,26 @@ ZTV_TRIAL_POW_BITS=20
 ZTV_TRIAL_SECRET=$TRIAL_SECRET
 
 # --- Payments ---
-# btcpay = BTCPay Server (yours or hosted). Non-custodial.
-# hosted = commercial gateway. No blockchain infrastructure; custodial.
-ZTV_PAYMENT_PROVIDER=btcpay
+# watch  = your own wallet, watched via a public block explorer. Non-custodial,
+#          no account anywhere, no chain data on this box, and the only option
+#          that works the day you build the VPS: paste WALLET_BTC below and
+#          paid signup starts working. Bitcoin only.
+# btcpay = BTCPay Server (yours or somebody's). Non-custodial, more coins,
+#          but something has to run BTCPay.
+# hosted = commercial gateway. No infrastructure at all; custodial and
+#          usually wants identity documents.
+# stripe/square = cards. A real identity behind every payment — read
+#          web/privacy.html before turning these on.
+ZTV_PAYMENT_PROVIDER=watch
+
+# The PUBLIC half of your Bitcoin wallet. xpub/ypub/zpub. A fresh receive
+# address is derived per invoice; nothing here can spend anything.
+WALLET_BTC=
+
+# Blank uses mempool.space. Any Esplora-compatible explorer works, including
+# your own, if you would rather not depend on a public one.
+NODE_RPC_BTC=
+ZTV_BTC_CONFIRMATIONS=1
 BTCPAY_URL=https://btcpay.example.com
 BTCPAY_STORE_ID=
 BTCPAY_API_KEY=
@@ -193,6 +211,7 @@ elif [[ $DRY_RUN -eq 0 ]]; then
     # clobbering the operator's edits.
     for kv in "ZTV_TRIAL_ENABLED=1" "ZTV_TRIAL_DAYS=7" \
               "ZTV_TRIAL_MAX_DEVICES=2" "ZTV_TRIAL_POW_BITS=20" \
+              "ZTV_BTC_CONFIRMATIONS=1" "WALLET_BTC=" "NODE_RPC_BTC=" \
               "ZTV_PAYMENT_PROVIDER=btcpay"; do
         grep -q "^${kv%%=*}=" "$ETC/api.env" || echo "$kv" >> "$ETC/api.env"
     done
@@ -247,6 +266,7 @@ log "Installing systemd units"
 # ----------------------------------------------------------------------------
 if [[ $DRY_RUN -eq 0 ]]; then
     for unit in 0trust-api.service 0trust-sweep.service 0trust-sweep.timer \
+                0trust-poll.service 0trust-poll.timer \
                 0trust-proxy.service 0trust-backup.service 0trust-backup.timer; do
         install -m 0644 "$REPO_DIR/systemd/$unit" "/etc/systemd/system/$unit"
     done
@@ -506,9 +526,14 @@ if [[ $DRY_RUN -eq 0 ]]; then
     systemctl enable --now 0trust-api.service
     systemctl enable --now 0trust-proxy.service
     systemctl enable --now 0trust-sweep.timer
+    # Harmless with any other provider — the poller exits immediately unless
+    # ZTV_PAYMENT_PROVIDER=watch, so enabling it unconditionally means an
+    # operator switching to watch-only in the dashboard does not also have to
+    # remember to start a timer.
+    systemctl enable --now 0trust-poll.timer
     systemctl reload nginx || systemctl restart nginx
 fi
-ok "0trust-api, 0trust-proxy, 0trust-sweep.timer, nginx"
+ok "0trust-api, 0trust-proxy, 0trust-sweep.timer, 0trust-poll.timer, nginx"
 
 # ----------------------------------------------------------------------------
 if [[ $DO_FIREWALL -eq 1 ]]; then
@@ -789,8 +814,11 @@ EOF
     - The control plane, the website, the proxy and the VPN egress all share
       one IP. Seizing it gets everything at once — the exact concentration
       the production topology exists to avoid.
-    - Payments are unconfigured, so paid signup returns 502 until you fill
-      them in at /admin. Free trials work now.
+    - Paid signup needs one thing: your Bitcoin xpub, in /admin under
+      Settings -> Business wallets. Paste it and paid signup works — a fresh
+      address per invoice, money straight to your wallet, settled by the
+      poller within a confirmation. No account anywhere, no callback URL.
+      Until then paid signup returns 502; free trials work regardless.
 
   Rebuild as three separate nodes when you are done kicking the tyres:
   scripts/bootstrap-node.sh, one per VPS. docs/DEPLOY.md has the walkthrough.
@@ -810,10 +838,16 @@ ${GRN}  Production deployment is up at https://$DOMAIN${NC}
     dashboard behind a VPN. It can ban customers and change where money goes.
 
   Still to do before customers arrive:
-    1. Payments — fill in $ETC/api.env, then: systemctl restart 0trust-api
-       (btcpay: BTCPAY_URL / STORE_ID / API_KEY / WEBHOOK_SECRET,
-        hosted:  ZTV_PAYMENT_PROVIDER=hosted + the ZTV_PAYMENT_* keys)
-       Webhook URL: https://$DOMAIN/api/v1/payment/webhook
+    1. Payments — set them from the dashboard, or $ETC/api.env then
+       systemctl restart 0trust-api.
+       The default provider is "watch": put your Bitcoin xpub in WALLET_BTC
+       and you are taking payments. Non-custodial, no account anywhere, and
+       no webhook to register — a timer polls a public explorer.
+       Other options, all needing an account somewhere first:
+        btcpay: BTCPAY_URL / STORE_ID / API_KEY / WEBHOOK_SECRET
+        hosted: ZTV_PAYMENT_PROVIDER=hosted + the ZTV_PAYMENT_* keys
+        stripe/square: cards, and a real identity behind every payment
+       Webhook URL for those: https://$DOMAIN/api/v1/payment/webhook
     2. Mesh nodes — run scripts/bootstrap-node.sh on each, or mint a
        provisioning token with api/mint-provision-token.py for RAM-only nodes.
        Until at least one exists, /wg/register returns 503.

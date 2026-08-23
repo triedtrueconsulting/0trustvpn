@@ -40,6 +40,8 @@ import hashlib
 import hmac
 import json
 import os
+
+import chainwatch
 import time
 import urllib.error
 import urllib.parse
@@ -645,8 +647,176 @@ class SquareProvider:
 
 # ---------------------------------------------------------------------------
 
+
+class WatchOnlyProvider:
+    """
+    Bitcoin straight into the operator's own wallet, with nothing in between.
+
+    Every other provider here puts a third party between the customer and the
+    money: BTCPay is a server somebody has to run, and a hosted gateway is
+    custodial and usually wants identity documents. This one needs neither. The
+    operator pastes the *public* half of their wallet, we derive a fresh
+    receive address per invoice, and we watch a public block explorer for the
+    payment. Funds land in their wallet directly; the control plane never has
+    the keys and could not move a satoshi if it were seized.
+
+    It is also the only provider that works on a fresh VPS with no accounts
+    signed up for anywhere, which is the point.
+
+    What it gives up, stated plainly:
+
+      - Bitcoin only. Monero and Zcash need per-invoice addresses this cannot
+        derive without wallet software, and reusing one address for every
+        customer would both break payment privacy and make two payments of the
+        same amount impossible to tell apart. currencies_for() says BTC and
+        means it — see docs, and do not add coins here without solving that.
+      - It trusts a public explorer for confirmation. That is one API that can
+        lie or go down. It cannot steal anything, and a wrong answer is
+        recoverable by hand from the dashboard, but it is a dependency and
+        pretending otherwise would be dishonest.
+      - Price comes from the same explorer's ticker, so the USD conversion is
+        theirs, not ours.
+
+    There is no webhook. Confirmation is by polling, which is what makes this
+    deployable without an inbound callback URL, a TLS certificate or a
+    provider dashboard to configure.
+    """
+
+    # Esplora's API, which mempool.space, blockstream.info and any self-hosted
+    # instance all speak identically.
+    DEFAULT_API = "https://mempool.space/api"
+
+    def __init__(self, xpub=None, api_base=None, confirmations=None,
+                 timeout=15.0):
+        self.xpub = (xpub if xpub is not None
+                     else os.environ.get("WALLET_BTC", "")).strip()
+        self.api = (api_base or os.environ.get("NODE_RPC_BTC")
+                    or self.DEFAULT_API).rstrip("/")
+        self.confirmations = int(
+            confirmations if confirmations is not None
+            else os.environ.get("ZTV_BTC_CONFIRMATIONS", "1"))
+        self.timeout = timeout
+
+    # -- addresses ---------------------------------------------------------
+    def address_for(self, index: int) -> str:
+        """
+        The receive address for this invoice.
+
+        A plain address in WALLET_BTC is accepted and reused, because some
+        operators genuinely want that, but it is worse in every way: payments
+        become impossible to attribute when two customers owe the same amount,
+        and the whole payment history becomes public and linked. The dashboard
+        says so.
+        """
+        if not self.xpub:
+            raise PaymentError("WALLET_BTC is not set — no wallet to pay into")
+        if chainwatch.looks_like_xpub(self.xpub):
+            return chainwatch.receive_address(self.xpub, index)
+        return self.xpub
+
+    def reuses_one_address(self) -> bool:
+        return bool(self.xpub) and not chainwatch.looks_like_xpub(self.xpub)
+
+    # -- price -------------------------------------------------------------
+    def btc_price_usd(self) -> float:
+        raw = _http("GET", f"{self.api}/v1/prices", {}, None, self.timeout)
+        price = float((raw or {}).get("USD") or 0)
+        if price <= 0:
+            raise PaymentError("price feed returned no USD rate")
+        return price
+
+    # -- provider interface -------------------------------------------------
+    def create_invoice(self, amount_usd: float, account_id: int, months: int,
+                       redirect_url: str | None = None,
+                       index: int | None = None) -> dict:
+        if index is None:
+            raise PaymentError("watch-only invoices need a derivation index")
+        address = self.address_for(index)
+        sats = int(round(amount_usd / self.btc_price_usd() * 100_000_000))
+        if sats <= 0:
+            raise PaymentError("computed a zero-satoshi invoice")
+        btc = f"{sats / 100_000_000:.8f}"
+        return {
+            "id": f"btc-{index}-{int(time.time())}",
+            # No hosted checkout to send anyone to: the customer pays from
+            # their own wallet. The UI renders the address and a QR.
+            "checkout_url": "",
+            "status": PENDING,
+            "payment_address": address,
+            "amount_crypto": btc,
+            "derivation_index": index,
+            "raw": {"address": address, "sats": sats, "index": index},
+        }
+
+    def address_received(self, address: str) -> tuple[int, int]:
+        """(confirmed sats, unconfirmed sats) ever received at an address."""
+        raw = _http("GET", f"{self.api}/address/{address}", {}, None,
+                    self.timeout) or {}
+        chain = raw.get("chain_stats") or {}
+        mem = raw.get("mempool_stats") or {}
+        return int(chain.get("funded_txo_sum") or 0), int(
+            mem.get("funded_txo_sum") or 0)
+
+    def check(self, address: str, expected_sats: int) -> dict:
+        """
+        Has this invoice been paid? Called by the poller, which owns crediting.
+
+        Overpayment settles. Underpayment does not: crediting a month for half
+        the price because the customer's wallet took a fee off the top is a
+        revenue leak, and the amount received is reported so support can
+        settle it by hand.
+        """
+        confirmed, pending = self.address_received(address)
+        paid = confirmed >= expected_sats
+        return {
+            "status": SETTLED if paid else PENDING,
+            "confirmed_sats": confirmed,
+            "unconfirmed_sats": pending,
+            "expected_sats": expected_sats,
+            # Seen but not yet confirmed: worth showing the customer so the
+            # page stops looking broken while they wait for a block.
+            "seen": confirmed > 0 or pending > 0,
+        }
+
+    def get_invoice(self, invoice_id: str) -> dict:
+        # The explorer knows addresses, not our invoice ids. The poller and
+        # the status endpoint look the address up locally and call check().
+        return {"id": invoice_id, "status": PENDING, "raw": {}}
+
+    def get_payment_methods(self, invoice_id: str) -> list[dict]:
+        return []
+
+    def verify_webhook(self, payload: bytes, headers) -> bool:
+        # There is no webhook, so there is nothing that could be valid. If a
+        # POST arrives at the webhook endpoint under this provider it is
+        # either a mistake or an attempt.
+        return False
+
+    def parse_webhook(self, payload: bytes) -> tuple[Optional[str], str]:
+        return None, PENDING
+
+    def health(self) -> tuple[bool, str]:
+        if not self.xpub:
+            return False, "WALLET_BTC is not set"
+        try:
+            addr = self.address_for(0)
+        except Exception as e:
+            return False, f"WALLET_BTC is not usable: {e}"
+        try:
+            price = self.btc_price_usd()
+        except PaymentError as e:
+            return False, f"explorer unreachable: {str(e)[:120]}"
+        note = "reusing one address for every invoice" \
+            if self.reuses_one_address() else f"first address {addr}"
+        return True, (f"watching {self.api}, BTC ${price:,.0f}, "
+                      f"{self.confirmations} confirmation(s); {note}")
+
+
+# ---------------------------------------------------------------------------
+
 _PROVIDERS = {"btcpay": BTCPayProvider, "hosted": HostedProvider,
-              "stripe": StripeProvider, "square": SquareProvider}
+              "stripe": StripeProvider, "square": SquareProvider,
+              "watch": WatchOnlyProvider}
 _instance = None
 
 
@@ -674,6 +844,9 @@ def reset_provider():
 # Which settings each provider cannot work without. The dashboard uses this to
 # tell an operator what is still missing instead of letting signup 502.
 REQUIRED_SETTINGS = {
+    # Just the wallet. No account anywhere, no callback URL, no secret to
+    # share — which is what lets a fresh VPS take money the day it is built.
+    "watch": ("WALLET_BTC",),
     "btcpay": ("BTCPAY_URL", "BTCPAY_STORE_ID", "BTCPAY_API_KEY",
                "BTCPAY_WEBHOOK_SECRET"),
     "hosted": ("ZTV_PAYMENT_API_URL", "ZTV_PAYMENT_API_KEY",
@@ -695,7 +868,16 @@ def currencies_for(name: str) -> tuple[str, ...]:
     checkout page that only accepts Visa would be a lie the dashboard is in a
     position to prevent.
     """
-    return ("USD (card)",) if (name or "").lower() in CARD_PROVIDERS else CURRENCIES
+    name = (name or "").lower()
+    if name in CARD_PROVIDERS:
+        return ("USD (card)",)
+    # The watch-only path derives addresses from an extended public key, and
+    # only Bitcoin's is derivable without wallet software. Listing four coins
+    # on a checkout page that can only produce a BTC address would be the
+    # same lie in the other direction.
+    if name == "watch":
+        return ("BTC",)
+    return CURRENCIES
 
 
 def is_card_provider(name: str) -> bool:

@@ -306,6 +306,24 @@ try:
         check("dnsmasq accepts the rendered config", r.returncode == 0,
               (r.stderr or r.stdout)[-300:])
 
+    print("\n[7c] payments can be made to work on a box with nothing else")
+    # The whole claim of the watch-only provider is that a fresh VPS can take
+    # money with no account signed up for anywhere. The installer has to
+    # actually ship it and say how.
+    rc, out = run_installer("--mode", "test")
+    check("the summary says what paid signup needs", "xpub" in out.lower(), out[-900:])
+    check("and does not still claim payments are simply unconfigured",
+          "Payments are unconfigured" not in out, out[-900:])
+    installer_src = open(INSTALL).read()
+    for want, why in (
+        ("0trust-poll.timer", "the settlement poller is installed"),
+        ("chainwatch.py", "address derivation is installed"),
+        ("poll_invoices.py", "the poller script is installed"),
+        ("ZTV_PAYMENT_PROVIDER=watch", "watch-only is the default provider"),
+        ("WALLET_BTC", "the wallet key is in the generated env file"),
+    ):
+        check(why, want in installer_src, f"{want} missing from install.sh")
+
     print("\n[8] the summary tells the truth about a one-box deployment")
     rc, out = run_installer("--mode", "test")
     for want, why in (

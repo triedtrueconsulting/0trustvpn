@@ -36,7 +36,9 @@ def interpreter() -> str:
 MODULES = [
     ("lifecycle",    "signup, payment, devices, multi-hop, node lifecycle, sweeper"),
     ("concurrency",  "parallel writers, degenerate topologies, auth edges"),
+    ("chainwatch",   "address derivation, against the BIP test vectors"),
     ("payments",     "BTC/XMR/ZEC through BTCPay and a hosted gateway"),
+    ("watchpay",     "taking BTC into your own wallet, no merchant account"),
     ("trial",        "proof-of-work, redemption, trial limits, conversion"),
     ("routing",      "which node a customer is routed to, and what we claim"),
     ("client",       "the compiled 0trust binary, end to end"),

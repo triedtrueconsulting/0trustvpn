@@ -37,7 +37,8 @@ from typing import Optional
 SETTING_SPECS: dict[str, dict] = {
     # --- payment provider selection ---
     "ZTV_PAYMENT_PROVIDER": {"type": "choice", "secret": False,
-                             "choices": ["btcpay", "hosted", "stripe", "square"],
+                             "choices": ["watch", "btcpay", "hosted",
+                                         "stripe", "square"],
                              "group": "payments",
                              "label": "Active payment provider"},
 
@@ -82,7 +83,7 @@ SETTING_SPECS: dict[str, dict] = {
 
     # --- business wallets: where crypto actually lands ---
     "WALLET_BTC": {"type": "text", "secret": False, "group": "wallets",
-                   "label": "BTC xpub / address"},
+                   "label": "BTC xpub / zpub (watch-only provider uses this)"},
     "WALLET_ETH": {"type": "text", "secret": False, "group": "wallets",
                    "label": "ETH address"},
     "WALLET_XMR": {"type": "text", "secret": False, "group": "wallets",
@@ -93,7 +94,9 @@ SETTING_SPECS: dict[str, dict] = {
     # --- public chain endpoints ---
     # We host no chain data. These name whose node we borrow.
     "NODE_RPC_BTC": {"type": "url", "secret": False, "group": "chain",
-                     "label": "BTC public endpoint"},
+                     "label": "BTC explorer API (blank = mempool.space)"},
+    "ZTV_BTC_CONFIRMATIONS": {"type": "int", "secret": False, "group": "chain",
+                              "label": "Confirmations before crediting"},
     "NODE_RPC_ETH": {"type": "url", "secret": False, "group": "chain",
                      "label": "ETH public RPC"},
     "NODE_RPC_XMR": {"type": "url", "secret": False, "group": "chain",

@@ -1,0 +1,13 @@
+[Unit]
+Description=Check watch-only invoices for payment
+
+[Timer]
+# Every minute. A customer watching a checkout page should see it settle
+# within a block confirmation, not within an hour — and an explorer query per
+# pending invoice is cheap enough that this costs nothing when idle.
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

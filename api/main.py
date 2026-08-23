@@ -160,6 +160,17 @@ CREATE TABLE IF NOT EXISTS mesh_nodes (
   last_heartbeat  INTEGER NOT NULL DEFAULT 0
 );
 
+-- Next unused receive-address index for the watch-only payment provider.
+-- A counter row rather than MAX(index)+1 over invoices: the read and the
+-- reserve have to be one atomic step or two concurrent signups derive the
+-- same address, and two customers paying the same amount into it become
+-- impossible to tell apart. Allocation happens inside db(write=True), which
+-- opens BEGIN IMMEDIATE.
+CREATE TABLE IF NOT EXISTS address_index (
+  chain  TEXT PRIMARY KEY,      -- 'btc'
+  next   INTEGER NOT NULL
+);
+
 -- Operational events for the operator: a node went dark, a payment provider
 -- stopped answering, the disk is filling up. Nothing here identifies a
 -- customer, and nothing may be added that does — this table is the one place
@@ -369,6 +380,7 @@ MIGRATIONS = [
     ("accounts", "banned_at", "INTEGER NOT NULL DEFAULT 0"),
     ("accounts", "note", "TEXT"),
     ("mesh_nodes", "ipv6", "INTEGER NOT NULL DEFAULT 0"),
+    ("invoices", "derivation_index", "INTEGER"),
 ]
 
 
@@ -455,17 +467,43 @@ from payments import (  # noqa: E402
 )
 
 
+def _next_address_index(chain: str = "btc") -> int:
+    """
+    Reserve the next receive-address index.
+
+    Read and increment in one BEGIN IMMEDIATE transaction. Two signups landing
+    together must not derive the same address: the whole point of a fresh
+    address per invoice is that a payment identifies which invoice it settles,
+    and a shared one destroys that as soon as two customers owe the same
+    amount.
+    """
+    with db(write=True) as conn:
+        row = conn.execute(
+            "SELECT next FROM address_index WHERE chain = ?", (chain,)).fetchone()
+        idx = int(row["next"]) if row else 0
+        conn.execute(
+            "INSERT INTO address_index (chain, next) VALUES (?, ?) "
+            "ON CONFLICT(chain) DO UPDATE SET next = ?",
+            (chain, idx + 1, idx + 1))
+    return idx
+
+
 def create_invoice(account_id: int, months: int, amount_usd: float) -> dict:
     """
     Open an invoice with whichever provider is configured. Returns the
-    normalized shape: {id, checkout_url, status, raw}.
+    normalized shape: {id, checkout_url, status, raw}, plus payment_address
+    and amount_crypto where the provider derives them itself.
     """
+    kwargs = {}
+    if os.environ.get("ZTV_PAYMENT_PROVIDER", "btcpay").lower() == "watch":
+        kwargs["index"] = _next_address_index("btc")
     try:
         return provider().create_invoice(
             amount_usd=amount_usd,
             account_id=account_id,
             months=months,
             redirect_url="https://0trustvpn.com/welcome",
+            **kwargs,
         )
     except PaymentError as e:
         # Don't leak provider internals to clients
@@ -805,10 +843,13 @@ def create_account(req: AccountCreateRequest):
         conn.execute(
             """INSERT INTO invoices
                  (id, account_id, months, amount_usd, currency, status,
-                  created_at, checkout_url)
-               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?)""",
+                  created_at, checkout_url, payment_address, amount_crypto,
+                  derivation_index)
+               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?)""",
             (invoice["id"], account_id, req.months, amount, invoice["status"],
-             now, invoice.get("checkout_url", "")),
+             now, invoice.get("checkout_url", ""),
+             invoice.get("payment_address"), invoice.get("amount_crypto"),
+             invoice.get("derivation_index")),
         )
 
     return AccountCreateResponse(
@@ -1036,10 +1077,13 @@ def topup(req: AccountCreateRequest, account: dict = Depends(require_account)):
         conn.execute(
             """INSERT INTO invoices
                  (id, account_id, months, amount_usd, currency, status,
-                  created_at, checkout_url)
-               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?)""",
+                  created_at, checkout_url, payment_address, amount_crypto,
+                  derivation_index)
+               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?)""",
             (invoice["id"], account["id"], req.months, amount, invoice["status"],
-             now, invoice.get("checkout_url", "")),
+             now, invoice.get("checkout_url", ""),
+             invoice.get("payment_address"), invoice.get("amount_crypto"),
+             invoice.get("derivation_index")),
         )
 
     return AccountCreateResponse(
@@ -1064,10 +1108,25 @@ def payment_methods(invoice_id: str):
     """
     with db() as conn:
         row = conn.execute(
-            "SELECT id, checkout_url FROM invoices WHERE id = ?", (invoice_id,)
+            """SELECT id, checkout_url, payment_address, amount_crypto
+                 FROM invoices WHERE id = ?""", (invoice_id,)
         ).fetchone()
     if not row:
         raise HTTPException(404, "Invoice not found")
+
+    # The watch-only provider derived the address when the invoice was opened
+    # and we stored it. Asking the explorer again would tell us nothing new
+    # and would put a third party in the path of rendering a checkout page.
+    if row["payment_address"]:
+        amount = row["amount_crypto"] or ""
+        return {"methods": [{
+            "currency": "BTC",
+            "address": row["payment_address"],
+            "amount": amount,
+            "rate": None,
+            "uri": f"bitcoin:{row['payment_address']}"
+                   + (f"?amount={amount}" if amount else ""),
+        }], "checkout_url": ""}
 
     try:
         methods = provider().get_payment_methods(invoice_id)
@@ -1101,9 +1160,27 @@ def payment_status(invoice_id: str):
     #
     # Read-only on purpose: this endpoint is unauthenticated, so a poll must
     # never be able to credit an account. Settlement happens in the webhook,
-    # which is signed. The worst a forged poll achieves is a stale label.
+    # which is signed, or in the poller for the watch-only provider. The worst
+    # a forged poll achieves is a stale label.
+    p = provider()
+    if row["payment_address"] and hasattr(p, "check"):
+        try:
+            sats = int(round(float(row["amount_crypto"] or 0) * 100_000_000))
+            live = p.check(row["payment_address"], sats)
+        except (PaymentError, ValueError):
+            return {"status": row["status"], "settled_at": None}
+        # "Seen but not confirmed" is the state customers ask support about.
+        # Saying it out loud stops the page looking broken while they wait for
+        # a block, and stops them paying twice.
+        return {"status": row["status"],
+                "settled_at": None,
+                "seen": live.get("seen", False),
+                "confirmed_sats": live.get("confirmed_sats", 0),
+                "expected_sats": live.get("expected_sats", 0),
+                "awaiting_confirmation": bool(
+                    live.get("unconfirmed_sats")) and not live.get("seen_enough")}
     try:
-        live = provider().get_invoice(invoice_id)
+        live = p.get_invoice(invoice_id)
         return {"status": live.get("status", row["status"]), "settled_at": None}
     except PaymentError:
         return {"status": row["status"], "settled_at": None}
