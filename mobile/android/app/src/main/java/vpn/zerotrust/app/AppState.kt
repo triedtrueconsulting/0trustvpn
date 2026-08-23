@@ -184,7 +184,8 @@ class AppState(app: Application) : AndroidViewModel(app) {
         api.wgRegister(req).map { resp ->
             WgConfig(
                 privateKey  = keys.privateKey,
-                interfaceIP = resp.interfaceIp,
+                interfaceIP  = resp.interfaceIp,
+                interfaceIP6 = resp.interfaceIp6,
                 dns         = resp.dns,
                 peers       = resp.peers,
             )

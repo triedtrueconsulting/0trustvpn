@@ -81,7 +81,7 @@ func Build(opts Options) (*Result, error) {
 		return nil, fmt.Errorf("register: %w", err)
 	}
 
-	cfg := wg.BuildConfig(priv, resp.InterfaceIP, resp.DNS, resp.Peers)
+	cfg := wg.BuildConfigDual(priv, resp.InterfaceIP, resp.InterfaceIP6, resp.DNS, resp.Peers)
 
 	res := &Result{
 		Config:    cfg,

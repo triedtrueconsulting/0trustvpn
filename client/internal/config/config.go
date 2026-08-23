@@ -33,6 +33,12 @@ type State struct {
 	// Sticky, because a kill switch you have to remember to re-enable on
 	// every connect is not a kill switch.
 	KillSwitch bool `json:"kill_switch,omitempty"`
+
+	// The IPv6 mesh address the last connect was given, if any. Empty means
+	// the exit node had no v6 egress, so v6 is blackholed rather than
+	// carried. Recorded so `0trust status` can say which it is instead of
+	// leaving the customer to guess.
+	InterfaceIP6 string `json:"interface_ip6,omitempty"`
 }
 
 func configDir() (string, error) {

@@ -42,6 +42,10 @@ WG_PRIV       = Path(os.environ.get("WG_PRIVKEY", "/etc/wireguard/wg0.key"))
 WG_PORT       = int(os.environ.get("WG_PORT", "51820"))
 MESH_GATEWAY  = os.environ.get("MESH_GATEWAY", "10.64.0.1/10")
 MESH_NETWORK  = os.environ.get("MESH_NETWORK", "10.64.0.0/10")
+MESH_NETWORK6 = os.environ.get("MESH_NETWORK6", "fd0e:5f7a:c21b::/48")
+# The v6 side of MESH_GATEWAY, same derivation the control plane uses: the
+# gateway's v4 address embedded in the low 32 bits of the ULA prefix.
+MESH_GATEWAY6 = os.environ.get("MESH_GATEWAY6", "")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
 
 # NOT "0trust_forward": nftables identifiers cannot start with a digit, and
@@ -132,33 +136,61 @@ def reconcile_peers(peers: list[dict]) -> None:
 ROUTE_PROTO = "static"
 
 
+def _derive_gateway6() -> str:
+    """v6 gateway address, derived from the v4 one unless explicitly set."""
+    if MESH_GATEWAY6:
+        return MESH_GATEWAY6
+    try:
+        v4 = ipaddress.IPv4Address(MESH_GATEWAY.split("/")[0])
+        net6 = ipaddress.ip_network(MESH_NETWORK6)
+        return str(ipaddress.IPv6Address(int(net6.network_address) + int(v4)))
+    except ValueError:
+        return ""
+
+
 def _in_mesh(cidr: str) -> bool:
+    """Is this prefix one of ours, in either family?"""
     try:
         net = ipaddress.ip_network(cidr, strict=False)
-        return net.subnet_of(ipaddress.ip_network(MESH_NETWORK))
     except ValueError:
+        return False
+    # subnet_of raises TypeError across families, so pick the right mesh
+    # network first. Peers now carry a v6 AllowedIP as well as a v4 one, and
+    # comparing those against the v4 network would have thrown rather than
+    # returned False — taking the whole peer sync down with it.
+    mesh = MESH_NETWORK6 if net.version == 6 else MESH_NETWORK
+    try:
+        return net.subnet_of(ipaddress.ip_network(mesh))
+    except (TypeError, ValueError):
         return False
 
 
+def _ip_cmd(cidr: str) -> list[str]:
+    """`ip` or `ip -6`, whichever this prefix needs."""
+    return ["ip", "-6"] if ":" in cidr else ["ip"]
+
+
 def _managed_routes() -> set[str]:
-    """Mesh routes on our interface that this daemon put there."""
-    r = subprocess.run(["ip", "-j", "route", "show", "dev", WG_IFACE,
-                        "proto", ROUTE_PROTO], capture_output=True, text=True)
-    if r.returncode != 0:
-        return set()
-    try:
-        rows = json.loads(r.stdout or "[]")
-    except json.JSONDecodeError:
-        return set()
+    """Mesh routes on our interface that this daemon put there, both families."""
     found = set()
-    for row in rows:
-        dst = row.get("dst") or ""
-        if not dst or dst == "default":
+    for family, hostlen in (("-4", "/32"), ("-6", "/128")):
+        r = subprocess.run(["ip", family, "-j", "route", "show", "dev",
+                            WG_IFACE, "proto", ROUTE_PROTO],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
             continue
-        if "/" not in dst:
-            dst += "/32"
-        if _in_mesh(dst):
-            found.add(dst)
+        try:
+            rows = json.loads(r.stdout or "[]")
+        except json.JSONDecodeError:
+            continue
+        for row in rows:
+            dst = row.get("dst") or ""
+            if not dst or dst == "default":
+                continue
+            if "/" not in dst:
+                dst += hostlen
+            if _in_mesh(dst):
+                found.add(dst)
     return found
 
 
@@ -171,7 +203,7 @@ def reconcile_routes(peers: list[dict]) -> None:
             if not cidr:
                 continue
             if "/" not in cidr:
-                cidr += "/32"
+                cidr += "/128" if ":" in cidr else "/32"
             if _in_mesh(cidr):
                 want.add(cidr)
     try:
@@ -180,17 +212,54 @@ def reconcile_routes(peers: list[dict]) -> None:
         log.warning("no `ip` binary — cannot manage peer routes")
         return
     for dst in sorted(want - have):
-        r = subprocess.run(["ip", "route", "replace", dst, "dev", WG_IFACE,
-                            "proto", ROUTE_PROTO], capture_output=True, text=True)
+        r = subprocess.run(_ip_cmd(dst) + ["route", "replace", dst, "dev",
+                                           WG_IFACE, "proto", ROUTE_PROTO],
+                           capture_output=True, text=True)
         if r.returncode != 0:
             log.warning("could not add route %s dev %s: %s",
                         dst, WG_IFACE, r.stderr.strip())
     for dst in sorted(have - want):
-        subprocess.run(["ip", "route", "del", dst, "dev", WG_IFACE,
-                        "proto", ROUTE_PROTO], capture_output=True)
+        subprocess.run(_ip_cmd(dst) + ["route", "del", dst, "dev", WG_IFACE,
+                                       "proto", ROUTE_PROTO],
+                       capture_output=True)
     if want - have or have - want:
         log.info("routes on %s: +%d -%d", WG_IFACE,
                  len(want - have), len(have - want))
+
+
+def has_ipv6_egress() -> bool:
+    """
+    Can this node actually reach the IPv6 internet?
+
+    Reported to the control plane on every heartbeat rather than configured
+    centrally, because it is a property of the VPS the operator rented and it
+    can change under them — a provider enabling or withdrawing v6 should not
+    require a database edit. Customers are only handed a v6 address when their
+    exit node says yes here; everywhere else v6 stays blackholed, which is
+    what it has always been.
+
+    A default route plus a global address is the honest test. Either alone is
+    not: an address with no route goes nowhere, and a route with no global
+    address has nothing to send from.
+    """
+    try:
+        routes = subprocess.run(["ip", "-6", "route", "show", "default"],
+                                capture_output=True, text=True, timeout=5)
+        if routes.returncode != 0 or not routes.stdout.strip():
+            return False
+        addrs = subprocess.run(["ip", "-6", "-j", "addr", "show", "scope", "global"],
+                               capture_output=True, text=True, timeout=5)
+        if addrs.returncode != 0:
+            return False
+        for link in json.loads(addrs.stdout or "[]"):
+            if link.get("ifname") == WG_IFACE:
+                continue          # our own tunnel address does not count
+            for info in link.get("addr_info", []):
+                if info.get("family") == "inet6" and info.get("scope") == "global":
+                    return True
+    except Exception as e:
+        log.debug("ipv6 probe failed: %s", e)
+    return False
 
 
 def bootstrap_interface() -> None:
@@ -208,6 +277,16 @@ def bootstrap_interface() -> None:
             check=True,
         )
         subprocess.run(["ip", "link", "set", "up", "dev", WG_IFACE], check=True)
+
+    # The v6 gateway address, added whether or not this node has v6 egress.
+    # Clients are only *told* about v6 when egress works, but the address has
+    # to exist regardless: without a source address on the interface the node
+    # cannot even answer a customer's DNS query over v6, and dnsmasq has
+    # nothing to bind.
+    gw6 = _derive_gateway6()
+    if gw6:
+        subprocess.run(["ip", "-6", "addr", "replace", f"{gw6}/128",
+                        "dev", WG_IFACE], capture_output=True)
 
 
 # ----------------------------------------------------------------------------
@@ -325,7 +404,7 @@ def heartbeat() -> None:
     psk_hash row to match, so without the id the control plane cannot tell
     which node just checked in.
     """
-    body = json.dumps({"node_id": NODE_ID}).encode()
+    body = json.dumps({"node_id": NODE_ID, "ipv6": has_ipv6_egress()}).encode()
     req = urllib.request.Request(
         f"{CONTROL_URL}/api/v1/node/heartbeat",
         data=body,

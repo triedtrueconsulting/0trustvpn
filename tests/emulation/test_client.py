@@ -64,6 +64,11 @@ try:
     check("status shows active subscription", rc == 0 and "active" in out, out)
     check("status shows days remaining", "89" in out or "90" in out or "days" in out, out)
 
+    # help.html tells customers `0trust status` will say which they have, so
+    # it has to actually say it.
+    check("status reports the IPv6 situation", "ipv6" in out.lower(), out)
+    check("status reports the kill switch", "kill switch" in out.lower(), out)
+
     print("\n[2] regions")
     rc, out = cli("regions")
     check("regions lists zur/rey/buc",

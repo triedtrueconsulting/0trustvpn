@@ -116,6 +116,19 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   field-for-field. See "Recurring bug classes" below — this has bitten us.
 - **Mesh network is `10.64.0.0/10`** (`MESH_NETWORK` in the API). The node
   egress filter's `CLIENT_NET` and the masquerade rule must match this.
+- **IPv6 mesh is `fd0e:5f7a:c21b::/48`** (`MESH_NETWORK6`), a ULA. A device's
+  v6 address is its v4 address embedded in the low 32 bits — 10.64.0.5 becomes
+  `fd0e:5f7a:c21b::a40:5` — so there is one allocator, not two racing ones.
+  That derivation exists three times (`mesh_ip6()` in the API,
+  `_derive_gateway6()` in meshd, `ztv_mesh_ip6()` in node-runtime.sh) and a
+  test asserts all three agree; a mismatch hands a client an address its node
+  does not answer on.
+- **`::/0` is always claimed, a v6 address is not.** Clients get a v6 address
+  only when the exit node reports working v6 egress (`mesh_nodes.ipv6`, set
+  from the heartbeat). Dropping `::/0` to "fix" v6 is how v6 leaks around the
+  tunnel on a dual-stack host — without an address it is blackholed, which is
+  the safe failure. v6 leaves the exit masqueraded (NAT66), not on a
+  per-customer prefix, which would be a tracking identifier.
 - **Multi-hop requires entry ≠ exit.** Enforced by `_validate_regions()` in
   the API, shared by both register and rotate endpoints.
 - **RAM-only ephemeral nodes:** tmpfs paths, swap off, fresh WG keys on boot,
@@ -158,7 +171,8 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   there. One node gets away with it via the `/10` connected route; three
   interfaces in one `/10` do not, and replies go to the wrong interface. Routes
   carry `proto static` so the daemon never deletes the kernel's own.
-- **Clients are handed `DNS = 10.64.0.1`, so something must answer there.**
+- **Clients are handed `DNS = 10.64.0.1` (plus the v6 gateway where v6 is
+  carried), so something must answer there.**
   `dnsmasq` on the mesh gateway, `bind-interfaces` (an open resolver on the
   public IP is a DNS-amplification abuse report waiting to happen), forwarding
   to `ZTV_DNS_UPSTREAM` (Quad9 by default). **Query logging must stay off** —

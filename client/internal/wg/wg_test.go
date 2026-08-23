@@ -109,6 +109,34 @@ func TestKillSwitch(t *testing.T) {
 	}
 }
 
+// IPv6 inside the tunnel. The rule that matters: ::/0 is claimed whether or
+// not we hand out a v6 address, because dropping it is how v6 leaks around
+// the tunnel on a dual-stack network.
+func TestBuildConfigDual(t *testing.T) {
+	v6 := BuildConfigDual("P", "10.64.0.5/32", "fd0e:5f7a:c21b::a40:5/128",
+		[]string{"10.64.0.1", "fd0e:5f7a:c21b::a40:1"}, samplePeers())
+	if !strings.Contains(v6, "Address = 10.64.0.5/32, fd0e:5f7a:c21b::a40:5/128") {
+		t.Errorf("both addresses should be on one Address line:\n%s", v6)
+	}
+	if !strings.Contains(v6, "DNS = 10.64.0.1, fd0e:5f7a:c21b::a40:1") {
+		t.Errorf("both resolvers should be listed:\n%s", v6)
+	}
+
+	// No v6 address is the normal case on a node without v6 egress, and it
+	// must produce exactly what the v4-only builder produces.
+	none := BuildConfigDual("P", "10.64.0.5/32", "", []string{"10.64.0.1"},
+		samplePeers())
+	if strings.Contains(none, "Address = 10.64.0.5/32,") {
+		t.Errorf("empty v6 left a trailing address:\n%s", none)
+	}
+	if none != BuildConfig("P", "10.64.0.5/32", []string{"10.64.0.1"}, samplePeers()) {
+		t.Error("BuildConfigDual with no v6 should equal BuildConfig")
+	}
+	if !strings.Contains(none, "AllowedIPs = 0.0.0.0/0, ::/0") {
+		t.Errorf("::/0 must be claimed even with no v6 address:\n%s", none)
+	}
+}
+
 func TestOptionsFor(t *testing.T) {
 	if len(OptionsFor(false)) != 0 {
 		t.Error("OptionsFor(false) should add nothing")

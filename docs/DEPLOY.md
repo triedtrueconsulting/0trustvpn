@@ -61,7 +61,12 @@ It:
 - masquerades customer traffic out the primary interface and loads the same
   abuse-mitigation egress filter a production node runs — no outbound SMTP, no
   pivoting into private ranges, connection-storm rate limit;
-- runs `dnsmasq` on 10.64.0.1, the resolver every client config names;
+- runs `dnsmasq` on 10.64.0.1 and its IPv6 counterpart, the resolvers every
+  client config names;
+- carries IPv6 inside the tunnel when the box has working v6 egress. meshd
+  probes for a v6 default route plus a global address and reports the answer
+  on every heartbeat; where the answer is no, clients get no v6 address and v6
+  is blackholed rather than leaked;
 - leaves ssh alone, because locking password auth on a box you are holding
   open with a password is how you lose the box.
 

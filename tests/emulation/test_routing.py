@@ -179,6 +179,85 @@ try:
     # Without this a blip removes a node permanently, until a human notices.
     check("and that puts it back in rotation", back == 1, back)
 
+    print("\n[8b] IPv6 inside the tunnel, only where it can actually go")
+    sql("UPDATE mesh_nodes SET active = 1, last_heartbeat = ?, ipv6 = 0",
+        int(time.time()))
+    token6, _ = H.paid_account(1)
+    st, r4, _ = connect(token6, region="zur")
+    # ::/0 is claimed whether or not we can carry v6. That is what stops v6
+    # escaping around the tunnel on a dual-stack network; without an address
+    # it is blackholed, which is exactly what it was before this existed.
+    check("a node without v6 egress hands out no v6 address",
+          r4.get("interface_ip6") is None, r4)
+    check("but the peer still claims ::/0, so v6 cannot leak",
+          "::/0" in r4["peers"][0]["allowed_ips"], r4)
+    check("and DNS stays v4-only", r4["dns"] == [api_main.MESH_GATEWAY_IP], r4)
+
+    sql("UPDATE mesh_nodes SET ipv6 = 1 WHERE region = 'zur'")
+    token7, _ = H.paid_account(1)
+    st, r6, pub6 = connect(token7, region="zur")
+    check("a v6-capable node hands out a v6 address",
+          bool(r6.get("interface_ip6")), r6)
+    v4addr = r6["interface_ip"].split("/")[0]
+    check("the v6 address is derived from the v4 one",
+          r6["interface_ip6"] == f"{api_main.mesh_ip6(v4addr)}/128", r6)
+    check("it is a /128, not a subnet",
+          r6["interface_ip6"].endswith("/128"), r6)
+    check("it is inside the ULA prefix, not routable space",
+          __import__("ipaddress").ip_address(
+              r6["interface_ip6"].split("/")[0]).is_private, r6)
+    check("DNS gains the v6 gateway",
+          api_main.mesh_gateway6() in r6["dns"], r6)
+
+    # The node has to authorize the v6 half or the packets are dropped on
+    # arrival, however well the client is configured.
+    holder = r6["exit_node"]
+    _, manifest = H.call("GET", f"/api/v1/wg/peers?node_id={holder}",
+                         headers={"X-Node-Psk": H.NODE_PSK})
+    mine = [p for p in manifest["peers"] if p["public_key"] == pub6]
+    check("the node's manifest carries the device", len(mine) == 1, manifest)
+    check("and authorizes both families",
+          mine and api_main.mesh_ip6(v4addr) + "/128" in mine[0]["allowed_ips"]
+          and v4addr + "/32" in mine[0]["allowed_ips"], mine)
+
+    # Three implementations of one derivation: the API, meshd, and the shell
+    # library the installer and node bootstrap share. A mismatch hands a
+    # client an address its node does not answer on.
+    import subprocess as _sp
+    shell6 = _sp.run(["bash", "-c",
+                      f'source {H.REPO}/scripts/node-runtime.sh; '
+                      f'ztv_mesh_ip6 {v4addr}'],
+                     capture_output=True, text=True).stdout.strip()
+    check("the shell library derives the same address",
+          shell6 == api_main.mesh_ip6(v4addr),
+          f"shell={shell6} api={api_main.mesh_ip6(v4addr)}")
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "meshd6", os.path.join(H.REPO, "wireguard", "0trust-meshd.py"))
+    _m = _ilu.module_from_spec(_spec)
+    os.environ.setdefault("CONTROL_URL", "http://127.0.0.1:1")
+    os.environ.setdefault("NODE_API_PSK", "x")
+    os.environ.setdefault("NODE_ID", "zur-01")
+    _spec.loader.exec_module(_m)
+    check("meshd derives the same gateway",
+          _m._derive_gateway6() == api_main.mesh_gateway6(),
+          f"meshd={_m._derive_gateway6()} api={api_main.mesh_gateway6()}")
+    check("meshd recognises a v6 mesh prefix as its own",
+          _m._in_mesh(f"{api_main.mesh_ip6(v4addr)}/128"))
+    # subnet_of raises across families; a v6 peer used to take the sync down.
+    check("and does not throw on a foreign v6 prefix",
+          _m._in_mesh("2001:db8::1/128") is False)
+
+    # A node reports its own capability, because it is a property of the VPS
+    # the operator rented and can change under them.
+    sql("UPDATE mesh_nodes SET ipv6 = 0 WHERE id = 'zur-01'")
+    st_hb, _ = H.call("POST", "/api/v1/node/heartbeat",
+                      {"node_id": "zur-01", "ipv6": True},
+                      headers={"X-Node-Psk": H.NODE_PSK})
+    check("a heartbeat can report v6 capability", st_hb == 200, st_hb)
+    check("and the control plane records it",
+          sql("SELECT ipv6 FROM mesh_nodes WHERE id = 'zur-01'")[0]["ipv6"] == 1)
+
     print("\n[9] the operator is told, and told only about infrastructure")
     events = sql("SELECT kind, severity, subject, detail FROM ops_events "
                  "ORDER BY id")

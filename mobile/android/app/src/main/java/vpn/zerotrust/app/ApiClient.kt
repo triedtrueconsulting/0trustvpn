@@ -36,6 +36,10 @@ import java.util.concurrent.TimeUnit
 
 @Serializable data class WgRegisterResponse(
     @SerialName("interface_ip") val interfaceIp: String,
+    // Present only when the exit node has working IPv6 egress. Null means v6
+    // is blackholed by the ::/0 AllowedIPs rather than carried — which is
+    // deliberate, so v6 cannot leak around the tunnel on a dual-stack network.
+    @SerialName("interface_ip6") val interfaceIp6: String? = null,
     val dns: List<String> = emptyList(),
     val peers: List<WgPeer> = emptyList(),
     val multihop: Boolean = false,
