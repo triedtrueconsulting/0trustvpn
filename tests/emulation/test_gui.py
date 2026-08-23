@@ -150,6 +150,41 @@ try:
                 timeout=8000)
             check("and off again", page.is_checked("#ks-toggle") is False)
 
+        print("\n[3c] the window has no browser-default chrome left in it")
+        # The kill switch shipped as a raw <input type=checkbox>: a white
+        # square, the one control in a warm-dark window that looked like it
+        # came from somewhere else — on the one setting where a customer needs
+        # to be certain which state they are in.
+        appearance = page.eval_on_selector(
+            "#ks-toggle",
+            "e => getComputedStyle(e).appearance || getComputedStyle(e).webkitAppearance")
+        check("the kill switch is a styled control, not an OS checkbox",
+              appearance == "none", appearance)
+        # Region labels ran under the dropdown chevron once we drew our own.
+        clipped = page.eval_on_selector_all(
+            "select",
+            "els => els.filter(e => e.scrollWidth > e.clientWidth + 1)"
+            ".map(e => e.id || e.name)")
+        check("no select clips its own text", clipped == [], clipped)
+        # Every interactive control needs a visible focus state or the window
+        # is unusable from the keyboard. It has to be reached BY keyboard:
+        # :focus-visible deliberately does not fire for a programmatic focus()
+        # or a mouse click, which is the whole point of using it.
+        page.click("body")
+        reached = False
+        for _ in range(40):
+            page.keyboard.press("Tab")
+            if page.evaluate("() => document.activeElement && document.activeElement.id") \
+                    == "ks-toggle":
+                reached = True
+                break
+        check("the kill switch is reachable by keyboard", reached)
+        if reached:
+            ring = page.evaluate(
+                "() => getComputedStyle(document.activeElement).boxShadow")
+            check("and shows a focus ring when it is",
+                  ring not in ("none", "", None), ring)
+
         print("\n[4] device manager lists and removes")
         page.click("#devices-btn")
         page.wait_for_selector("#devices-modal:not(.hidden)", timeout=15000)

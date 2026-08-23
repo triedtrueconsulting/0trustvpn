@@ -83,7 +83,7 @@ SETTING_SPECS: dict[str, dict] = {
 
     # --- business wallets: where crypto actually lands ---
     "WALLET_BTC": {"type": "text", "secret": False, "group": "wallets",
-                   "label": "BTC xpub / zpub (watch-only provider uses this)"},
+                   "label": "BTC xpub / zpub"},
     "WALLET_ETH": {"type": "text", "secret": False, "group": "wallets",
                    "label": "ETH address"},
     "WALLET_XMR": {"type": "text", "secret": False, "group": "wallets",
@@ -94,7 +94,7 @@ SETTING_SPECS: dict[str, dict] = {
     # --- public chain endpoints ---
     # We host no chain data. These name whose node we borrow.
     "NODE_RPC_BTC": {"type": "url", "secret": False, "group": "chain",
-                     "label": "BTC explorer API (blank = mempool.space)"},
+                     "label": "BTC explorer API"},
     "ZTV_BTC_CONFIRMATIONS": {"type": "int", "secret": False, "group": "chain",
                               "label": "Confirmations before crediting"},
     "NODE_RPC_ETH": {"type": "url", "secret": False, "group": "chain",
