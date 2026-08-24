@@ -220,6 +220,8 @@ check nginx-anonymizes-ip "Access log uses anonymized client IP" -- bash -c "
     fi
 "
 
+section "§5. MESH-NODE BEHAVIOR (node checks; skip on the control plane)"
+
 check node-egress-filter "Abuse egress filter is loaded (mesh nodes)" -- bash -c "
     command -v nft >/dev/null || exit 77
     # Control-plane boxes have no mesh interface and no egress table.
@@ -262,6 +264,8 @@ check node-dns-no-query-log "In-tunnel resolver keeps no query log (mesh nodes)"
     }
 "
 
+section "§3. CONTROL-PLANE DATABASE (retention)"
+
 check db-no-abandoned-signups "No unpaid signups retained past 7 days" -- bash -c "
     [[ -f '$DB_PATH' ]] || exit 77
     stale=\$(sqlite3 '$DB_PATH' \"
@@ -285,6 +289,8 @@ check db-no-stale-trial-nonces "No trial nonces retained past 24h" -- bash -c "
     \")
     [[ \"\$stale\" == '0' ]] || { echo \"\$stale trial nonces kept past 24h\"; exit 1; }
 "
+
+section "§4. WEB-TIER (nginx) LOGS (retention)"
 
 check nginx-log-retention "Access log retention ≤ 7 days" -- bash -c "
     if [[ -f '$NGINX_LOG' ]]; then

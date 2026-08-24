@@ -16,11 +16,15 @@ pointing at the ENTRY node's endpoint.
     ./api/smoke_test.py          # after .venv is on PATH
 """
 
-import base64, os, sys, tempfile, time, hashlib
+import atexit, base64, os, shutil, sys, tempfile, time, hashlib
 
 API_DIR = os.path.dirname(os.path.abspath(__file__))
 
-tmp = tempfile.mkdtemp()
+tmp = tempfile.mkdtemp(prefix="0trust-smoke-")
+# The database this creates is a full, unencrypted 0trust schema with real
+# rows in it. Left behind, it is exactly the finding scripts/audit-verify.sh
+# §8 looks for — produced by our own test run, on whatever box ran it.
+atexit.register(shutil.rmtree, tmp, True)
 os.environ["ZTV_DB_PATH"] = os.path.join(tmp, "0trust.db")
 os.environ["NODE_API_PSK"] = "test-node-psk"
 sys.path.insert(0, API_DIR)   # main.py imports btcpay by bare name

@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""
+Keep the audit pack and its verifier from drifting apart.
+
+docs/AUDIT.md is what a third-party auditor is handed; audit-verify.sh is what
+they run. §10 told them the script "runs the full check matrix" and that "each
+check has a short name" — and then never listed one. All 35 names were absent
+from the document. An auditor who gets a FAIL for `nginx-anonymizes-ip` had to
+read the shell script to find out which claim it defended, which is the
+opposite of what an audit pack is for.
+
+So the matrix is in the document now, and this keeps the two in step: a check
+with no row, or a row naming a check that no longer exists, is a failure. It is
+the same discipline CLAUDE.md already applies to privacy.html, terms.html and
+the audit pack — a claim nothing executes, or an executable nothing claims, is
+how this product loses the only thing it is selling.
+"""
+import os, re, subprocess, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import harness as H
+
+FAIL, PASS = [], []
+def check(n, ok, d=""):
+    (PASS if ok else FAIL).append(n)
+    print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
+
+SCRIPT = os.path.join(H.REPO, "scripts", "audit-verify.sh")
+DOC = os.path.join(H.REPO, "docs", "AUDIT.md")
+src = open(SCRIPT).read()
+doc = open(DOC).read()
+
+print("[1] every check in the script has a row in the audit pack")
+script_ids, descs = [], {}
+for line in src.splitlines():
+    m = re.match(r'^check ([a-z0-9-]+) "([^"]+)"', line)
+    if m:
+        script_ids.append(m.group(1))
+        descs[m.group(1)] = m.group(2)
+check(f"the script defines checks ({len(script_ids)})", bool(script_ids))
+check("check ids are unique", len(script_ids) == len(set(script_ids)),
+      [i for i in script_ids if script_ids.count(i) > 1])
+
+# Only the matrix under "### The checks" — AUDIT.md has other tables whose
+# first column is also a backticked lowercase word (region codes, provider
+# names), and counting those as documented check ids makes both directions of
+# this comparison meaningless.
+matrix = doc[doc.index("### The checks"):] if "### The checks" in doc else ""
+doc_ids = set(re.findall(r'^\| `([a-z0-9-]+)` \|', matrix, re.M))
+missing = sorted(set(script_ids) - doc_ids)
+check("no check is undocumented", not missing,
+      f"{missing} — an auditor seeing this FAIL has nothing to map it back to")
+
+print("\n[2] and the audit pack lists no check that does not exist")
+phantom = sorted(doc_ids - set(script_ids))
+check("no documented check is missing from the script", not phantom,
+      f"{phantom} — the pack promises a verification that cannot be run")
+
+print("\n[3] the descriptions match")
+mismatched = []
+for cid in sorted(doc_ids & set(script_ids)):
+    m = re.search(r'^\| `' + re.escape(cid) + r'` \| (.+?) \|$', matrix, re.M)
+    if m and m.group(1).strip() != descs[cid].strip():
+        mismatched.append(f"{cid}: doc {m.group(1)!r} vs script {descs[cid]!r}")
+check("every row says what its check says", not mismatched,
+      "\n          ".join(mismatched))
+
+print("\n[4] the script does what the pack says it does")
+check("AUDIT.md names the script", "scripts/audit-verify.sh" in doc)
+check("it explains that SKIP is normal", "SKIP" in doc,
+      "a majority of checks skip on any single host; an auditor who does not "
+      "know that will read a clean run as a broken one")
+check("the script is executable", os.access(SCRIPT, os.X_OK))
+
+# It has to survive being run by an auditor with no privileges and no
+# production host, which is how anyone first tries it.
+r = subprocess.run([SCRIPT], capture_output=True, text=True, timeout=600,
+                   cwd=H.REPO)
+check("it runs to completion on a host with nothing installed",
+      r.returncode >= 0 and "PASS:" in r.stdout,
+      r.stdout[-400:] + r.stderr[-400:])
+# Not "zero failures": what this script reports depends on the machine it is
+# pointed at, and a stray database somebody left in /tmp is a real finding, not
+# a broken test. What must never happen is a check failing because the CHECK is
+# broken — an unbound variable, a missing command, a syntax error — because
+# that reads to an auditor exactly like a genuine finding.
+broken = [l.strip() for l in r.stdout.splitlines() + r.stderr.splitlines()
+          if re.search(r'unbound variable|command not found|syntax error'
+                       r'|No such file or directory: |: line \d+:', l)]
+check("no check fails because the check itself is broken", not broken,
+      "\n          ".join(broken[:6]))
+
+summary = re.search(r'PASS:\S*\s+(\d+)\s+\S*FAIL:\S*\s+(\d+)\s+\S*SKIP:\S*\s+(\d+)',
+                    r.stdout)
+check("it prints a parseable summary", summary is not None,
+      r.stdout[-300:])
+if summary:
+    p_, f_, s_ = (int(x) for x in summary.groups())
+    check("every check is accounted for", p_ + f_ + s_ == len(script_ids),
+          f"{p_}+{f_}+{s_} != {len(script_ids)} checks defined")
+    print(f"      on this host: {p_} pass, {f_} fail, {s_} skip")
+
+# Filtering is documented; make sure it actually filters.
+r = subprocess.run([SCRIPT, "backups"], capture_output=True, text=True,
+                   timeout=300, cwd=H.REPO)
+ran = [i for i in re.findall(r'^  ([a-z0-9-]+)\s+\S.*\.\.\.', r.stdout, re.M)]
+check("passing a name runs only the matching checks",
+      bool(ran) and all("backups" in x for x in ran), ran)
+
+print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
+if FAIL:
+    print("  failures: " + ", ".join(FAIL))
+sys.exit(1 if FAIL else 0)

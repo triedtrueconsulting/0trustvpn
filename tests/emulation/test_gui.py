@@ -273,6 +273,22 @@ try:
                 timeout=25000)
             check("tunnel shows disconnected after removing self", True)
 
+        print("\n[6] a second launch hands over the running instance")
+        # The Start Menu shortcut, the desktop icon and the Windows autostart
+        # entry all run the same `0trust gui`. A user who clicks one while it
+        # is already running used to get a listen(): address already in use.
+        second = subprocess.run([BIN, "gui", "--no-browser"], env=GUI_ENV,
+                                capture_output=True, text=True, timeout=30)
+        check("the second `0trust gui` exits cleanly", second.returncode == 0,
+              (second.stdout + second.stderr)[-300:])
+        check("and says the GUI is already running",
+              "already running" in second.stdout, second.stdout[-200:])
+        check("without taking the port from the first",
+              wait_port(GUI_PORT, timeout=5))
+        page.reload()
+        page.wait_for_selector("#view-main:not(.hidden)", timeout=20000)
+        check("the original instance is still serving", True)
+
         check("no JS errors across the whole session", not errors, errors)
 finally:
     if browser:

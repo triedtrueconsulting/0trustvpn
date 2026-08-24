@@ -174,6 +174,35 @@ try:
         check(f"{name} states the real device cap", stated == {cap},
               f"{name} says {sorted(stated)}, the API enforces {cap}")
 
+    print("\n[5c-vendor] the pinned third-party asset is actually pinned")
+    # web/vendor/ exists so no page contacts a CDN, and docs/AUDIT.md claims
+    # the files there are SRI-checked. Three things have to agree: the bytes on
+    # disk, the hash in MANIFEST.txt, and the integrity= attribute on whatever
+    # loads it. Update any one alone and either the claim is stale or the
+    # browser silently refuses to run the script and the feature just stops.
+    import base64 as _b64, hashlib as _hl
+    vendor_dir = os.path.join(WEB, "vendor")
+    manifest = ""
+    mpath = os.path.join(vendor_dir, "MANIFEST.txt")
+    if os.path.exists(mpath):
+        manifest = open(mpath).read()
+    all_html = "".join(open(os.path.join(WEB, p)).read() for p in pages)
+    for fn in sorted(os.listdir(vendor_dir)):
+        if fn == "MANIFEST.txt":
+            continue
+        raw = open(os.path.join(vendor_dir, fn), "rb").read()
+        digest = _hl.sha256(raw).digest()
+        check(f"{fn} is listed in MANIFEST.txt with its real hash",
+              digest.hex() in manifest,
+              f"manifest does not carry {digest.hex()}")
+        sri = "sha256-" + _b64.b64encode(digest).decode()
+        referenced = f"/vendor/{fn}" in all_html
+        if referenced:
+            check(f"{fn} is loaded with a matching integrity attribute",
+                  sri in all_html,
+                  f"expected integrity=\"{sri}\" — the page pins a hash that is "
+                  "not this file, so the browser will refuse to run it")
+
     print("\n[5a] every page finishes its own styling")
     # Each page carries its own <style> block. Two of them had no rule for a
     # plain <a>, so every prose link rendered in browser-default blue,

@@ -407,7 +407,112 @@ production host. It exits non-zero if any verification fails.
 sudo ./scripts/audit-verify.sh
 ```
 
-Each check has a short name; run with `-v` to see the underlying command.
+Each check has a short name; run with `-v` to see the underlying command,
+and pass names as arguments to run only those (`audit-verify.sh nginx db`).
+
+Exit code is the number of failed checks. A **SKIP** means the check does not
+apply to the host it was run on — the ephemeral-node checks skip on a control
+plane and vice versa, so expect a majority of skips from any single machine.
+Run it on the control plane and on each mesh node to cover the matrix.
+
+### The checks
+
+Every check below is the executable form of a claim made earlier in this
+document. If one fails, the claim above it is the one that needs answering.
+
+**§2.5 JURISDICTION RESTRICTIONS**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `juris-allowlist` | Only zur, rey, buc regions present in mesh_nodes |
+| `juris-no-eyes-codes` | No Eyes-country region codes anywhere in DB |
+| `juris-public-ip-geolocate` | Node public IPs geolocate to declared countries |
+
+**§3. CONTROL-PLANE DATABASE**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `db-exists` | Database file exists |
+| `db-no-plaintext-token` | No plaintext token columns anywhere |
+| `db-no-customer-ip` | No IP-address column anywhere |
+| `db-no-private-key` | No customer private-key column |
+| `db-hop-pairs-ttl` | All hop_pairs have non-null expires_at |
+| `db-failed-invoices-gc` | No failed invoices older than 30d |
+
+**§4. WEB-TIER (nginx) LOGS**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `nginx-conf-exists` | nginx config present |
+| `nginx-no-user-agent` | Access log format does not include User-Agent |
+| `nginx-anonymizes-ip` | Access log uses anonymized client IP |
+
+**§5. MESH-NODE BEHAVIOR**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `node-egress-filter` | Abuse egress filter is loaded (mesh nodes) |
+| `node-nat-table` | Exit NAT table is loaded (mesh nodes) |
+| `node-dns-no-query-log` | In-tunnel resolver keeps no query log (mesh nodes) |
+
+**§3. CONTROL-PLANE DATABASE**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `db-no-abandoned-signups` | No unpaid signups retained past 7 days |
+| `db-no-stale-trial-nonces` | No trial nonces retained past 24h |
+
+**§4. WEB-TIER**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `nginx-log-retention` | Access log retention ≤ 7 days |
+| `nginx-canary-no-cache` | Canary served with no-cache headers |
+
+**§5. MESH-NODE BEHAVIOR**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `meshd-installed` | 0trust-meshd service unit exists |
+| `nft-no-logging` | nftables ruleset contains no log statements |
+| `wg-no-monitoring` | No periodic 'wg show' polling writing to disk |
+| `meshd-log-no-customer-data` | meshd journal has no customer pubkeys |
+
+**§5.3 EPHEMERAL (RAM-ONLY) NODES**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `ram-tmpfs-wireguard` | Ephemeral: /etc/wireguard is tmpfs |
+| `ram-tmpfs-0trust` | Ephemeral: /var/0trust + /etc/0trust are tmpfs |
+| `ram-no-swap` | Ephemeral: swap is fully disabled |
+| `ram-journald-volatile` | Ephemeral: journald is volatile |
+
+**§7. APPLICATION (API) LOGS**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `api-log-no-tokens` | Recent API log has no account-token leakage |
+| `api-log-no-pubkeys` | Recent API log has no WireGuard pubkeys |
+| `api-journald-retention` | journald retention ≤ 7 days |
+
+**§8. BACKUPS**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `backups-encrypted` | No UNENCRYPTED database copies on disk |
+| `backups-no-leftover-snapshot` | No leftover plaintext .snap-* snapshots |
+
+**§11. KNOWN-LIMITATION DISCLOSURES**
+
+| Check | What a pass proves |
+|-------|--------------------|
+| `no-cdnjs` | Landing page does not reference cdnjs or other CDNs |
+| `vendor-sri-pinned` | All vendored scripts have SRI integrity attributes |
+| `canary-fresh` | Warrant canary is < 14 days old |
+
+`tests/emulation/test_audit.py` asserts this table and the script cannot drift
+apart: a check with no row here, or a row naming a check that does not exist,
+fails the build.
 
 ---
 

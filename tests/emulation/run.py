@@ -55,6 +55,7 @@ MODULES = [
     ("release",      "cut a signed release and verify it (skips without gpg)"),
     ("backup",       "back the control plane up, restore it, serve from it"),
     ("canary",       "sign a warrant canary and age it until the check fires"),
+    ("audit",        "the audit pack and its verifier, kept in step"),
     ("security",       "authorization boundaries under adversarial input"),
     ("multihop_netns", "real packets through entry->exit NAT (needs CAP_NET_ADMIN)"),
     ("onebox_netns",   "the single-VPS mesh: same-host DNAT, 3 tables, peer routes"),
