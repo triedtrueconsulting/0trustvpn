@@ -108,7 +108,7 @@
   .nav-links a:hover { color: var(--ink); }
 
   .nav-cta {
-    background: var(--ink);
+    background: var(--amber);
     color: var(--bg);
     padding: 10px 18px;
     border-radius: 2px;
@@ -121,9 +121,26 @@
     transition: all 0.2s;
   }
   .nav-cta:hover {
-    background: var(--amber);
+    background: var(--amber-bright, #e8b87d);
     color: var(--bg);
+    box-shadow: 0 2px 12px rgba(212,165,116,0.3);
   }
+
+  /* Links.
+     There was no rule for a plain <a> anywhere on this page, so every link
+     inside body copy fell through to the browser default: blue, underlined,
+     on a warm-dark background. It read as an unfinished page, which on a
+     product selling careful work is the worst possible first impression. */
+  a { color: var(--amber); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  a:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(212,165,116,0.3);
+    border-radius: 2px;
+  }
+  /* Buttons that happen to be anchors are buttons, not links. */
+  .btn-primary, .btn-ghost, .nav-cta { text-decoration: none; }
+  .btn-primary:hover, .btn-ghost:hover, .nav-cta:hover { text-decoration: none; }
 
   /* ============ HERO ============ */
   .hero {
@@ -193,11 +210,15 @@
   h1 .strike::after {
     content: '';
     position: absolute;
-    left: -2%; right: -2%;
-    top: 52%;
+    left: -1.5%; right: -1.5%;
+    /* Optical centre of the serif lowercase, not the middle of the line box. */
+    top: 46%;
     height: 4px;
     background: var(--terra);
-    transform: rotate(-2deg);
+    border-radius: 2px;
+    /* A whisper of a tilt reads as hand-drawn; two degrees across a headline
+       this wide reads as a mistake. */
+    transform: rotate(-0.6deg);
   }
 
   .hero-sub {
@@ -211,7 +232,7 @@
   }
 
   .hero-note {
-    margin: 22px auto 0;
+    margin: 22px 0 0;
     max-width: 46rem;
     font-size: 13px;
     line-height: 1.7;
