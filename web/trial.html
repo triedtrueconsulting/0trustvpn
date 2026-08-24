@@ -30,6 +30,21 @@
   .bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin:1rem 0 0}
   .bar>i{display:block;height:100%;background:var(--amber);width:0;transition:width .2s}
   .hide{display:none}
+
+/* Keyboard focus. :focus-visible so a mouse click does not leave a ring
+   behind, but anyone navigating by keyboard can always see where they are. */
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: none; border-radius: 2px;
+  box-shadow: 0 0 0 3px rgba(212,165,116,0.3);
+}
+
+/* Surfaces. A flat fill a shade off the page background reads as nothing at
+   all on a dark layout; a top highlight and a real shadow give it an edge
+   without lightening the palette. Matches the client and the dashboard. */
+.card {
+  background-image: linear-gradient(180deg, rgba(244,237,224,0.035) 0%, transparent 40%);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.55);
+}
 </style>
 </head>
 <body>

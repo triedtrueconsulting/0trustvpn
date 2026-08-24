@@ -23,6 +23,19 @@
   --moss: #7d8f5a;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Links.
+   These pages each carry their own <style>, and the ones that forgot this
+   rule rendered every prose link in browser-default blue on a warm-dark
+   page — the surest sign of an unfinished site, on the pages a cautious
+   customer reads most carefully before trusting anyone with their traffic. */
+a { color: var(--amber); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+a:focus-visible {
+  outline: none; border-radius: 2px;
+  box-shadow: 0 0 0 3px rgba(212,165,116,0.3);
+}
+
 html, body {
   background: var(--bg);
   color: var(--ink);
@@ -208,7 +221,7 @@ code {
 <div class="wrap">
 
   <div style="display:flex;align-items:baseline">
-    <a class="brand" href="/"><span class="zero">0</span><span>trust</span></a>
+    <a class="brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
     <span class="crumb">/ download</span>
   </div>
 

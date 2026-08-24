@@ -29,6 +29,13 @@ a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .box.warn{border-left:2px solid var(--terra)}
 .box.ok{border-left:2px solid var(--moss)}
 .footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);color:var(--ink-faint);font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+
+/* Keyboard focus. :focus-visible so a mouse click does not leave a ring
+   behind, but anyone navigating by keyboard can always see where they are. */
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: none; border-radius: 2px;
+  box-shadow: 0 0 0 3px rgba(212,165,116,0.3);
+}
 </style>
 </head>
 <body>

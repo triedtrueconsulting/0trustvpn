@@ -154,6 +154,38 @@ try:
               int(m.group(1)) == api_main.MAX_DEVICES_PER_ACCOUNT,
               f"site says {m.group(1)}, API cap is {api_main.MAX_DEVICES_PER_ACCOUNT}")
 
+    print("\n[5a] every page finishes its own styling")
+    # Each page carries its own <style> block. Two of them had no rule for a
+    # plain <a>, so every prose link rendered in browser-default blue,
+    # underlined, on a warm-dark page — the surest sign of an unfinished site,
+    # on the pages a cautious customer reads hardest before trusting anyone
+    # with their traffic. A missing rule is invisible to an HTML parser, so
+    # check for it directly.
+    import re as _re
+    public = [f for f in sorted(glob.glob(os.path.join(WEB, "*.html")))
+              if os.path.basename(f) != "admin.html"]
+    for f in public:
+        name = os.path.basename(f)
+        src = open(f).read()
+        check(f"{name} styles its links",
+              _re.search(r"(^|[\s,])a\s*\{[^}]*color", src, _re.M) is not None,
+              "no `a { color: ... }` rule — links fall back to browser blue")
+        check(f"{name} shows a keyboard focus ring",
+              "focus-visible" in src,
+              "nothing visible when tabbing through the page")
+
+    # The site's mark is 0trustvpn; 0trust is the CLI's name. Four pages used
+    # the wrong one, which on the pages that argue for trustworthiness is a
+    # small thing that reads as carelessness.
+    brands = {}
+    for f in public:
+        src = open(f).read()
+        m = _re.search(r'class="brand"[^>]*>\s*(?:<span[^>]*>0</span>)?\s*<span[^>]*>([a-z]+)</span>', src)
+        if m:
+            brands.setdefault(m.group(1), []).append(os.path.basename(f))
+    check("the brand mark is the same on every page",
+          list(brands) in ([], ["trustvpn"]), brands)
+
     print("\n[5b] the help page describes features that exist")
     _, helpp = get("/help")
     # This page once advertised `0trust connect --port 443`, a flag the client
