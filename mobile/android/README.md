@@ -7,7 +7,9 @@ mobile/android/
 ├── build.gradle.kts            Project plugins
 ├── settings.gradle.kts         Module declaration + repos
 ├── gradle.properties           AGP / Kotlin / Compose flags
-├── gradle/wrapper/             Gradle 8.10 wrapper
+├── gradlew, gradlew.bat        Gradle wrapper scripts
+├── gradle/wrapper/             Gradle 8.10.2 wrapper + jar
+├── syntax-check.sh             Parse the Kotlin without the Android SDK
 ├── keystore.properties         (NOT committed — see below)
 └── app/
     ├── build.gradle.kts        Module deps + signing
@@ -18,11 +20,12 @@ mobile/android/
         │   ├── MainActivity.kt          Full Compose UI
         │   ├── AppState.kt              ViewModel + encrypted prefs
         │   ├── ApiClient.kt             OkHttp + kotlinx.serialization
-        │   ├── ZeroTrustVpnService.kt   Foreground VpnService
+        │   ├── ZeroTrustVpnService.kt   Foreground service driving GoBackend
+        │   ├── TunnelBootstrap.kt       Device identity + register -> config
         │   ├── WgConfig.kt              Maps API response to wg config
-        │   ├── BootReceiver.kt          Auto-connect on boot
+        │   ├── BootReceiver.kt          Reconnect after a restart
         │   └── Theme.kt                 Material 3 dark theme
-        └── res/                         Icons, colors, strings, backup rules
+        └── res/                         Icons, colors, strings, network config
 ```
 
 ## What it does
@@ -31,15 +34,27 @@ mobile/android/
 - Connect / disconnect a real WireGuard tunnel via the official `wireguard-android` library (GoBackend, userspace)
 - Single-hop or multi-hop routing across the three jurisdictions (Switzerland, Iceland, Romania)
 - Persistent foreground notification while connected, with a "Disconnect" action
-- Settings: auto-connect on device boot, sign out
-- Encrypted token storage via `EncryptedSharedPreferences` keyed to the device Keystore
+- Device manager: see every registered device, remove one to free a slot
+- Settings: reconnect after restart, a pointer to Android's Always-on VPN
+  (the real kill switch), the control-plane address for self-hosted
+  deployments, sign out
+- Encrypted token *and device private key* storage via
+  `EncryptedSharedPreferences` keyed to the device Keystore. The keypair is
+  generated once and kept: registration is idempotent on the public key, so
+  reconnecting reuses the same device and the same mesh IP instead of
+  registering a new one and eating the account's device cap
 - Material 3 dark theme matching the 0trust web design system
 
 ## What it deliberately does NOT do (yet)
 
 - **No QSTile (quick settings toggle)** — `v0.2`
 - **No widget** — `v0.2`
-- **No kill switch beyond what VpnService provides** — `v0.2`
+- **No in-app kill switch** — Android's own Always-on VPN with "Block
+  connections without VPN" is stronger than anything an app can do for itself,
+  and Settings links straight to it. An app-level imitation would be a weaker
+  thing wearing the same name.
+- **No in-app trial signup** — the proof-of-work flow lives on the website;
+  the app takes the token it produces.
 
 ## Build
 
@@ -48,7 +63,26 @@ mobile/android/
 1. **Android Studio Hedgehog (2023.1.1+)** — required for AGP 8.5 and the Kotlin Compose Compiler plugin
 2. **JDK 17** — bundled with Android Studio
 3. **Android SDK 34** — install via SDK Manager
-4. **NDK** (required by `wireguard-android` for the Go runtime) — install via SDK Manager → SDK Tools → "NDK (Side by side)"
+4. **Android SDK Build-Tools 34** — install via SDK Manager
+
+No NDK is needed: `com.wireguard.android:tunnel` ships the Go data plane as
+prebuilt `.so` libraries in the AAR.
+
+### Checking the sources without the SDK
+
+A full build needs the Android SDK and network access to Google's Maven repo.
+Where you have neither — a locked-down CI network, a headless box — this parses
+every Kotlin file with the real compiler front-end, which is enough to catch
+anything malformed:
+
+```bash
+./syntax-check.sh
+```
+
+It downloads the Kotlin compiler from Maven Central on first run and filters
+out the `unresolved reference` errors that the absent Android classpath
+guarantees. Syntax errors are the failure it reports, and it should always
+pass.
 
 ### First build
 
@@ -110,7 +144,7 @@ License: GPL-3.0-or-later
 WebSite: https://0trustvpn.com/
 SourceCode: https://github.com/0trust/cli
 IssueTracker: https://github.com/0trust/cli/issues
-AutoName: 0trust VPN
+AutoName: 0trustvpn
 
 RepoType: git
 Repo: https://github.com/0trust/cli
@@ -145,8 +179,16 @@ CurrentVersionCode: 1
 - [ ] Disconnect cleanly tears down the tunnel
 - [ ] VPN-consent dialog appears on first connect, not on subsequent ones
 - [ ] Notification appears on connect and dismisses on disconnect
-- [ ] Auto-connect-on-boot reconnects after a device reboot (if enabled)
-- [ ] Sign out clears the encrypted prefs (verify with `adb shell run-as vpn.zerotrust.app cat shared_prefs/zerotrust_secure.xml`)
+- [ ] Reconnect-after-restart brings the tunnel back after a reboot (if enabled)
+- [ ] Connecting twice does NOT create a second device — check the device list
+      before and after, and confirm the mesh IP is unchanged
+- [ ] The device list shows every device, and removing one frees a slot
+- [ ] The device count reads against the real cap for the plan (a trial account
+      shows the trial cap, not 8)
+- [ ] Always-on VPN can be enabled for the app in system settings — if Android
+      refuses, the merged manifest has more than one VpnService again
+- [ ] Sign out stops the tunnel AND clears the encrypted prefs (verify with
+      `adb shell run-as vpn.zerotrust.app cat shared_prefs/zerotrust_secure.xml`)
 
 If anything misbehaves, the usual suspects are:
 - ProGuard stripped a `wireguard-android` JNI class — add a `-keep` rule

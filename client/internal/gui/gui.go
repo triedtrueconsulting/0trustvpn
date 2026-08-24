@@ -46,6 +46,18 @@ const ListenAddr = "127.0.0.1:51827"
 
 // Serve starts the GUI server and (optionally) opens the browser. Blocks
 // until the user kills the process or the server exits.
+// alreadyServing reports whether the thing holding our port is another copy of
+// this GUI rather than some unrelated process that happened to take it.
+func alreadyServing() bool {
+	c := &http.Client{Timeout: 2 * time.Second}
+	resp, err := c.Get("http://" + ListenAddr + "/api/state")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.Header.Get("X-0trust-Gui") != ""
+}
+
 func Serve(openBrowser bool) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleIndex)
@@ -72,12 +84,24 @@ func Serve(openBrowser bool) error {
 		WriteTimeout: 30 * time.Second,
 	}
 
-	// Bind explicitly so we can fail fast if the port is taken
+	url := "http://" + ListenAddr
+
+	// Bind explicitly so we know whether the port is ours.
 	lis, err := net.Listen("tcp", ListenAddr)
 	if err != nil {
+		// Almost always a second launch: the Start Menu shortcut, the Windows
+		// autostart entry and the desktop icon all run `0trust gui`, and a
+		// user who clicks one twice should get the window, not an error about
+		// a socket. Hand them the running instance and exit cleanly.
+		if alreadyServing() {
+			fmt.Printf("0trust GUI already running: %s\n", url)
+			if openBrowser {
+				openInBrowser(url)
+			}
+			return nil
+		}
 		return fmt.Errorf("listen %s: %w", ListenAddr, err)
 	}
-	url := "http://" + ListenAddr
 	fmt.Printf("0trust GUI: %s\n", url)
 	fmt.Println("Press Ctrl-C to stop")
 
@@ -105,6 +129,10 @@ func Serve(openBrowser bool) error {
 // page. Prevents DNS rebinding / external pages from triggering our endpoints.
 func withSameOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Identifies this server to a second `0trust gui` that finds the port
+		// taken, so it can tell "our GUI is already up" from "something else
+		// owns 51827" instead of guessing.
+		w.Header().Set("X-0trust-Gui", "1")
 		// GET static assets: allow any local source
 		if r.Method == http.MethodGet && (r.URL.Path == "/" ||
 			strings.HasPrefix(r.URL.Path, "/app.")) {

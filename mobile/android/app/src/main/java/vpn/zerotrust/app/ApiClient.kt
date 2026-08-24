@@ -7,6 +7,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 // Wire types — these match the FastAPI models in api/main.py 1:1.
@@ -46,6 +47,11 @@ import java.util.concurrent.TimeUnit
     @SerialName("entry_node") val entryNode: String? = null,
     @SerialName("exit_node")  val exitNode:  String? = null,
     @SerialName("expires_at") val expiresAt: Long? = null,
+    // Set when the control plane resolved entry and exit to the same machine:
+    // a single-VPS test deployment wearing three region codes. The route is
+    // real, the privacy property multi-hop exists for is not, and the app has
+    // to say so instead of printing the usual claim. The CLI already does.
+    @SerialName("same_host")  val sameHost: Boolean = false,
 )
 
 @Serializable data class AccountStatusResponse(
@@ -53,6 +59,23 @@ import java.util.concurrent.TimeUnit
     @SerialName("expires_at")     val expiresAt: Long? = null,
     @SerialName("days_remaining") val daysRemaining: Int? = null,
     @SerialName("device_count")   val deviceCount: Int,
+    // A trial account has a lower cap than a paid one. The app used to print
+    // "/ 8" for everybody, which told a trial customer the wrong number and
+    // then refused their third device.
+    val plan: String = "paid",
+    @SerialName("max_devices")    val maxDevices: Int = 0,
+    val notices: Int = 0,
+)
+
+@Serializable data class DeviceInfoResponse(
+    val pubkey: String,
+    @SerialName("device_name") val deviceName: String = "",
+    @SerialName("mesh_ip")     val meshIp: String = "",
+    @SerialName("created_at")  val createdAt: Long = 0,
+    @SerialName("last_seen")   val lastSeen: Long = 0,
+    val multihop: Boolean = false,
+    @SerialName("entry_node")  val entryNode: String? = null,
+    @SerialName("exit_node")   val exitNode: String? = null,
 )
 
 @Serializable data class RegionListItem(val code: String, val name: String)
@@ -90,6 +113,8 @@ class ApiClient(private val baseUrl: String, private val token: String) {
             daysRemaining = r.daysRemaining ?: 0,
             deviceCount   = r.deviceCount,
             mode          = r.status,
+            plan          = r.plan,
+            maxDevices    = r.maxDevices,
         )
     }
 
@@ -98,6 +123,41 @@ class ApiClient(private val baseUrl: String, private val token: String) {
         val raw = get("/api/v1/regions")
         json.decodeFromString<RegionListResponse>(raw)
             .regions.map { Region(it.code, it.name) }
+    }
+
+    /** GET /api/v1/devices */
+    fun devices(): Result<List<Device>> = runCatching {
+        json.decodeFromString<List<DeviceInfoResponse>>(get("/api/v1/devices"))
+            .map {
+                Device(
+                    pubkey    = it.pubkey,
+                    name      = it.deviceName,
+                    meshIp    = it.meshIp,
+                    lastSeen  = it.lastSeen,
+                    multihop  = it.multihop,
+                    entryNode = it.entryNode,
+                    exitNode  = it.exitNode,
+                )
+            }
+    }
+
+    /**
+     * DELETE /api/v1/devices/{pubkey}
+     *
+     * WireGuard public keys are standard base64 and routinely contain '/' and
+     * '+', so the key is percent-encoded rather than pasted into the path. The
+     * API declares the segment as {pubkey:path} for the same reason.
+     */
+    fun deleteDevice(pubkey: String): Result<Unit> = runCatching {
+        val encoded = URLEncoder.encode(pubkey, "UTF-8").replace("+", "%2B")
+        val req = Request.Builder()
+            .url(baseUrl + "/api/v1/devices/" + encoded)
+            .header("X-Account-Token", token)
+            .header("Accept", "application/json")
+            .delete()
+            .build()
+        execute(req)
+        Unit
     }
 
     /** POST /api/v1/wg/register */

@@ -83,7 +83,12 @@ $PY -c 'import fastapi' >/dev/null 2>&1 || PY="$REPO_DIR/.venv/bin/python"
 VALIDATE_FILES="$(mktemp)"; export VALIDATE_FILES
 trap 'rm -f "$VALIDATE_FILES"' EXIT
 if git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-    git -C "$REPO_DIR" ls-files --cached --others --exclude-standard > "$VALIDATE_FILES"
+    # --deduplicate, and drop entries git still tracks but that are gone from
+    # the working tree: a deletion you have not staged yet is a normal state to
+    # run this in, and "cannot open the file you just deleted" is not a finding.
+    git -C "$REPO_DIR" ls-files --cached --others --exclude-standard \
+        | while IFS= read -r f; do [ -e "$REPO_DIR/$f" ] && printf '%s\n' "$f"; done \
+        > "$VALIDATE_FILES"
 else
     # Not a checkout (an extracted tarball, say) — approximate it.
     find . -type f -not -path './.git/*' -not -path '*/site-packages/*' \

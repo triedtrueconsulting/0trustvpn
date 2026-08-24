@@ -4,13 +4,16 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
-import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import com.wireguard.android.backend.Backend
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.Config
@@ -22,22 +25,34 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Foreground VpnService that runs the actual WireGuard tunnel.
+ * Foreground service that owns the 0trust tunnel's lifecycle and notification.
+ *
+ * It is deliberately NOT a [android.net.VpnService].
+ *
+ * The tunnel itself is run by wireguard-android's [GoBackend], and GoBackend
+ * brings up its own `GoBackend$VpnService` — declared in the library's AAR
+ * manifest — to call `VpnService.Builder.establish()`. This class used to also
+ * extend VpnService and declare the `android.net.VpnService` intent filter,
+ * which left the merged manifest with two of them. That is not a cosmetic
+ * duplication: Android resolves an app's always-on VPN service by querying for
+ * that intent filter and requires exactly one match, so declaring a second one
+ * made "Always-on VPN" impossible to enable for this app — while the extra
+ * VpnService never called establish() and so never carried a packet.
+ *
+ * One VpnService (the library's), one foreground service (this one).
  *
  * Lifecycle:
  *   - MainActivity calls VpnService.prepare() to get the system VPN consent
  *   - User grants consent -> activity starts this service via ACTION_CONNECT
- *   - Service brings up the tunnel, posts the foreground notification,
- *     and stays alive until ACTION_DISCONNECT
+ *   - This service drives GoBackend, posts the notification, and stays alive
+ *     until ACTION_DISCONNECT
  *
- * We deliberately keep the service stateless w.r.t. account/token concerns;
- * AppState in the UI process owns those. The service receives a complete
- * WgConfig as a byte string in the intent and just applies it.
+ * The service is stateless w.r.t. account/token concerns; AppState owns those.
+ * It receives a complete wg-quick config in the intent and just applies it.
  */
-class ZeroTrustVpnService : VpnService() {
+class ZeroTrustVpnService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var backend: GoBackend? = null
     private var tunnel: ZeroTrustTunnel? = null
 
     override fun onCreate() {
@@ -56,21 +71,29 @@ class ZeroTrustVpnService : VpnService() {
                 }
                 connect(configString)
             }
-            ACTION_DISCONNECT -> {
-                disconnect()
-            }
+            ACTION_DISCONNECT -> disconnect()
+            ACTION_RECONNECT -> reconnect()
             else -> {
-                Log.w(TAG, "Unexpected intent action: ${intent?.action}")
+                // START_NOT_STICKY below means we should not normally be
+                // restarted with a null intent, but a null action can still
+                // arrive. Never sit here started-but-not-foreground: Android
+                // kills the process with ForegroundServiceDidNotStartInTime.
+                Log.w(TAG, "Unexpected intent action: ${intent?.action} — stopping")
+                stopForegroundAndSelf()
+                return START_NOT_STICKY
             }
         }
-        return START_STICKY
+        // Not STICKY: a restart with a null intent has no config to apply, and
+        // silently coming back up without a tunnel while showing a "connected"
+        // notification is the worst failure mode a VPN client has.
+        return START_NOT_STICKY
     }
 
     private fun connect(configString: String) {
-        startForeground(NOTIF_ID, buildNotification("Connecting…", subtitle = "Negotiating tunnel"))
+        foreground(buildNotification("Connecting…", subtitle = "Negotiating tunnel"))
         scope.launch {
             try {
-                val backend = getOrCreateBackend()
+                val backend = backend(this@ZeroTrustVpnService)
                 val cfg = Config.parse(configString.byteInputStream())
                 val tun = ZeroTrustTunnel().also { tunnel = it }
 
@@ -79,15 +102,14 @@ class ZeroTrustVpnService : VpnService() {
                 }
 
                 broadcast(ConnState.Connected, "Tunnel up")
-                startForeground(NOTIF_ID, buildNotification(
+                foreground(buildNotification(
                     title = "0trust VPN connected",
                     subtitle = describeRoute(cfg),
                 ))
             } catch (t: Throwable) {
                 Log.e(TAG, "connect failed", t)
                 broadcast(ConnState.Failed, t.message ?: "Connect failed")
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopForegroundAndSelf()
             }
         }
     }
@@ -95,19 +117,79 @@ class ZeroTrustVpnService : VpnService() {
     private fun disconnect() {
         scope.launch {
             try {
-                val backend = backend ?: return@launch
-                val tun = tunnel ?: return@launch
-                withContext(Dispatchers.IO) {
-                    backend.setState(tun, Tunnel.State.DOWN, null)
+                val tun = tunnel ?: knownTunnel()
+                if (tun != null) {
+                    withContext(Dispatchers.IO) {
+                        backend(this@ZeroTrustVpnService).setState(tun, Tunnel.State.DOWN, null)
+                    }
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "disconnect: $t")
             } finally {
+                tunnel = null
                 broadcast(ConnState.Disconnected, "")
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopForegroundAndSelf()
             }
         }
+    }
+
+    /**
+     * Bring the tunnel back up with no UI in front of us: used after a reboot.
+     *
+     * Everything needed is already in EncryptedSharedPreferences — the account
+     * token and this device's keypair — so the service can register and connect
+     * on its own. What it cannot do is ask for VPN consent: that needs an
+     * Activity. If consent is not already granted we say so in the
+     * notification rather than failing silently.
+     */
+    private fun reconnect() {
+        foreground(buildNotification("Reconnecting…", subtitle = "0trust VPN"))
+        if (VpnService.prepare(this) != null) {
+            Log.w(TAG, "no VPN consent — cannot reconnect without the UI")
+            foreground(buildNotification(
+                title = "0trust VPN needs permission",
+                subtitle = "Open the app to reconnect",
+            ))
+            return
+        }
+        scope.launch {
+            val prefs = AppState.encryptedPrefs(this@ZeroTrustVpnService)
+            val cfg = runCatching { TunnelBootstrap(prefs).buildConfig() }.getOrNull()
+            if (cfg == null) {
+                Log.w(TAG, "reconnect: could not obtain a config")
+                broadcast(ConnState.Failed, "Reconnect failed")
+                stopForegroundAndSelf()
+                return@launch
+            }
+            connect(cfg)
+        }
+    }
+
+    /**
+     * After a process restart this service instance has no tunnel object, but
+     * the backend may still be carrying one. Ask it, so "Disconnect" from the
+     * notification actually takes the tunnel down instead of only dismissing
+     * the notification and leaving traffic flowing.
+     */
+    private fun knownTunnel(): Tunnel? {
+        val names = runCatching { backend(this).runningTunnelNames }.getOrNull().orEmpty()
+        return if (TUNNEL_NAME in names) ZeroTrustTunnel() else null
+    }
+
+    /**
+     * Android 14 wants the foreground-service type at the call site. The type
+     * is `specialUse`: the tunnel itself is run by the library's VpnService,
+     * and this service exists to own the ongoing notification and its
+     * Disconnect action for as long as that tunnel is up.
+     */
+    private fun foreground(n: Notification) {
+        ServiceCompat.startForeground(
+            this, NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+    }
+
+    private fun stopForegroundAndSelf() {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -174,30 +256,24 @@ class ZeroTrustVpnService : VpnService() {
         sendBroadcast(intent)
     }
 
-    // --- Backend & Tunnel -----------------------------------------------
-
-    private fun getOrCreateBackend(): GoBackend {
-        backend?.let { return it }
-        // The wireguard-android library wires up its own VpnService bridge
-        // via this VpnServiceFactory hook.
-        val b = GoBackend(this)
-        backend = b
-        return b
-    }
-
     /** Trivial Tunnel impl — wireguard-android requires it but we just need a name. */
     private inner class ZeroTrustTunnel : Tunnel {
-        override fun getName() = "0trust0"
+        override fun getName() = TUNNEL_NAME
         override fun onStateChange(newState: Tunnel.State) {
             Log.i(TAG, "tunnel state -> $newState")
+            if (newState == Tunnel.State.DOWN) broadcast(ConnState.Disconnected, "")
         }
     }
 
     companion object {
         private const val TAG = "0trust-vpn"
 
+        /** Matches the interface name the desktop client uses. */
+        const val TUNNEL_NAME = "0trust0"
+
         const val ACTION_CONNECT    = "vpn.zerotrust.action.CONNECT"
         const val ACTION_DISCONNECT = "vpn.zerotrust.action.DISCONNECT"
+        const val ACTION_RECONNECT  = "vpn.zerotrust.action.RECONNECT"
         const val EXTRA_CONFIG      = "vpn.zerotrust.extra.CONFIG"
 
         const val BROADCAST_STATE   = "vpn.zerotrust.broadcast.STATE"
@@ -206,6 +282,25 @@ class ZeroTrustVpnService : VpnService() {
 
         const val CHANNEL_ID = "0trust_tunnel"
         const val NOTIF_ID   = 1
+
+        /**
+         * One backend per process. GoBackend holds the binding to its own
+         * VpnService; making a new one per connect leaks that binding and can
+         * leave a tunnel nothing is tracking.
+         */
+        @Volatile private var sharedBackend: Backend? = null
+
+        fun backend(ctx: Context): Backend {
+            // Read the volatile into a local before using it: `sharedBackend ?:`
+            // reads the field twice and Kotlin will not smart-cast a mutable
+            // property that another thread could change between the two.
+            val cached = sharedBackend
+            if (cached != null) return cached
+            return synchronized(this) {
+                val existing = sharedBackend
+                existing ?: GoBackend(ctx.applicationContext).also { sharedBackend = it }
+            }
+        }
 
         fun connect(ctx: Context, configString: String) {
             ctx.startForegroundService(
@@ -220,6 +315,15 @@ class ZeroTrustVpnService : VpnService() {
             ctx.startService(
                 Intent(ctx, ZeroTrustVpnService::class.java).apply {
                     action = ACTION_DISCONNECT
+                }
+            )
+        }
+
+        /** Used by [BootReceiver]; no Activity involved. */
+        fun reconnect(ctx: Context) {
+            ctx.startForegroundService(
+                Intent(ctx, ZeroTrustVpnService::class.java).apply {
+                    action = ACTION_RECONNECT
                 }
             )
         }

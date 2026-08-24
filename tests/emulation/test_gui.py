@@ -64,6 +64,18 @@ def wait_port(port, timeout=25):
     return False
 
 
+# The GUI's listen address is fixed, so this module cannot pick a free port
+# the way the rest of the suite does. Say so plainly when something already
+# holds it: `0trust gui` now hands a second launch the running instance rather
+# than erroring, which is right for a user double-clicking the Start Menu
+# shortcut and wrong for a test — it would silently drive somebody else's GUI.
+with socket.socket() as _probe:
+    if _probe.connect_ex(("127.0.0.1", GUI_PORT)) == 0:
+        raise SystemExit(
+            f"port {GUI_PORT} is already in use — a stale `0trust gui` from an "
+            "earlier run, most likely. Kill it and re-run:\n"
+            f"    pkill -f '0trust gui'")
+
 gui = subprocess.Popen([BIN, "gui", "--no-browser"], env=GUI_ENV,
                        stdout=open(f"{TMP}/gui.log", "w"), stderr=subprocess.STDOUT)
 browser = None

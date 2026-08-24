@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -100,6 +101,7 @@ class MainActivity : ComponentActivity() {
                         if (ui.loggedIn) {
                             viewModel.refreshAccount()
                             viewModel.refreshRegions()
+                            viewModel.refreshDevices()
                             if (autoConnect && ui.tunnel == ConnState.Disconnected) {
                                 requestConnect()
                             }
@@ -116,6 +118,10 @@ class MainActivity : ComponentActivity() {
                             onSelectEntry = { viewModel.selectEntry(it) },
                             onSelectExit = { viewModel.selectExit(it) },
                             onLogout = { viewModel.logout() },
+                            onRefreshDevices = { viewModel.refreshDevices() },
+                            onRemoveDevice = { viewModel.removeDevice(it) },
+                            onSetApiBase = { viewModel.setApiBase(it) },
+                            onDismissError = { viewModel.setError(null) },
                         )
                     }
                 }
@@ -260,6 +266,10 @@ fun MainScreen(
     onSelectEntry: (String) -> Unit,
     onSelectExit: (String?) -> Unit,
     onLogout: () -> Unit,
+    onRefreshDevices: () -> Unit,
+    onRemoveDevice: (String) -> Unit,
+    onSetApiBase: (String) -> Unit,
+    onDismissError: () -> Unit,
 ) {
     var settingsOpen by remember { mutableStateOf(false) }
 
@@ -282,6 +292,11 @@ fun MainScreen(
 
         Spacer(Modifier.height(12.dp))
 
+        // Errors used to be shown on the login screen only, so anything that
+        // went wrong after sign-in — a failed register, a device removal that
+        // did not take — happened in silence.
+        if (ui.error != null) ErrorBanner(ui.error, onDismissError)
+
         ConnectionCard(ui = ui, onConnect = onConnect, onDisconnect = onDisconnect)
         RoutingCard(
             ui = ui,
@@ -289,6 +304,11 @@ fun MainScreen(
             onSelectExit = onSelectExit,
         )
         AccountCard(ui = ui)
+        DevicesCard(
+            ui = ui,
+            onRefresh = onRefreshDevices,
+            onRemove = onRemoveDevice,
+        )
 
         Spacer(Modifier.height(20.dp))
         Text(
@@ -306,6 +326,7 @@ fun MainScreen(
             ui = ui,
             onDismiss = { settingsOpen = false },
             onLogout = { settingsOpen = false; onLogout() },
+            onSetApiBase = onSetApiBase,
         )
     }
 }
@@ -429,6 +450,25 @@ private fun RoutingCard(
                 }
             }
 
+            // A single-VPS test deployment answers to all three region codes
+            // from one machine. The route is real and worth testing; the
+            // privacy property is not there, and saying "enters one country,
+            // exits another" over the top of it would be a plain lie.
+            if (multihop && ui.sameHostRoute) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, ZT_Terra, RoundedCornerShape(3.dp))
+                        .padding(12.dp),
+                ) {
+                    Text(
+                        "Entry and exit resolved to the SAME host — this control " +
+                        "plane is a test deployment. Routing works; nothing is hidden.",
+                        color = ZT_Ink, fontSize = 12.sp,
+                    )
+                }
+            }
+
             if (multihop) {
                 RegionDropdown(
                     label = "Exit node",
@@ -496,7 +536,12 @@ private fun AccountCard(ui: UiState) {
             kv("Token", acct.token.take(4) + "-****-****-" + acct.token.takeLast(4))
             kv("Subscription", acct.mode)
             kv("Expires in", "${acct.daysRemaining} days")
-            kv("Devices", "${acct.deviceCount} / 8")
+            // The cap is per-plan: a trial account gets fewer devices than a
+            // paid one. Printing a constant "8" told trial customers a number
+            // the API would then refuse to honour.
+            kv("Devices", if (acct.maxDevices > 0)
+                              "${acct.deviceCount} / ${acct.maxDevices}"
+                          else "${acct.deviceCount}")
         }
     }
 }
@@ -511,19 +556,170 @@ private fun kv(k: String, v: String) {
 }
 
 // ----------------------------------------------------------------------------
+//  Devices
+// ----------------------------------------------------------------------------
+
+/**
+ * The registered devices, and a way to remove one.
+ *
+ * Without this the device cap is a dead end. Registration is capped, the app
+ * had no list and no delete, and a customer who had used their slots from
+ * other machines got a 403 with no way to act on it from the phone in their
+ * hand. The desktop client has had `0trust devices` and `0trust remove` from
+ * the start; this is the same thing.
+ */
+@Composable
+private fun DevicesCard(
+    ui: UiState,
+    onRefresh: () -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    var confirming by remember { mutableStateOf<Device?>(null) }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, ZT_Line, RoundedCornerShape(4.dp)),
+    ) {
+        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("DEVICES", style = MaterialTheme.typography.labelSmall, color = ZT_InkFnt)
+                Spacer(Modifier.weight(1f))
+                if (ui.devicesLoading) {
+                    CircularProgressIndicator(
+                        color = ZT_InkFnt, strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp),
+                    )
+                } else {
+                    TextButton(onClick = onRefresh, contentPadding = PaddingValues(0.dp)) {
+                        Text("Refresh", color = ZT_Amber, fontSize = 12.sp)
+                    }
+                }
+            }
+
+            if (ui.devices.isEmpty() && !ui.devicesLoading) {
+                Text(
+                    "No devices registered yet. Connecting from this phone registers it.",
+                    color = ZT_InkFnt, fontSize = 12.sp,
+                )
+            }
+
+            ui.devices.forEach { d ->
+                val isThis = d.pubkey == ui.thisDevicePubkey
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (isThis) "${d.name}  (this phone)" else d.name.ifBlank { "unnamed" },
+                            color = ZT_Ink, fontSize = 14.sp,
+                        )
+                        Text(
+                            buildString {
+                                append(d.meshIp)
+                                if (d.multihop && d.entryNode != null && d.exitNode != null) {
+                                    append("  ·  ${d.entryNode} → ${d.exitNode}")
+                                }
+                            },
+                            color = ZT_InkFnt, fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    // Removing this phone's own registration mid-session would
+                    // drop the tunnel and leave the UI claiming it was up.
+                    // Sign out does that deliberately; this button should not
+                    // do it by accident.
+                    IconButton(
+                        onClick = { confirming = d },
+                        enabled = !isThis || ui.tunnel == ConnState.Disconnected,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = "Remove ${d.name}",
+                            tint = if (isThis && ui.tunnel != ConnState.Disconnected)
+                                       ZT_InkFnt else ZT_Terra,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    confirming?.let { d ->
+        AlertDialog(
+            onDismissRequest = { confirming = null },
+            containerColor = ZT_BgElev,
+            title = { Text("Remove this device?", color = ZT_Ink) },
+            text = {
+                Text(
+                    "${d.name.ifBlank { "This device" }} will lose its tunnel and free " +
+                    "a slot on your account. It can register again at any time.",
+                    color = ZT_InkDim,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onRemove(d.pubkey); confirming = null }) {
+                    Text("Remove", color = ZT_Terra)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = null }) {
+                    Text("Cancel", color = ZT_InkDim)
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
+    Surface(
+        color = ZT_BgElev,
+        shape = RoundedCornerShape(4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, ZT_Terra, RoundedCornerShape(4.dp)),
+    ) {
+        Row(
+            Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(message, color = ZT_Ink, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Outlined.Close, contentDescription = "Dismiss", tint = ZT_InkDim)
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
 //  Settings sheet
 // ----------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsSheet(ui: UiState, onDismiss: () -> Unit, onLogout: () -> Unit) {
+private fun SettingsSheet(
+    ui: UiState,
+    onDismiss: () -> Unit,
+    onLogout: () -> Unit,
+    onSetApiBase: (String) -> Unit,
+) {
     val ctx = LocalContext.current
     var autoConnect by remember {
-        mutableStateOf(AppState.encryptedPrefs(ctx).getBoolean("auto_connect", false))
+        mutableStateOf(
+            AppState.encryptedPrefs(ctx)
+                .getBoolean(TunnelBootstrap.KEY_AUTO_CONNECT, false)
+        )
     }
+    var apiBase by remember(ui.apiBase) { mutableStateOf(ui.apiBase) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = ZT_BgElev) {
-        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(
+            Modifier
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
             Text("Settings", style = MaterialTheme.typography.headlineMedium, color = ZT_Ink)
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -532,20 +728,97 @@ private fun SettingsSheet(ui: UiState, onDismiss: () -> Unit, onLogout: () -> Un
                     onCheckedChange = {
                         autoConnect = it
                         AppState.encryptedPrefs(ctx).edit()
-                            .putBoolean("auto_connect", it).apply()
+                            .putBoolean(TunnelBootstrap.KEY_AUTO_CONNECT, it).apply()
                     },
                 )
                 Spacer(Modifier.width(12.dp))
-                Text("Auto-connect on device startup", color = ZT_Ink)
+                Column(Modifier.weight(1f)) {
+                    Text("Reconnect after restart", color = ZT_Ink)
+                    Text(
+                        "Brings the tunnel back up when the phone boots. Android can " +
+                        "delay or skip this; Always-on VPN below is the reliable version.",
+                        color = ZT_InkFnt, fontSize = 12.sp,
+                    )
+                }
             }
 
-            Spacer(Modifier.height(16.dp))
+            // Always-on + block-without-VPN is the system's own kill switch,
+            // and it is stronger than anything an app can do for itself. We
+            // cannot toggle it from here — only the user can, in Settings —
+            // so the honest thing is to say so and open the right screen.
+            Column(Modifier.fillMaxWidth()) {
+                Text("Always-on VPN", color = ZT_Ink)
+                Text(
+                    "Android can hold the tunnel open and block traffic whenever it " +
+                    "is down — a kill switch the app cannot be talked out of. It has " +
+                    "to be switched on in system settings.",
+                    color = ZT_InkFnt, fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = {
+                        runCatching {
+                            ctx.startActivity(
+                                Intent(Settings.ACTION_VPN_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    },
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Text("Open VPN settings", color = ZT_Amber)
+                }
+            }
+
             HorizontalDivider(color = ZT_Line)
-            Spacer(Modifier.height(8.dp))
+
+            // build.gradle.kts has always said a self-hosted deployment could
+            // be pointed at from here. The preference was read on every start
+            // and there was nothing anywhere that could write it.
+            Column(Modifier.fillMaxWidth()) {
+                Text("Control plane", color = ZT_Ink)
+                Text(
+                    "Leave this alone unless you run your own 0trust deployment. " +
+                    "HTTPS only — the account token is a bearer credential.",
+                    color = ZT_InkFnt, fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = apiBase,
+                    onValueChange = { apiBase = it },
+                    singleLine = true,
+                    label = { Text("Address") },
+                    placeholder = { Text(BuildConfig.DEFAULT_API_BASE) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Row {
+                    TextButton(
+                        onClick = { onSetApiBase(apiBase) },
+                        enabled = apiBase.trim().trimEnd('/') != ui.apiBase,
+                    ) {
+                        Text("Save", color = ZT_Amber)
+                    }
+                    TextButton(onClick = {
+                        apiBase = BuildConfig.DEFAULT_API_BASE
+                        onSetApiBase("")
+                    }) {
+                        Text("Reset", color = ZT_InkDim)
+                    }
+                }
+            }
+
+            HorizontalDivider(color = ZT_Line)
 
             TextButton(onClick = onLogout) {
                 Text("Sign out", color = ZT_Terra)
             }
+            Text(
+                "Signing out stops the tunnel and forgets the token and this " +
+                "device's key. There is no recovery — keep your token.",
+                color = ZT_InkFnt, fontSize = 12.sp,
+            )
 
             Spacer(Modifier.height(24.dp))
             Text(
@@ -553,6 +826,7 @@ private fun SettingsSheet(ui: UiState, onDismiss: () -> Unit, onLogout: () -> Un
                 fontSize = 11.sp,
                 color = ZT_InkFnt,
             )
+            Spacer(Modifier.height(24.dp))
         }
     }
 }

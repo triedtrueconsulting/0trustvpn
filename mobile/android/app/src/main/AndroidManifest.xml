@@ -11,17 +11,25 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- VpnService runs as a foreground service so the tunnel survives
-         when the app is backgrounded. -->
+    <!--
+      The tunnel service runs in the foreground so it survives the app being
+      backgrounded and so the customer always has a visible, one-tap way to
+      turn the VPN off.
+
+      The type is specialUse rather than systemExempted: the VpnService that
+      actually establishes the interface belongs to the wireguard-android
+      library (see ZeroTrustVpnService's header), and this service exists to
+      own that tunnel's notification and lifecycle for as long as it is up.
+    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- Required to post the persistent "connected" notification on
          Android 13+ (NotificationManager needs explicit user grant). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Optional: re-establish the tunnel on boot if the user has the
-         "Auto-connect on startup" toggle enabled. -->
+         "Reconnect after restart" toggle enabled. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
@@ -30,9 +38,17 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.ZeroTrust"
         android:supportsRtl="true"
-        android:allowBackup="false"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules">
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:enableOnBackInvokedCallback="true"
+        android:allowBackup="false">
+
+        <!--
+          No dataExtractionRules / fullBackupContent: allowBackup="false" makes
+          both dead, and declaring rules next to a flat "never back this up"
+          reads as though some of it might be backed up. Nothing this app
+          stores — account token, device private key — should ever leave the
+          device, so the flat refusal is the whole policy.
+        -->
 
         <activity
             android:name=".MainActivity"
@@ -46,23 +62,40 @@
             </intent-filter>
         </activity>
 
-        <!-- VpnService keeps the tunnel alive in the background. -->
+        <!--
+          Foreground service that owns the tunnel's lifecycle and notification.
+
+          It is deliberately NOT declared as a VpnService and carries no
+          BIND_VPN_SERVICE permission or android.net.VpnService intent filter.
+          The library's GoBackend$VpnService (merged in from the AAR) is the
+          one that calls VpnService.Builder.establish(), and Android resolves
+          an app's always-on VPN service by querying for exactly one match on
+          that intent filter — a second declaration here made Always-on VPN
+          impossible to enable while never carrying a packet itself.
+        -->
         <service
             android:name=".ZeroTrustVpnService"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            android:foregroundServiceType="systemExempted"
+            android:foregroundServiceType="specialUse"
             android:exported="false">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the customer's WireGuard VPN tunnel running and
+                               shows the ongoing notification that turns it off." />
         </service>
 
-        <!-- Optional: BootReceiver re-arms the tunnel after a reboot if
-             the user opted in to auto-connect. -->
+        <!--
+          Re-arms the tunnel after a reboot when the user opted in.
+
+          exported="true" is required, not optional: BOOT_COMPLETED comes from
+          the system, which is a different uid, so a non-exported receiver
+          never receives it. BOOT_COMPLETED is a protected broadcast, so no
+          other app can forge it.
+        -->
         <receiver
             android:name=".BootReceiver"
-            android:exported="false"
-            android:enabled="true">
+            android:exported="true"
+            android:enabled="true"
+            android:directBootAware="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />

@@ -36,6 +36,13 @@ Needs the venv from `api/requirements-dev.txt` on PATH and a Go toolchain.
   attribution, revocation, and survival of a control-plane outage.
 - **test_integration** — public keys containing `/` and `+` through the delete
   path, and that the GUI's 3s poll does not become 20 upstream calls a minute.
+- **test_apps** — the Android app and the Windows MSI, neither of which can be
+  compiled here (no Android SDK, no reachable Google Maven, and WiX is
+  Windows-only). It boots the control plane and compares the Kotlin
+  `@SerialName` keys against real JSON from real calls — the drift that broke
+  the Android client once — then checks the manifest invariants and the MSI's
+  build inputs and uninstall behaviour. `mobile/android/syntax-check.sh` is the
+  other half: it parses the Kotlin with the real compiler front-end.
 - **test_funnel / test_gui / test_admin_ui / test_site_ui** — the four modules
   that drive a real Chromium. They exit 77 (skip) where Playwright or a browser
   is absent, which is the case on CI, so run them locally before shipping

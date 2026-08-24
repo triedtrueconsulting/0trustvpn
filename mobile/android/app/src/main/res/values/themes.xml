@@ -3,8 +3,15 @@
     <!--
       Base theme. Compose handles all UI styling internally; this theme
       only affects pre-Compose surfaces (status bar, splash background, etc).
+
+      The parent is a platform theme, not Theme.Material3.*: those XML themes
+      come from com.google.android.material, which this app does not depend on
+      (Compose Material3 is a different artifact and ships no XML themes). The
+      old parent would have failed resource linking at build time — the sort of
+      thing you only find out by building, which is exactly what the missing
+      Gradle wrapper made hard.
     -->
-    <style name="Theme.ZeroTrust" parent="Theme.Material3.Dark.NoActionBar">
+    <style name="Theme.ZeroTrust" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">@color/zt_bg</item>
         <item name="android:navigationBarColor">@color/zt_bg</item>
         <item name="android:windowLightStatusBar">false</item>

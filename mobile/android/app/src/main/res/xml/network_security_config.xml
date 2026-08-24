@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is off, everywhere, with no exceptions and no debug override.
+
+  The app talks to one host: the control plane, over HTTPS. A customer running
+  their own deployment can point the app at a different address in Settings,
+  and that address has to be HTTPS too — an account token is a bearer
+  credential, and this is a product whose entire claim is that it does not leak
+  what you are doing.
+
+  cleartextTrafficPermitted="false" is already the platform default from API 28
+  on; stating it here makes it a decision rather than an inherited default, and
+  covers the minSdk 26 devices where the default is the other way.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
