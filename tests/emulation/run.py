@@ -54,6 +54,7 @@ MODULES = [
     ("apps",         "the Android app and Windows MSI against the live API"),
     ("release",      "cut a signed release and verify it (skips without gpg)"),
     ("backup",       "back the control plane up, restore it, serve from it"),
+    ("canary",       "sign a warrant canary and age it until the check fires"),
     ("security",       "authorization boundaries under adversarial input"),
     ("multihop_netns", "real packets through entry->exit NAT (needs CAP_NET_ADMIN)"),
     ("onebox_netns",   "the single-VPS mesh: same-host DNAT, 3 tables, peer routes"),

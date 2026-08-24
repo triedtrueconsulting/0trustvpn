@@ -48,15 +48,25 @@ log "Fetching proof-of-freshness data"
 # ----------------------------------------------------------------------------
 
 # Bitcoin block height + hash from blockchain.info (no auth required, public API)
-BLOCK_INFO=$(curl -fsS https://blockchain.info/latestblock || echo '{}')
-BLOCK_HEIGHT=$(echo "$BLOCK_INFO" | grep -oE '"height":[0-9]+' | grep -oE '[0-9]+' | head -1)
-BLOCK_HASH=$(echo "$BLOCK_INFO" | grep -oE '"hash":"[a-f0-9]+"' | head -1 | sed 's/.*"\([a-f0-9]*\)"/\1/')
+# `|| true` on every step, deliberately. The script runs under `set -euo
+# pipefail`, so an unreachable blockchain.info made the grep pipeline fail and
+# killed the script outright — the "enter it manually" fallback written
+# directly below could never be reached. The one job of this block is to
+# degrade to asking a human.
+BLOCK_INFO=$(curl -fsS https://blockchain.info/latestblock 2>/dev/null || echo '{}')
+BLOCK_HEIGHT=$(echo "$BLOCK_INFO" | grep -oE '"height":[0-9]+' \
+               | grep -oE '[0-9]+' | head -1 || true)
+BLOCK_HASH=$(echo "$BLOCK_INFO" | grep -oE '"hash":"[a-f0-9]+"' | head -1 \
+             | sed 's/.*"\([a-f0-9]*\)"/\1/' || true)
 
 if [[ -z "$BLOCK_HEIGHT" || -z "$BLOCK_HASH" ]]; then
     warn "Could not fetch Bitcoin block info — please enter manually."
-    read -p "Block height: " BLOCK_HEIGHT
-    read -p "Block hash: " BLOCK_HASH
+    warn "Latest block: https://mempool.space/  (height and hash)"
+    read -r -p "Block height: " BLOCK_HEIGHT
+    read -r -p "Block hash: " BLOCK_HASH
 fi
+[[ -n "$BLOCK_HEIGHT" && -n "$BLOCK_HASH" ]] \
+    || { warn "a canary with no block reference proves nothing about when it was signed"; exit 1; }
 
 # News headlines — you MUST review and verify these are real, current
 echo ""
@@ -66,7 +76,10 @@ echo "Pick ones likely to remain referenceable (BBC, Reuters, AP). Trim each to 
 echo ""
 HEADLINES=()
 for i in 1 2 3 4; do
-    read -p "Headline #$i: " line
+    # -r, because a pasted headline is literal text: without it read eats
+    # backslashes, so "asks $1bn \ industry" silently loses a character from
+    # a document whose whole value is being exactly what was signed.
+    read -r -p "Headline #$i: " line
     HEADLINES+=("$line")
 done
 
@@ -79,27 +92,53 @@ mkdir -p "$WORK_DIR" "$REPO_DIR/archive"
 CANARY_FILE="$WORK_DIR/canary.txt"
 cp "$TEMPLATE" "$CANARY_FILE"
 
-# Substitute all the placeholders
-sed -i.bak "s|WEEK_NUMBER|$WEEK_NUMBER|g"               "$CANARY_FILE"
-sed -i.bak "s|YYYY-MM-DD to YYYY-MM-DD|$WEEK_START to $WEEK_END|g"  "$CANARY_FILE"
-sed -i.bak "s|NEXT_DEADLINE|$NEXT_DEADLINE|g"           "$CANARY_FILE"
-sed -i.bak "s|ISSUED_AT|$NOW_UTC|g"                     "$CANARY_FILE"
-sed -i.bak "s|SIGNER_NAME|$CANARY_SIGNER_NAME|g"        "$CANARY_FILE"
-sed -i.bak "s|BLOCK_HEIGHT|$BLOCK_HEIGHT|g"             "$CANARY_FILE"
-sed -i.bak "s|BLOCK_HASH|$BLOCK_HASH|g"                 "$CANARY_FILE"
-sed -i.bak "s|HEADLINE_1|${HEADLINES[0]}|"              "$CANARY_FILE"
-sed -i.bak "s|HEADLINE_2|${HEADLINES[1]}|"              "$CANARY_FILE"
-sed -i.bak "s|HEADLINE_3|${HEADLINES[2]}|"              "$CANARY_FILE"
-sed -i.bak "s|HEADLINE_4|${HEADLINES[3]}|"              "$CANARY_FILE"
-sed -i.bak "s|KEY_FINGERPRINT|$CANARY_SIGNER_KEY|g"     "$CANARY_FILE"
-rm -f "$CANARY_FILE.bak"
+# Substitute all the placeholders — literally.
+#
+# These were `sed "s|PLACEHOLDER|$value|"`, which treats the replacement as a
+# sed expression. A headline is operator-pasted text: "Reuters | Something
+# happened" ends the expression early and sed errors out, and an "&" anywhere
+# in it silently expands to the whole matched text. Getting the canary subtly
+# wrong is worse than failing to produce one, so replace literally.
+subst() {   # subst <placeholder> <literal replacement>
+    local ph="$1" rep="$2"
+    ph="$ph" rep="$rep" awk '
+        {
+            out = ""; line = $0
+            while ((i = index(line, ENVIRON["ph"])) > 0) {
+                out  = out substr(line, 1, i - 1) ENVIRON["rep"]
+                line = substr(line, i + length(ENVIRON["ph"]))
+            }
+            print out line
+        }' "$CANARY_FILE" > "$CANARY_FILE.tmp"
+    mv "$CANARY_FILE.tmp" "$CANARY_FILE"
+}
+
+subst "WEEK_NUMBER"              "$WEEK_NUMBER"
+subst "YYYY-MM-DD to YYYY-MM-DD" "$WEEK_START to $WEEK_END"
+subst "NEXT_DEADLINE"            "$NEXT_DEADLINE"
+subst "ISSUED_AT"                "$NOW_UTC"
+subst "SIGNER_NAME"              "$CANARY_SIGNER_NAME"
+subst "BLOCK_HEIGHT"             "$BLOCK_HEIGHT"
+subst "BLOCK_HASH"               "$BLOCK_HASH"
+subst "HEADLINE_1"               "${HEADLINES[0]}"
+subst "HEADLINE_2"               "${HEADLINES[1]}"
+subst "HEADLINE_3"               "${HEADLINES[2]}"
+subst "HEADLINE_4"               "${HEADLINES[3]}"
+subst "KEY_FINGERPRINT"          "$CANARY_SIGNER_KEY"
+
+# Nothing may go out with a placeholder still in it.
+if leftover=$(grep -nE 'HEADLINE_[0-9]|BLOCK_HEIGHT|BLOCK_HASH|WEEK_NUMBER|NEXT_DEADLINE|ISSUED_AT|SIGNER_NAME|KEY_FINGERPRINT' "$CANARY_FILE"); then
+    warn "unsubstituted placeholders remain:"
+    printf '%s\n' "$leftover" >&2
+    exit 1
+fi
 
 # ----------------------------------------------------------------------------
 log "Review before signing"
 # ----------------------------------------------------------------------------
 cat "$CANARY_FILE"
 echo ""
-read -p "Sign this canary now? [y/N] " ans
+read -r -p "Sign this canary now? [y/N] " ans
 [[ "$ans" =~ ^[Yy]$ ]] || { warn "aborted by operator"; exit 1; }
 
 # ----------------------------------------------------------------------------
