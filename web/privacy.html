@@ -7,15 +7,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
 <style>
 :root{--bg:#0c0c0a;--bg-elev:#14140f;--ink:#f4ede0;--ink-dim:#a8a094;--ink-faint:#6b6359;--line:#2a2820;--amber:#d4a574;--terra:#c44536;--moss:#7d8f5a}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans',system-ui,sans-serif;font-weight:300;line-height:1.65;font-size:15px;-webkit-font-smoothing:antialiased}
 body{background-image:linear-gradient(rgba(244,237,224,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(244,237,224,.025) 1px,transparent 1px);background-size:64px 64px;min-height:100vh}
 .wrap{max-width:760px;margin:0 auto;padding:48px 24px 80px}
-.brand{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:24px;text-decoration:none;color:inherit}
-.brand .zero{color:var(--amber);font-size:30px}
-.crumb{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-faint);letter-spacing:.1em;text-transform:uppercase;margin-left:16px}
 h1{font-family:'Instrument Serif',serif;font-weight:400;font-size:52px;line-height:1.05;letter-spacing:-.02em;margin:32px 0 8px}
 .updated{color:var(--ink-faint);font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:32px}
 .lede{color:var(--ink-dim);font-size:17px;margin-bottom:32px;max-width:62ch}
@@ -53,12 +51,26 @@ a:focus-visible, button:focus-visible, input:focus-visible {
 }
 </style>
 </head>
-<body>
-<div class="wrap">
-<div style="display:flex;align-items:baseline">
-  <a class="brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
-  <span class="crumb">/ privacy</span>
-</div>
+<body class="has-sitenav">
+
+<nav class="sitenav">
+  <a class="sitenav-skip" href="#content">Skip to content</a>
+  <a class="sitenav-brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
+  <span class="sitenav-crumb">/ privacy</span>
+  <div class="sitenav-links">
+    <a href="/#how">How it works</a>
+    <a href="/#jurisdictions">Jurisdictions</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/audit">Audit</a>
+    <a href="/download">Download</a>
+    <a href="/status">Status</a>
+    <a href="/help">Help</a>
+    <a href="/surf">Surf</a>
+  </div>
+  <a class="sitenav-cta" href="/trial">Free trial</a>
+</nav>
+
+<div class="wrap" id="content" tabindex="-1">
 
 <h1>Privacy policy.</h1>
 <div class="updated">Effective 2026-05 · Version 1.0</div>

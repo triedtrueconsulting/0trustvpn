@@ -50,6 +50,7 @@ MODULES = [
     ("gui",          "the desktop GUI in a real browser (skips without chromium)"),
     ("install",      "installer flags and the nginx configs it renders"),
     ("site",         "website links, and copy that matches the code"),
+    ("site_ui",      "the site's shared nav in a real browser, five widths"),
     ("security",       "authorization boundaries under adversarial input"),
     ("multihop_netns", "real packets through entry->exit NAT (needs CAP_NET_ADMIN)"),
     ("onebox_netns",   "the single-VPS mesh: same-host DNAT, 3 tables, peer routes"),

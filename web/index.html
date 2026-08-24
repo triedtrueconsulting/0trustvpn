@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
 <style>
   :root {
     --bg: #0c0c0a;
@@ -62,20 +63,8 @@
     background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
   }
 
-  /* ============ NAV ============ */
-  nav {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    z-index: 100;
-    padding: 20px 48px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    backdrop-filter: blur(12px);
-    background: rgba(12, 12, 10, 0.6);
-    border-bottom: 1px solid var(--line);
-  }
-
+  /* The wordmark. The nav's copy comes from site.css; the footer still
+     renders its own, larger one. */
   .logo {
     font-family: 'JetBrains Mono', monospace;
     font-weight: 700;
@@ -85,45 +74,9 @@
     align-items: center;
     gap: 8px;
   }
-
   .logo-mark {
     color: var(--amber);
     font-size: 24px;
-  }
-
-  .nav-links {
-    display: flex;
-    gap: 36px;
-    align-items: center;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    font-weight: 500;
-  }
-
-  .nav-links a {
-    color: var(--ink-dim);
-    text-decoration: none;
-    transition: color 0.2s;
-  }
-  .nav-links a:hover { color: var(--ink); }
-
-  .nav-cta {
-    background: var(--amber);
-    color: var(--bg);
-    padding: 10px 18px;
-    border-radius: 2px;
-    border: none;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    letter-spacing: 0.02em;
-    transition: all 0.2s;
-  }
-  .nav-cta:hover {
-    background: var(--amber-bright, #e8b87d);
-    color: var(--bg);
-    box-shadow: 0 2px 12px rgba(212,165,116,0.3);
   }
 
   /* Links.
@@ -139,8 +92,8 @@
     border-radius: 2px;
   }
   /* Buttons that happen to be anchors are buttons, not links. */
-  .btn-primary, .btn-ghost, .nav-cta { text-decoration: none; }
-  .btn-primary:hover, .btn-ghost:hover, .nav-cta:hover { text-decoration: none; }
+  .btn-primary, .btn-ghost { text-decoration: none; }
+  .btn-primary:hover, .btn-ghost:hover { text-decoration: none; }
 
   /* ============ HERO ============ */
   .hero {
@@ -1295,9 +1248,6 @@
 
   /* ============ RESPONSIVE ============ */
   @media (max-width: 900px) {
-    nav { padding: 16px 24px; }
-    .nav-links { gap: 20px; }
-    .nav-links a:not(.nav-cta) { display: none; }
     .hero { padding: 140px 24px 80px; }
     section { padding: 80px 24px; }
     .principles { grid-template-columns: 1fr; }
@@ -1311,26 +1261,26 @@
   }
 </style>
 </head>
-<body>
+<body class="has-sitenav">
 
-<nav>
-  <div class="logo">
-    <span class="logo-mark">0</span>
-    <span>trustvpn</span>
-  </div>
-  <div class="nav-links">
-    <a href="#how">How it works</a>
-    <a href="#principles">Principles</a>
-    <a href="#jurisdictions">Jurisdictions</a>
-    <a href="#apps">Apps</a>
-    <a href="#pricing">Pricing</a>
+<nav class="sitenav">
+  <a class="sitenav-skip" href="#content">Skip to content</a>
+  <a class="sitenav-brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
+  <div class="sitenav-links">
+    <a href="/#how">How it works</a>
+    <a href="/#jurisdictions">Jurisdictions</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/audit">Audit</a>
+    <a href="/download">Download</a>
+    <a href="/status">Status</a>
+    <a href="/help">Help</a>
     <a href="/surf">Surf</a>
-    <button class="nav-cta" onclick="location.href='/trial'">Free <span data-trial="unit">week</span></button>
   </div>
+  <a class="sitenav-cta" href="/trial">Free trial</a>
 </nav>
 
 <!-- ============ HERO ============ -->
-<section class="hero">
+<section class="hero" id="content" tabindex="-1">
   <div class="hero-meta">
     <span class="pulse" id="mesh-pill">Mesh · 3 jurisdictions</span>
     <span>WireGuard · zero-trust</span>

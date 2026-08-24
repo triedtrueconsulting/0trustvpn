@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Free trial — 0trust</title>
 <meta name="robots" content="noindex">
+<link rel="stylesheet" href="/site.css">
 <style>
   :root{--bg:#0c0c0a;--ink:#f4ede0;--amber:#d4a574;--terra:#c44536;--moss:#7d8f5a;--line:#2a2820}
   *{box-sizing:border-box}
@@ -47,8 +48,25 @@ a:focus-visible, button:focus-visible, input:focus-visible {
 }
 </style>
 </head>
-<body>
-<main>
+<body class="has-sitenav">
+
+<nav class="sitenav">
+  <a class="sitenav-skip" href="#content">Skip to content</a>
+  <a class="sitenav-brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
+  <span class="sitenav-crumb">/ free trial</span>
+  <div class="sitenav-links">
+    <a href="/#how">How it works</a>
+    <a href="/#jurisdictions">Jurisdictions</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/audit">Audit</a>
+    <a href="/download">Download</a>
+    <a href="/status">Status</a>
+    <a href="/help">Help</a>
+    <a href="/surf">Surf</a>
+  </div>
+  <a class="sitenav-cta" href="/trial" aria-current="page">Free trial</a>
+</nav>
+<main id="content" tabindex="-1">
   <h1><span data-trial="label-cap">One week</span>, free</h1>
   <p class="sub">No email. No card. No name. The same anonymous token a paying
   customer gets — it just expires in <span data-trial="days">7</span> days.</p>

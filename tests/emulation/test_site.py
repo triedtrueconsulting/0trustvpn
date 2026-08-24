@@ -180,11 +180,81 @@ try:
     brands = {}
     for f in public:
         src = open(f).read()
-        m = _re.search(r'class="brand"[^>]*>\s*(?:<span[^>]*>0</span>)?\s*<span[^>]*>([a-z]+)</span>', src)
+        m = _re.search(r'class="(?:sitenav-)?brand"[^>]*>\s*(?:<span[^>]*>0</span>)?\s*<span[^>]*>([a-z]+)</span>', src)
         if m:
             brands.setdefault(m.group(1), []).append(os.path.basename(f))
     check("the brand mark is the same on every page",
           list(brands) in ([], ["trustvpn"]), brands)
+    check("every page shows the wordmark", len(brands.get("trustvpn", [])) == len(public),
+          "pages with no wordmark: " +
+          str(sorted(set(os.path.basename(f) for f in public)
+                     - set(brands.get("trustvpn", [])))))
+
+    print("\n[5c] one nav, on every page, going to the same places")
+    # Before this, the landing page had a nav bar and every other page had a
+    # breadcrumb: once a visitor left the front page the only way onward was
+    # the back button. A nav is only "shared" if it is literally one file —
+    # nine copies of the same markup is how the copies drift apart. So: check
+    # the stylesheet is linked, the markup is present, and the link set is
+    # character-for-character identical everywhere.
+    st, css = get("/site.css")
+    check("the shared stylesheet is served", st == 200, st)
+    check("it defines the nav", ".sitenav {" in css)
+
+    navs, missing = {}, []
+    for f in public:
+        name = os.path.basename(f)
+        src = open(f).read()
+        if '/site.css' not in src or 'class="sitenav"' not in src:
+            missing.append(name)
+            continue
+        m = _re.search(r'<nav class="sitenav">.*?</nav>', src, _re.S)
+        if not m:
+            missing.append(name)
+            continue
+        body = m.group(0)
+        # The crumb and the aria-current marker are per-page by design; the
+        # destinations are not.
+        links = _re.findall(r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>', body, _re.S)
+        navs[name] = [(h, " ".join(_re.sub(r"<[^>]+>", "", t).split())) for h, t in links]
+    check("every page carries the shared nav", not missing, missing)
+
+    # Nine tab stops in front of the content on every page is exactly the
+    # situation a skip link exists for, and it only works if the target it
+    # names is actually on the page.
+    noskip = []
+    for f in public:
+        src = open(f).read()
+        if ('href="#content"' not in src) or ('id="content"' not in src):
+            noskip.append(os.path.basename(f))
+    check("every page offers a working skip-to-content link", not noskip, noskip)
+
+    distinct = {tuple(v) for v in navs.values()}
+    check("the nav goes to the same places on every page", len(distinct) <= 1,
+          "\n          ".join(f"{n}: {v}" for n, v in sorted(navs.items()))
+          if len(distinct) > 1 else "")
+
+    # A nav that links to a page it cannot reach is worse than no nav; [2]
+    # already fetches every href, so here just pin the destinations we mean
+    # to offer, so silently dropping one from the shared markup is a failure
+    # rather than an unnoticed change.
+    if distinct:
+        hrefs = [h for h, _ in next(iter(distinct))]
+        for want in ("/", "/#how", "/#jurisdictions", "/#pricing", "/audit",
+                     "/download", "/status", "/help", "/surf", "/trial"):
+            check(f"the nav offers {want}", want in hrefs, hrefs)
+
+    # The page you are on should say so, and should not offer to take you
+    # to itself as though it were somewhere else.
+    for name, links in sorted(navs.items()):
+        src = open(os.path.join(WEB, name)).read()
+        route = "/" + name[:-len(".html")]
+        if route not in [h for h, _ in links]:
+            continue
+        m = _re.search(r'<a\s[^>]*href="' + _re.escape(route) + r'"([^>]*)>', src)
+        check(f"{name} marks itself current in the nav",
+              m is not None and 'aria-current="page"' in m.group(1),
+              "no aria-current on its own nav link")
 
     print("\n[5b] the help page describes features that exist")
     _, helpp = get("/help")
