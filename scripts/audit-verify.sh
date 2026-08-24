@@ -412,15 +412,26 @@ section "§8. BACKUPS"
 # Backups now exist (encrypted) — see AUDIT.md §8. We verify they are
 # ENCRYPTED rather than absent. An unencrypted DB copy on disk is the finding.
 
+# Identify OUR database by its schema, not by the file extension. Matching any
+# SQLite file called *.db flagged /root/.pki/nssdb/cert9.db on every host with a
+# browser on it, and a check that fails for reasons the operator has to learn to
+# ignore stops being a check. The schema text lives in plain bytes in the
+# sqlite_master pages, so grep finds it without needing sqlite3 installed.
 check backups-encrypted "No UNENCRYPTED database copies on disk" -- bash -c '
-    plaintext=$(find / -type f \( -name "*.db" -o -name "0trust*.db" \) \
+    plaintext=$(find / -type f \( -name "*.db" -o -name "*.sqlite" -o -name "*.sqlite3" \) \
                  -not -path "'"$DB_PATH"'" \
                  -not -path "/proc/*" -not -path "/sys/*" \
                  -not -path "*/site-packages/*" \
-                 2>/dev/null | while read f; do
-        head -c 16 "$f" 2>/dev/null | grep -q "SQLite format" && echo "$f"
+                 2>/dev/null | while read -r f; do
+        head -c 16 "$f" 2>/dev/null | grep -q "SQLite format" || continue
+        # Both tables, so a database that merely has an "accounts" table is not
+        # mistaken for ours.
+        grep -aq "CREATE TABLE.*mesh_nodes" "$f" 2>/dev/null || continue
+        grep -aq "CREATE TABLE.*accounts"  "$f" 2>/dev/null || continue
+        echo "$f"
     done | head -5)
-    [ -z "$plaintext" ] || { echo "unencrypted db copy: $plaintext"; exit 1; }
+    [ -z "$plaintext" ] || {
+        echo "unencrypted copy of the 0trust database: $plaintext"; exit 1; }
 '
 
 check backups-no-leftover-snapshot "No leftover plaintext .snap-* snapshots" -- bash -c '

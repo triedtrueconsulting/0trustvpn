@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Free trial: proof-of-work, redemption, limits, and conversion to paid."""
-import hashlib, os, shutil, sqlite3, sys, tempfile, time
+import hashlib, os, shutil, sqlite3, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -21,7 +21,7 @@ def solve(nonce, bits):
             return sol
         i += 1
 
-TMP = tempfile.mkdtemp(prefix="0trust-trial-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("0trust-trial-"); DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 os.environ["ZTV_TRIAL_SECRET"] = "trial-secret-for-tests"
 os.environ["ZTV_TRIAL_POW_BITS"] = "12"     # keep the suite fast

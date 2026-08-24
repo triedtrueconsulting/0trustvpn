@@ -7,7 +7,7 @@ locked three-node design, a port-forwarding feature that does not exist, and
 currencies that were dropped. Marketing copy drifts from the product silently
 because nothing executes it. This module executes it.
 """
-import glob, http.server, functools, os, re, shutil, sys, tempfile, threading, urllib.error, urllib.request
+import glob, http.server, functools, os, re, shutil, sys, threading, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -18,7 +18,7 @@ def check(n, ok, d=""):
 
 WEB = os.path.join(H.REPO, "web")
 PORT = H.pick_port()
-TMP = tempfile.mkdtemp(prefix="0trust-site-")
+TMP = H.tempdir("0trust-site-")
 DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 os.environ["ZTV_TRIAL_SECRET"] = "site-secret"
@@ -148,11 +148,31 @@ try:
     print("\n[5] the device cap the site advertises matches the API")
     st, s = H.call("GET", "/api/v1/status/public")
     check("status endpoint serves the site", st == 200, s)
+    cap = api_main.MAX_DEVICES_PER_ACCOUNT
     m = re.search(r'Up to (\d+) simultaneous devices', idx)
     if m:
         check("advertised device cap matches MAX_DEVICES_PER_ACCOUNT",
-              int(m.group(1)) == api_main.MAX_DEVICES_PER_ACCOUNT,
-              f"site says {m.group(1)}, API cap is {api_main.MAX_DEVICES_PER_ACCOUNT}")
+              int(m.group(1)) == cap,
+              f"site says {m.group(1)}, API cap is {cap}")
+
+    # The landing page was the only page checked, and it is not the page that
+    # matters most: terms.html is the binding document and help.html is what a
+    # customer reads when the cap bites. All three state the number in their own
+    # words, so an operator who changes the setting has to be made to find all
+    # three rather than leaving the legal text asserting a limit the system does
+    # not enforce.
+    import glob as _glob
+    for name in ("terms.html", "help.html", "index.html"):
+        src = open(os.path.join(WEB, name)).read()
+        stated = set()
+        for pat in (r'up to <strong>(\d+) devices</strong>',
+                    r'Up to (\d+) simultaneous devices',
+                    r'<span>Devices</span><span class="mono">\d+ / (\d+)</span>'):
+            stated.update(int(x) for x in re.findall(pat, src, re.I))
+        if not stated:
+            continue
+        check(f"{name} states the real device cap", stated == {cap},
+              f"{name} says {sorted(stated)}, the API enforces {cap}")
 
     print("\n[5a] every page finishes its own styling")
     # Each page carries its own <style> block. Two of them had no rule for a

@@ -155,8 +155,7 @@ if os.geteuid() != 0 or subprocess.run(["ip", "netns", "list"],
     print("  SKIP  needs root and ip netns")
     sys.exit(77)
 
-import tempfile
-TMP = tempfile.mkdtemp(prefix="ztv-netns-")
+TMP = H.tempdir("ztv-netns-")
 try:
     try:
         setup()

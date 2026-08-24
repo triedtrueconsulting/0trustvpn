@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Second probe: concurrency, degenerate topologies, auth edges."""
-import concurrent.futures as cf, os, shutil, sqlite3, sys, tempfile, time
+import concurrent.futures as cf, os, shutil, sqlite3, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -9,7 +9,7 @@ def check(n, ok, d=""):
     (PASS if ok else FAIL).append(n)
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
-TMP = tempfile.mkdtemp(prefix="0trust-emu2-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("0trust-emu2-"); DB = os.path.join(TMP, "0trust.db")
 sys.path.insert(0, os.path.join(H.REPO, "api"))
 os.environ["ZTV_DB_PATH"] = DB
 import main as api_main; api_main.init_db()

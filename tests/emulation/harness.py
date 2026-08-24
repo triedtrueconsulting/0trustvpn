@@ -1,10 +1,37 @@
 #!/usr/bin/env python3
 """Shared harness: boots fake BTCPay + the real API, seeds nodes, mints tokens."""
-import hashlib, hmac, json, os, signal, socket, subprocess, sys, time, urllib.error, urllib.request
+import atexit, hashlib, hmac, json, os, shutil, signal, socket, subprocess, sys, tempfile, time, urllib.error, urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EMU  = os.path.dirname(os.path.abspath(__file__))
 RUN  = os.path.join(EMU, "run")
+
+def tempdir(prefix: str) -> str:
+    """A scratch directory that does not outlive the run.
+
+    Every module used to call tempfile.mkdtemp() and never clean up, so each
+    run left an unencrypted copy of a 0trust database in /tmp — schema, account
+    rows, device pubkeys — permanently. scripts/audit-verify.sh looks for
+    exactly that and is right to. Set ZTV_KEEP_TMP=1 to keep them when you need
+    to pick through the wreckage of a failing run.
+    """
+    def _force_rm(path):
+        # git object files land at mode 444, and rmtree(ignore_errors=True)
+        # silently gives up on them and leaves the tree behind. Any module that
+        # clones the repo would keep leaking.
+        def onerror(fn, target, exc):
+            try:
+                os.chmod(target, 0o700)
+                fn(target)
+            except OSError:
+                pass
+        shutil.rmtree(path, onerror=onerror)
+
+    path = tempfile.mkdtemp(prefix=prefix)
+    if not os.environ.get("ZTV_KEEP_TMP"):
+        atexit.register(_force_rm, path)
+    return path
+
 
 def pick_port() -> int:
     """

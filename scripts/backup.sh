@@ -39,12 +39,23 @@ ts=$(date -u +%Y%m%dT%H%M%SZ)
 snapshot="$BACKUP_DIR/.snap-$ts.db"
 final="$BACKUP_DIR/daily/0trust-${ts}.db.age"
 
+# The snapshot is a full, unencrypted copy of every account, device and
+# invoice. If anything below fails — a bad recipients file, a full disk, age
+# missing — `set -e` walks out of the script and the plain copy stays on disk
+# until somebody notices. It is the exact finding scripts/audit-verify.sh looks
+# for, produced by the backup job itself. Shred it on the way out, always.
+cleanup_snapshot() {
+    [[ -e "$snapshot" ]] && shred -u "$snapshot" 2>/dev/null
+    return 0
+}
+trap cleanup_snapshot EXIT
+
 log "Snapshotting db (online)"
 sqlite3 "$DB_PATH" ".backup '$snapshot'"
 
 log "Encrypting to recipients in $AGE_RECIPIENT_FILE"
 age -R "$AGE_RECIPIENT_FILE" -o "$final" "$snapshot"
-shred -u "$snapshot"          # the cleartext snapshot dies right here
+cleanup_snapshot              # the cleartext snapshot dies right here
 ok "$final ($(du -h "$final" | cut -f1))"
 
 # ----- Promote to weekly / monthly -----

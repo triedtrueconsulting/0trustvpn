@@ -120,8 +120,7 @@ def kotlin_class(name: str) -> str:
 # Live control plane, so the comparison is against real JSON and not a copy of
 # the Python models that could drift with them.
 # ---------------------------------------------------------------------------
-import tempfile
-TMP = tempfile.mkdtemp(prefix="0trust-apps-")
+TMP = H.tempdir("0trust-apps-")
 DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 os.environ["ZTV_TRIAL_SECRET"] = "apps-secret"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Deep end-to-end test against a live 0trust stack."""
-import os, shutil, sqlite3, subprocess, sys, tempfile, time
+import os, shutil, sqlite3, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -9,7 +9,7 @@ def check(name, ok, detail=""):
     (PASS if ok else FAIL).append(name)
     print(("  PASS  " if ok else "  FAIL  ") + name + ("" if ok else f"\n          {detail}"))
 
-TMP = tempfile.mkdtemp(prefix="0trust-emu-")
+TMP = H.tempdir("0trust-emu-")
 DB  = os.path.join(TMP, "0trust.db")
 
 # init schema before boot so we can seed

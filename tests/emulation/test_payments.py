@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """BTC / XMR / ZEC through both providers, neither of which needs a local node."""
-import json, os, shutil, subprocess, sys, tempfile, time
+import json, os, shutil, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 import fake_gateway
@@ -11,7 +11,7 @@ def check(n, ok, d=""):
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
 GATEWAY_PORT = H.pick_port()
-TMP = tempfile.mkdtemp(prefix="0trust-pay-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("0trust-pay-"); DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 sys.path.insert(0, os.path.join(H.REPO, "api"))
 import main as api_main; api_main.init_db()

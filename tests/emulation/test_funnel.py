@@ -9,7 +9,7 @@ free signup, and no server-side test would notice.
 
 Skips (exit 77) if Playwright or a browser is unavailable.
 """
-import functools, glob, http.server, os, shutil, sys, tempfile, threading
+import functools, glob, http.server, os, shutil, sys, threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -25,7 +25,7 @@ def check(n, ok, d=""):
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
 WEB_PORT = H.pick_port()
-TMP = tempfile.mkdtemp(prefix="0trust-funnel-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("0trust-funnel-"); DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 os.environ["ZTV_TRIAL_SECRET"] = "funnel-secret"
 os.environ["ZTV_TRIAL_POW_BITS"] = "14"

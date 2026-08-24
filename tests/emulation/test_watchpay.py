@@ -9,7 +9,7 @@ works. This drives the whole of it — signup, a derived address, a payment
 appearing on a (fake) explorer, the poller crediting the account — against the
 real control plane.
 """
-import os, shutil, sqlite3, subprocess, sys, tempfile, threading, time
+import os, shutil, sqlite3, subprocess, sys, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
@@ -21,7 +21,7 @@ def check(n, ok, d=""):
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
 EXPLORER_PORT = H.pick_port()
-TMP = tempfile.mkdtemp(prefix="0trust-watch-")
+TMP = H.tempdir("0trust-watch-")
 DB = os.path.join(TMP, "0trust.db")
 
 # The BIP84 spec's own account key, so the addresses below are ones anybody

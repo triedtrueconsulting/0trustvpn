@@ -9,7 +9,7 @@ button existed.
 
 Skips (77) without Playwright or a browser.
 """
-import functools, glob, http.server, json, os, shutil, sys, tempfile, threading
+import functools, glob, http.server, json, os, shutil, sys, threading
 import urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
@@ -26,7 +26,7 @@ def check(n, ok, d=""):
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
 PORT = H.pick_port()
-TMP = tempfile.mkdtemp(prefix="0trust-adminui-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("0trust-adminui-"); DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 os.environ["ZTV_TRIAL_SECRET"] = "adminui"
 os.environ["ZTV_TRIAL_POW_BITS"] = "10"

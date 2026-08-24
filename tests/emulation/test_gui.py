@@ -9,7 +9,7 @@ tests, so this is where its wiring gets proven.
 
 Skips (77) without Playwright or a browser.
 """
-import glob, os, re, shutil, signal, socket, subprocess, sys, tempfile, time
+import glob, os, re, shutil, signal, socket, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -26,7 +26,7 @@ def check(n, ok, d=""):
 
 GUI_PORT = 51827
 EMU = os.path.dirname(os.path.abspath(__file__))
-TMP = tempfile.mkdtemp(prefix="0trust-gui-")
+TMP = H.tempdir("0trust-gui-")
 DB = os.path.join(TMP, "0trust.db")
 HOME = os.path.join(TMP, "home"); os.makedirs(HOME)
 BIN = os.path.join(TMP, "0trust")

@@ -22,7 +22,7 @@ is the kind that reads fine in a config file and fails on the wire:
 
 Skips (77) without root and `ip netns`.
 """
-import json, os, subprocess, sys, tempfile, time
+import json, os, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
@@ -99,7 +99,7 @@ if os.geteuid() != 0 or subprocess.run(["ip", "netns", "list"],
     print("  SKIP  needs root and ip netns")
     sys.exit(77)
 
-TMP = tempfile.mkdtemp(prefix="ztv-onebox-")
+TMP = H.tempdir("ztv-onebox-")
 ECHO_PY, SEND_PY = os.path.join(TMP, "echo.py"), os.path.join(TMP, "send.py")
 open(ECHO_PY, "w").write(ECHO)
 open(SEND_PY, "w").write(SEND)
