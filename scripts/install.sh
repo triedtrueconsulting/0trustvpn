@@ -194,7 +194,10 @@ WALLET_BTC=
 # your own, if you would rather not depend on a public one.
 NODE_RPC_BTC=
 ZTV_BTC_CONFIRMATIONS=1
-BTCPAY_URL=https://btcpay.example.com
+# Only read when ZTV_PAYMENT_PROVIDER=btcpay. Left blank on purpose: a
+# default pointing at example.com turns "you have not configured this" into
+# a connection error against somebody else's domain.
+BTCPAY_URL=
 BTCPAY_STORE_ID=
 BTCPAY_API_KEY=
 BTCPAY_WEBHOOK_SECRET=$(gen)

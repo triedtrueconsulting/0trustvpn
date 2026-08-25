@@ -7,3 +7,10 @@
 
 httpx==0.28.1    # transport behind fastapi.testclient, used by api/smoke_test.py
 PyYAML==6.0.3    # parses wireguard/cloud-init-ephemeral.yaml in scripts/validate.sh
+
+# Drives a real Chromium for the four modules that check surfaces a parser
+# cannot see: the trial funnel, the desktop GUI, the operations dashboard and
+# the site's shared nav. Without it those four skip, which is how an
+# unreadable button and a control pushed off the edge of a phone both reached
+# a "green" build. Needs `playwright install chromium` once.
+playwright==1.47.0

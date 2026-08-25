@@ -174,6 +174,44 @@ try:
         check(f"{name} states the real device cap", stated == {cap},
               f"{name} says {sorted(stated)}, the API enforces {cap}")
 
+    print("\n[5b-securitytxt] the file seven pages point at")
+    # security-policy, download, privacy, terms §9, help and
+    # scripts/verify-release.sh all send people to /.well-known/security.txt.
+    # It did not exist. The link checker skips /.well-known/ because nginx
+    # serves some of it from elsewhere, so nothing noticed that the one file
+    # naming the release fingerprint and the operating entity was a 404.
+    stxt = os.path.join(WEB, ".well-known", "security.txt")
+    check("security.txt exists", os.path.exists(stxt),
+          "terms.html §9 defers naming the operating entity to this file")
+    if os.path.exists(stxt):
+        raw = open(stxt).read()
+        fields = {}
+        for line in raw.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            k, _, v = line.partition(":")
+            fields.setdefault(k.strip(), []).append(v.strip())
+        check("it has a Contact field (RFC 9116 requires one)",
+              "Contact" in fields, sorted(fields))
+        check("it has exactly one Expires field",
+              len(fields.get("Expires", [])) == 1, fields.get("Expires"))
+        if len(fields.get("Expires", [])) == 1:
+            import datetime as _dt
+            exp = _dt.datetime.fromisoformat(
+                fields["Expires"][0].replace("Z", "+00:00"))
+            check("and it has not passed",
+                  exp > _dt.datetime.now(_dt.timezone.utc),
+                  f"Expires {exp} — RFC 9116 makes an expired file invalid, "
+                  "and researchers' tooling reports it as such")
+        # The contact address is a locked decision; a security.txt naming a
+        # different inbox sends reports somewhere nobody reads.
+        check("it names the project contact address",
+              "0trustvpn@proton.me" in raw, "no 0trustvpn@proton.me")
+        for page in ("security-policy.html", "privacy.html", "terms.html"):
+            src = open(os.path.join(WEB, page)).read()
+            if "/.well-known/security.txt" in src:
+                check(f"{page} links a file that now exists", True)
+
     print("\n[5c-vendor] the pinned third-party asset is actually pinned")
     # web/vendor/ exists so no page contacts a CDN, and docs/AUDIT.md claims
     # the files there are SRI-checked. Three things have to agree: the bytes on

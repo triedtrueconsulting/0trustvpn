@@ -62,6 +62,44 @@ SCRYPT_MAXMEM = 96 * 1024 * 1024
 # deliberately do not have.
 _login_attempts: dict[str, list[float]] = {}
 
+# Peers whose forwarded-for headers we believe. nginx runs on the same host and
+# sets X-Real-IP from the address it actually saw, so loopback is the default.
+TRUSTED_PROXIES = {
+    a.strip() for a in
+    os.environ.get("ZTV_TRUSTED_PROXIES", "127.0.0.1,::1").split(",")
+    if a.strip()
+}
+
+
+def client_addr(request: Request) -> str:
+    """The address the request really came from.
+
+    `request.client.host` is the TCP peer, and behind the reverse proxy that is
+    always 127.0.0.1. Rate limiting on it put the entire internet in one
+    bucket, which is worse than not having it: it could not tell an attacker
+    from anyone else, and eight failed guesses from a stranger locked the real
+    operator out of the dashboard for the whole window — an admin-lockout DoS
+    available to anyone who can reach the login endpoint. It also meant the
+    admin audit log recorded "from 127.0.0.1" for every failed login, on the
+    one record an operator would read after an intrusion attempt.
+
+    A forwarded header is only believed when the peer is a proxy we trust;
+    otherwise anyone could set it and pick a fresh bucket per attempt.
+    X-Real-IP is preferred because nginx sets it from $remote_addr and a client
+    cannot influence it. X-Forwarded-For is the fallback, taking the LAST
+    element: nginx appends the address it saw to whatever the client sent, so
+    with one proxy in front the last entry is the only trustworthy one.
+    """
+    peer = request.client.host if request.client else ""
+    if peer not in TRUSTED_PROXIES:
+        return peer or "?"
+    real = (request.headers.get("X-Real-IP") or "").strip()
+    if real:
+        return real
+    xff = request.headers.get("X-Forwarded-For") or ""
+    hops = [h.strip() for h in xff.split(",") if h.strip()]
+    return hops[-1] if hops else (peer or "?")
+
 
 # ---------------------------------------------------------------------------
 # Passwords and sessions
@@ -223,10 +261,12 @@ def admin_setup(req: SetupRequest, request: Request, response: Response):
 
 @router.post("/login")
 def admin_login(req: LoginRequest, request: Request, response: Response):
-    client = request.client.host if request.client else "?"
-    for key in (f"u:{req.username}", f"a:{client}"):
-        if _rate_limited(key):
-            raise HTTPException(429, "Too many attempts. Wait, then try again.")
+    client = client_addr(request)
+
+    # Address first, before doing any work: a single source that has already
+    # burned its attempts gets nothing, and cannot make us compute scrypt.
+    if _rate_limited(f"a:{client}"):
+        raise HTTPException(429, "Too many attempts. Wait, then try again.")
 
     with _db() as conn:
         row = conn.execute(
@@ -236,13 +276,29 @@ def admin_login(req: LoginRequest, request: Request, response: Response):
     # separate "no such account" from "wrong password".
     stored = row["password_hash"] if row else hash_password("decoy")
     ok = verify_password(req.password, stored) and row is not None and not row["disabled"]
+
+    # A correct password is honoured even if the username is over its limit.
+    #
+    # Locking an account after N failures hands anyone who can reach this
+    # endpoint an admin-lockout: the username is not a secret, and the only
+    # recovery from a locked dashboard — the place bans and refunds live — is
+    # to wait or to have shell on the box. Rate limiting exists to make
+    # guessing expensive, and a correct password is not a guess. The controls
+    # that survive are the per-address block above, nginx's limit_req, and
+    # scrypt making every attempt cost real CPU.
     if not ok:
         for key in (f"u:{req.username}", f"a:{client}"):
             _record_attempt(key)
         with _db(write=True) as conn:
             audit(conn, None, "admin.login.failed", req.username, f"from {client}")
+        if _rate_limited(f"u:{req.username}"):
+            raise HTTPException(429, "Too many attempts. Wait, then try again.")
         raise HTTPException(401, "Invalid credentials")
 
+    # Signing in clears the counters, so a fumbled password followed by the
+    # right one does not leave the operator part-way to a lockout.
+    for key in (f"u:{req.username}", f"a:{client}"):
+        _login_attempts.pop(key, None)
     return _issue_session(req.username, request, response)
 
 

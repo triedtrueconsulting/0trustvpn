@@ -106,6 +106,33 @@ ran = [i for i in re.findall(r'^  ([a-z0-9-]+)\s+\S.*\.\.\.', r.stdout, re.M)]
 check("passing a name runs only the matching checks",
       bool(ran) and all("backups" in x for x in ran), ran)
 
+print("\n[5] the launch gate refuses to call an unfinished deployment ready")
+# The one question a green build cannot answer. It has to run anywhere, tell
+# the truth about this checkout, and exit non-zero while placeholders remain —
+# otherwise it is decoration and somebody ships on it.
+PRE = os.path.join(H.REPO, "scripts", "preflight.sh")
+check("preflight.sh exists and is executable", os.access(PRE, os.X_OK))
+r = subprocess.run([PRE, "--repo"], capture_output=True, text=True, timeout=900,
+                   cwd=H.REPO, env={**os.environ, "ZTV_SKIP_VALIDATE": "1"})
+check("it runs on a machine with nothing deployed",
+      "preflight" in r.stdout.lower(), (r.stdout + r.stderr)[-400:])
+check("it does not call this checkout ready", r.returncode > 0,
+      "the release key is still DEADBEEF and no wallet is set; saying READY "
+      "here is how a placeholder reaches production")
+check("and it says NOT READY out loud", "NOT READY" in r.stdout,
+      r.stdout[-300:])
+
+# Each blocker has to name the fix, or it is a complaint rather than a gate.
+blocked = [l for l in r.stdout.splitlines() if "BLOCKED" in l]
+fixes = [l for l in r.stdout.splitlines() if "fix:" in l]
+check("every blocker comes with a fix", len(fixes) >= len(blocked),
+      f"{len(blocked)} blockers, {len(fixes)} fixes")
+print(f"      {len(blocked)} blocker(s) on this checkout, each with a fix")
+
+# The blockers must be the real ones, not a generic scold.
+for expect in ("release-key-pinned", "web-no-placeholder-fpr"):
+    check(f"it catches {expect}", expect in r.stdout, r.stdout[-400:])
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("  failures: " + ", ".join(FAIL))

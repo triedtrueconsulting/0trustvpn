@@ -33,10 +33,11 @@ opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 CSRF = {"v": None}
 
 
-def adm(method, path, body=None, csrf=True, timeout=25):
+def adm(method, path, body=None, csrf=True, timeout=25, extra=None):
     url = H.API + "/api/v1/admin" + path
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"}
+    headers.update(extra or {})
     if csrf and CSRF["v"] and method not in ("GET", "HEAD"):
         headers["X-Admin-CSRF"] = CSRF["v"]
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -265,6 +266,57 @@ try:
     st, r = adm("POST", "/login",
                 {"username": "ops", "password": "correct-horse-battery-staple"})
     check("signing back in works", st == 200, r)
+    print("\n[lockout] a stranger's failures do not lock the operator out")
+    # The API sees 127.0.0.1 for every request behind nginx, so rate limiting
+    # on the TCP peer put the whole internet in one bucket: eight wrong
+    # guesses from anybody left the real operator staring at 429 for the rest
+    # of the window. nginx sets X-Real-IP from the address it actually saw and
+    # a client cannot forge it through nginx, so that is what the limiter uses
+    # — and only when the peer is a proxy we trust.
+    st, r = adm("POST", "/logout")
+    attacker = {"X-Real-IP": "198.51.100.66"}
+    codes = []
+    for _ in range(12):
+        st, _ = adm("POST", "/login",
+                    {"username": "ops", "password": "definitely-not-it"},
+                    extra=attacker)
+        codes.append(st)
+    check("the attacker's address is throttled", 429 in codes, codes)
+
+    # A different address, correct password: must still get in.
+    st, r = adm("POST", "/login",
+                {"username": "ops", "password": "correct-horse-battery-staple"},
+                extra={"X-Real-IP": "203.0.113.9"})
+    check("the operator can still sign in from elsewhere", st == 200,
+          f"{st} {r} — anyone who can reach the login endpoint could lock the "
+          "dashboard, which is where bans and refunds live")
+    if st == 200 and isinstance(r, dict) and r.get("csrf"):
+        CSRF["v"] = r["csrf"]
+
+    # And the forwarded header must not be believed from an untrusted peer,
+    # or the limiter is trivially evaded with a fresh value per attempt.
+    import admin as admin_mod
+    check("forwarded headers are only trusted from a known proxy",
+          "127.0.0.1" in admin_mod.TRUSTED_PROXIES
+          and "10.0.0.1" not in admin_mod.TRUSTED_PROXIES,
+          sorted(admin_mod.TRUSTED_PROXIES))
+
+    # Wrong passwords must still be refused while the username is hot — the
+    # exemption is for a CORRECT password, not for the endpoint.
+    st, _ = adm("POST", "/login",
+                {"username": "ops", "password": "still-not-it"},
+                extra={"X-Real-IP": "203.0.113.9"})
+    check("a wrong password is still refused during the window",
+          st in (401, 429), st)
+
+    st, aud = adm("GET", "/audit")
+    entries = (aud or {}).get("entries") or []
+    failed = [e for e in entries if e.get("action") == "admin.login.failed"]
+    check("failed logins are recorded with the real address",
+          any("198.51.100.66" in (e.get("detail") or "") for e in failed),
+          "the audit log said 127.0.0.1 for every attempt — useless on the one "
+          "record an operator reads after an intrusion attempt")
+
     print("\n[events] the operator can see what broke")
     st, ev = adm("GET", "/events")
     check("events feed loads", st == 200, ev)
