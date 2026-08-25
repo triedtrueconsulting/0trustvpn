@@ -10,6 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
       rel="stylesheet">
 
+<link rel="stylesheet" href="/site.css">
 <style>
 :root {
   --bg: #0c0c0a;
@@ -54,22 +55,6 @@ body {
 }
 .wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; }
 
-.brand {
-  font-family: 'JetBrains Mono', monospace;
-  font-weight: 700;
-  font-size: 24px;
-  text-decoration: none;
-  color: inherit;
-}
-.brand .zero { color: var(--amber); font-size: 30px; }
-.crumb {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  color: var(--ink-faint);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  margin-left: 16px;
-}
 
 h1 {
   font-family: 'Instrument Serif', serif;
@@ -217,13 +202,26 @@ code {
 .footer a:hover { text-decoration: underline; }
 </style>
 </head>
-<body>
-<div class="wrap">
+<body class="has-sitenav">
 
-  <div style="display:flex;align-items:baseline">
-    <a class="brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
-    <span class="crumb">/ download</span>
+<nav class="sitenav">
+  <a class="sitenav-skip" href="#content">Skip to content</a>
+  <a class="sitenav-brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
+  <span class="sitenav-crumb">/ download</span>
+  <div class="sitenav-links">
+    <a href="/#how">How it works</a>
+    <a href="/#jurisdictions">Jurisdictions</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/audit">Audit</a>
+    <a href="/download" aria-current="page">Download</a>
+    <a href="/status">Status</a>
+    <a href="/help">Help</a>
+    <a href="/surf">Surf</a>
   </div>
+  <a class="sitenav-cta" href="/trial">Free trial</a>
+</nav>
+
+<div class="wrap" id="content" tabindex="-1">
 
   <h1>Download the client.</h1>
   <p class="lede">
@@ -313,7 +311,7 @@ code {
 <pre><span class="prompt">$</span> ../verify-release.sh
 <span class="comment"># [✓] PGP signature valid (key: DEADBEEF...REPLACE-ME)</span>
 <span class="comment"># [✓] key fingerprint matches expected: DEADBEEF...REPLACE-ME</span>
-<span class="comment"># [✓] all 5 files match SHA256SUMS</span>
+<span class="comment"># [✓] all files match SHA256SUMS</span>
 <span class="comment"># [✓] VERIFIED.  Safe to run.</span></pre>
   </div>
 

@@ -45,7 +45,31 @@ jobs:
       - name: Install control-plane deps
         run: pip install -r api/requirements-dev.txt
 
+      # The emulation suite skips a module rather than failing when its
+      # prerequisites are absent, which is the right behaviour and also a good
+      # way to have six modules quietly never run. Install what they need.
+      #
+      #   chromium  — funnel, gui, admin_ui, site_ui
+      #   age       — backup (encrypt, restore, serve from the restored file)
+      #   gnupg     — release, canary (sign and verify for real)
+      - name: Install browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Install age and gnupg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age gnupg
+
       # dpkg-deb ships on ubuntu-latest, so the .deb check runs for real here
       # instead of skipping.
       - name: Validate
         run: ./scripts/validate.sh
+
+      # Not a gate: this checkout is a repository, not a deployment, and it is
+      # SUPPOSED to report blockers until an operator has generated the keys
+      # and pointed a wallet somewhere. Printed so the launch state is visible
+      # on every run rather than being something somebody has to remember to
+      # ask about.
+      - name: Launch readiness (informational)
+        if: always()
+        run: ./scripts/preflight.sh --repo || true
+        env:
+          ZTV_SKIP_VALIDATE: "1"

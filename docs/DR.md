@@ -24,12 +24,22 @@ sudo /opt/0trust-src/scripts/bootstrap.sh
 # 4. Stop the API service while we restore the DB
 sudo systemctl stop 0trust-api
 
-# 5. Decrypt the most recent backup
+# 5. Decrypt the most recent backup — to a scratch path first.
+#    Never decrypt straight over the live database: if the archive is
+#    truncated or the wrong key was used, you have just destroyed the only
+#    copy you had left with a half-written file.
 sudo age -d -i /root/.age/0trust-backup.key \
-              /path/to/0trust-<ts>.db.age \
-              > /var/lib/0trust/0trust.db
-sudo chown 0trust:0trust /var/lib/0trust/0trust.db
-sudo chmod 600 /var/lib/0trust/0trust.db
+              -o /tmp/0trust-restore.db \
+              /path/to/0trust-<ts>.db.age
+
+#    Check it before you trust it. This takes seconds and is the difference
+#    between a restore and an outage with extra steps.
+sqlite3 /tmp/0trust-restore.db 'PRAGMA integrity_check;'   # expect: ok
+sqlite3 /tmp/0trust-restore.db 'SELECT COUNT(*) FROM accounts;'
+
+sudo install -o 0trust -g 0trust -m 600 \
+             /tmp/0trust-restore.db /var/lib/0trust/0trust.db
+shred -u /tmp/0trust-restore.db
 
 # 6. Restore api.env (BTCPay key, node PSK, etc).
 #    Keep an encrypted copy of /etc/0trust/api.env off-host alongside the DB.

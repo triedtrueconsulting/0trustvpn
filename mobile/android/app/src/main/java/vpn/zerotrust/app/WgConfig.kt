@@ -21,6 +21,9 @@ data class WgConfig(
     val interfaceIP6: String? = null,
     val dns: List<String>,
     val peers: List<WgPeer>,
+    val multihop: Boolean = false,
+    /** Entry and exit are one machine — see WgRegisterResponse.sameHost. */
+    val sameHost: Boolean = false,
 ) {
     /**
      * Convert to wireguard-android's Config object. This is what gets passed

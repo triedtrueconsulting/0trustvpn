@@ -1,8 +1,17 @@
-Drop a 0trust.ico file in this directory before building the MSI.
+0trust.ico is generated, not hand-made.
 
-Generate from your SVG logo with ImageMagick:
-  magick -background none logo.svg \
-         -define icon:auto-resize=256,128,64,48,32,16 0trust.ico
+    python3 make-icon.py
 
-Or use any online SVG-to-ICO converter; ensure it produces a multi-resolution
-icon containing at least 16, 32, and 256 px variants.
+make-icon.py renders the same mark as installer/linux/deb/0trust.svg — dark
+rounded square, amber "0" ring, shield, check — at 256, 128, 64, 48, 32 and 16
+pixels, and packs them into a multi-resolution .ico. Standard library only; no
+ImageMagick, no online converter, no "ask the person building the installer to
+produce one", which is what used to be written here and which meant the
+documented `wix build` command failed on a clean checkout.
+
+Each size is drawn independently rather than downscaled from one bitmap. The
+two smallest drop the shield and check — they cannot survive at that scale —
+and thicken the ring so the "0" stays legible in a 16px taskbar slot.
+
+The committed 0trust.ico is the output of that script. Re-run it if the mark
+changes, and commit the result.

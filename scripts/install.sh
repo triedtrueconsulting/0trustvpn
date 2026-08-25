@@ -34,6 +34,34 @@ set -euo pipefail
 MODE="" DOMAIN="" EMAIL=""
 DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1
 
+WALLET_BTC="${WALLET_BTC:-}"
+
+validate_wallet() {
+    # A wrong extended key is the one failure in this system with no symptom:
+    # the API happily derives addresses, invoices settle never, and every
+    # health check stays green. Catch it here, and make the operator look at
+    # the first address rather than trusting a prefix check.
+    local key="$1"
+    [[ -n "$key" ]] || return 0
+    if [[ "$key" == *prv* ]]; then
+        echo "  --wallet was given an extended PRIVATE key." >&2
+        echo "  Nothing here needs one. Use the PUBLIC half (xpub/ypub/zpub)," >&2
+        echo "  and treat that key as compromised." >&2
+        exit 1
+    fi
+    local rc=0
+    "$REPO_DIR/scripts/check-wallet.sh" "$key" || rc=$?
+    case "$rc" in
+        0) ;;
+        3)  echo "  --wallet is not the wallet this deployment is pinned to" >&2
+            echo "  (scripts/wallet.pin). Refusing: the likeliest cause is a" >&2
+            echo "  truncated or mistyped paste, and it has no other symptom." >&2
+            exit 1 ;;
+        *)  echo "  --wallet did not validate; refusing to install with it." >&2
+            exit 1 ;;
+    esac
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode) MODE="${2:-}"; shift 2 ;;
@@ -42,6 +70,7 @@ while [[ $# -gt 0 ]]; do
         --no-firewall) DO_FIREWALL=0; shift ;;
         --no-ssh-hardening) DO_SSH=0; shift ;;
         --no-vpn) DO_VPN=0; shift ;;
+        --wallet) WALLET_BTC="${2:-}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
         *) echo "unknown flag: $1" >&2; exit 64 ;;
@@ -78,6 +107,10 @@ VARLIB="${ZTV_VARLIB:-/var/lib/0trust}"
 WEBROOT="${ZTV_WEBROOT:-/var/www/0trust}"
 VENV="$PREFIX/api/.venv"
 NGINX_SITE="${ZTV_NGINX_SITE:-/etc/nginx/sites-available/0trust}"
+
+# Before anything is written: a bad --wallet must stop the install, not be
+# discovered by the first customer who pays.
+validate_wallet "$WALLET_BTC"
 
 if [[ -r /etc/os-release ]]; then
     . /etc/os-release
@@ -188,13 +221,16 @@ ZTV_PAYMENT_PROVIDER=watch
 
 # The PUBLIC half of your Bitcoin wallet. xpub/ypub/zpub. A fresh receive
 # address is derived per invoice; nothing here can spend anything.
-WALLET_BTC=
+WALLET_BTC=$WALLET_BTC
 
 # Blank uses mempool.space. Any Esplora-compatible explorer works, including
 # your own, if you would rather not depend on a public one.
 NODE_RPC_BTC=
 ZTV_BTC_CONFIRMATIONS=1
-BTCPAY_URL=https://btcpay.example.com
+# Only read when ZTV_PAYMENT_PROVIDER=btcpay. Left blank on purpose: a
+# default pointing at example.com turns "you have not configured this" into
+# a connection error against somebody else's domain.
+BTCPAY_URL=
 BTCPAY_STORE_ID=
 BTCPAY_API_KEY=
 BTCPAY_WEBHOOK_SECRET=$(gen)

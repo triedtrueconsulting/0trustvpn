@@ -11,7 +11,7 @@ nginx 1.24 that Ubuntu 24.04 ships got through the first time.
 
 Skips (77) if nginx is not installed.
 """
-import os, re, shutil, subprocess, sys, tempfile
+import os, re, shutil, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -25,7 +25,7 @@ def check(n, ok, d=""):
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
 INSTALL = os.path.join(H.REPO, "scripts", "install.sh")
-TMP = tempfile.mkdtemp(prefix="0trust-install-")
+TMP = H.tempdir("0trust-install-")
 os.makedirs(f"{TMP}/www", exist_ok=True)
 os.makedirs(f"{TMP}/snippets", exist_ok=True)
 for snip in ("0trust-proxy.conf", "0trust-surf.conf"):

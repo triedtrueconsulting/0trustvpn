@@ -7,7 +7,7 @@ proof-of-work challenge, reaching another account's devices, crediting a
 subscription from someone else's invoice, getting SQL through a region code.
 Passing means the boundary held, not that it was never tested.
 """
-import base64, hashlib, json, os, shutil, sys, tempfile, time
+import base64, hashlib, json, os, shutil, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -25,7 +25,7 @@ def solve(nonce, bits):
             return str(i)
         i += 1
 
-TMP = tempfile.mkdtemp(prefix="sec-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("sec-"); DB = os.path.join(TMP, "0trust.db")
 os.environ.update(ZTV_DB_PATH=DB, ZTV_TRIAL_SECRET="sec-secret",
                   ZTV_TRIAL_POW_BITS="10", ZTV_TRIAL_MAX_DEVICES="2")
 sys.path.insert(0, os.path.join(H.REPO, "api"))

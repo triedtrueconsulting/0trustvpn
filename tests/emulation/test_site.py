@@ -7,7 +7,7 @@ locked three-node design, a port-forwarding feature that does not exist, and
 currencies that were dropped. Marketing copy drifts from the product silently
 because nothing executes it. This module executes it.
 """
-import glob, http.server, functools, os, re, shutil, sys, tempfile, threading, urllib.error, urllib.request
+import glob, http.server, functools, os, re, shutil, sys, threading, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -18,7 +18,7 @@ def check(n, ok, d=""):
 
 WEB = os.path.join(H.REPO, "web")
 PORT = H.pick_port()
-TMP = tempfile.mkdtemp(prefix="0trust-site-")
+TMP = H.tempdir("0trust-site-")
 DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 os.environ["ZTV_TRIAL_SECRET"] = "site-secret"
@@ -148,11 +148,98 @@ try:
     print("\n[5] the device cap the site advertises matches the API")
     st, s = H.call("GET", "/api/v1/status/public")
     check("status endpoint serves the site", st == 200, s)
+    cap = api_main.MAX_DEVICES_PER_ACCOUNT
     m = re.search(r'Up to (\d+) simultaneous devices', idx)
     if m:
         check("advertised device cap matches MAX_DEVICES_PER_ACCOUNT",
-              int(m.group(1)) == api_main.MAX_DEVICES_PER_ACCOUNT,
-              f"site says {m.group(1)}, API cap is {api_main.MAX_DEVICES_PER_ACCOUNT}")
+              int(m.group(1)) == cap,
+              f"site says {m.group(1)}, API cap is {cap}")
+
+    # The landing page was the only page checked, and it is not the page that
+    # matters most: terms.html is the binding document and help.html is what a
+    # customer reads when the cap bites. All three state the number in their own
+    # words, so an operator who changes the setting has to be made to find all
+    # three rather than leaving the legal text asserting a limit the system does
+    # not enforce.
+    import glob as _glob
+    for name in ("terms.html", "help.html", "index.html"):
+        src = open(os.path.join(WEB, name)).read()
+        stated = set()
+        for pat in (r'up to <strong>(\d+) devices</strong>',
+                    r'Up to (\d+) simultaneous devices',
+                    r'<span>Devices</span><span class="mono">\d+ / (\d+)</span>'):
+            stated.update(int(x) for x in re.findall(pat, src, re.I))
+        if not stated:
+            continue
+        check(f"{name} states the real device cap", stated == {cap},
+              f"{name} says {sorted(stated)}, the API enforces {cap}")
+
+    print("\n[5b-securitytxt] the file seven pages point at")
+    # security-policy, download, privacy, terms §9, help and
+    # scripts/verify-release.sh all send people to /.well-known/security.txt.
+    # It did not exist. The link checker skips /.well-known/ because nginx
+    # serves some of it from elsewhere, so nothing noticed that the one file
+    # naming the release fingerprint and the operating entity was a 404.
+    stxt = os.path.join(WEB, ".well-known", "security.txt")
+    check("security.txt exists", os.path.exists(stxt),
+          "terms.html §9 defers naming the operating entity to this file")
+    if os.path.exists(stxt):
+        raw = open(stxt).read()
+        fields = {}
+        for line in raw.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            k, _, v = line.partition(":")
+            fields.setdefault(k.strip(), []).append(v.strip())
+        check("it has a Contact field (RFC 9116 requires one)",
+              "Contact" in fields, sorted(fields))
+        check("it has exactly one Expires field",
+              len(fields.get("Expires", [])) == 1, fields.get("Expires"))
+        if len(fields.get("Expires", [])) == 1:
+            import datetime as _dt
+            exp = _dt.datetime.fromisoformat(
+                fields["Expires"][0].replace("Z", "+00:00"))
+            check("and it has not passed",
+                  exp > _dt.datetime.now(_dt.timezone.utc),
+                  f"Expires {exp} — RFC 9116 makes an expired file invalid, "
+                  "and researchers' tooling reports it as such")
+        # The contact address is a locked decision; a security.txt naming a
+        # different inbox sends reports somewhere nobody reads.
+        check("it names the project contact address",
+              "0trustvpn@proton.me" in raw, "no 0trustvpn@proton.me")
+        for page in ("security-policy.html", "privacy.html", "terms.html"):
+            src = open(os.path.join(WEB, page)).read()
+            if "/.well-known/security.txt" in src:
+                check(f"{page} links a file that now exists", True)
+
+    print("\n[5c-vendor] the pinned third-party asset is actually pinned")
+    # web/vendor/ exists so no page contacts a CDN, and docs/AUDIT.md claims
+    # the files there are SRI-checked. Three things have to agree: the bytes on
+    # disk, the hash in MANIFEST.txt, and the integrity= attribute on whatever
+    # loads it. Update any one alone and either the claim is stale or the
+    # browser silently refuses to run the script and the feature just stops.
+    import base64 as _b64, hashlib as _hl
+    vendor_dir = os.path.join(WEB, "vendor")
+    manifest = ""
+    mpath = os.path.join(vendor_dir, "MANIFEST.txt")
+    if os.path.exists(mpath):
+        manifest = open(mpath).read()
+    all_html = "".join(open(os.path.join(WEB, p)).read() for p in pages)
+    for fn in sorted(os.listdir(vendor_dir)):
+        if fn == "MANIFEST.txt":
+            continue
+        raw = open(os.path.join(vendor_dir, fn), "rb").read()
+        digest = _hl.sha256(raw).digest()
+        check(f"{fn} is listed in MANIFEST.txt with its real hash",
+              digest.hex() in manifest,
+              f"manifest does not carry {digest.hex()}")
+        sri = "sha256-" + _b64.b64encode(digest).decode()
+        referenced = f"/vendor/{fn}" in all_html
+        if referenced:
+            check(f"{fn} is loaded with a matching integrity attribute",
+                  sri in all_html,
+                  f"expected integrity=\"{sri}\" — the page pins a hash that is "
+                  "not this file, so the browser will refuse to run it")
 
     print("\n[5a] every page finishes its own styling")
     # Each page carries its own <style> block. Two of them had no rule for a
@@ -180,11 +267,81 @@ try:
     brands = {}
     for f in public:
         src = open(f).read()
-        m = _re.search(r'class="brand"[^>]*>\s*(?:<span[^>]*>0</span>)?\s*<span[^>]*>([a-z]+)</span>', src)
+        m = _re.search(r'class="(?:sitenav-)?brand"[^>]*>\s*(?:<span[^>]*>0</span>)?\s*<span[^>]*>([a-z]+)</span>', src)
         if m:
             brands.setdefault(m.group(1), []).append(os.path.basename(f))
     check("the brand mark is the same on every page",
           list(brands) in ([], ["trustvpn"]), brands)
+    check("every page shows the wordmark", len(brands.get("trustvpn", [])) == len(public),
+          "pages with no wordmark: " +
+          str(sorted(set(os.path.basename(f) for f in public)
+                     - set(brands.get("trustvpn", [])))))
+
+    print("\n[5c] one nav, on every page, going to the same places")
+    # Before this, the landing page had a nav bar and every other page had a
+    # breadcrumb: once a visitor left the front page the only way onward was
+    # the back button. A nav is only "shared" if it is literally one file —
+    # nine copies of the same markup is how the copies drift apart. So: check
+    # the stylesheet is linked, the markup is present, and the link set is
+    # character-for-character identical everywhere.
+    st, css = get("/site.css")
+    check("the shared stylesheet is served", st == 200, st)
+    check("it defines the nav", ".sitenav {" in css)
+
+    navs, missing = {}, []
+    for f in public:
+        name = os.path.basename(f)
+        src = open(f).read()
+        if '/site.css' not in src or 'class="sitenav"' not in src:
+            missing.append(name)
+            continue
+        m = _re.search(r'<nav class="sitenav">.*?</nav>', src, _re.S)
+        if not m:
+            missing.append(name)
+            continue
+        body = m.group(0)
+        # The crumb and the aria-current marker are per-page by design; the
+        # destinations are not.
+        links = _re.findall(r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>', body, _re.S)
+        navs[name] = [(h, " ".join(_re.sub(r"<[^>]+>", "", t).split())) for h, t in links]
+    check("every page carries the shared nav", not missing, missing)
+
+    # Nine tab stops in front of the content on every page is exactly the
+    # situation a skip link exists for, and it only works if the target it
+    # names is actually on the page.
+    noskip = []
+    for f in public:
+        src = open(f).read()
+        if ('href="#content"' not in src) or ('id="content"' not in src):
+            noskip.append(os.path.basename(f))
+    check("every page offers a working skip-to-content link", not noskip, noskip)
+
+    distinct = {tuple(v) for v in navs.values()}
+    check("the nav goes to the same places on every page", len(distinct) <= 1,
+          "\n          ".join(f"{n}: {v}" for n, v in sorted(navs.items()))
+          if len(distinct) > 1 else "")
+
+    # A nav that links to a page it cannot reach is worse than no nav; [2]
+    # already fetches every href, so here just pin the destinations we mean
+    # to offer, so silently dropping one from the shared markup is a failure
+    # rather than an unnoticed change.
+    if distinct:
+        hrefs = [h for h, _ in next(iter(distinct))]
+        for want in ("/", "/#how", "/#jurisdictions", "/#pricing", "/audit",
+                     "/download", "/status", "/help", "/surf", "/trial"):
+            check(f"the nav offers {want}", want in hrefs, hrefs)
+
+    # The page you are on should say so, and should not offer to take you
+    # to itself as though it were somewhere else.
+    for name, links in sorted(navs.items()):
+        src = open(os.path.join(WEB, name)).read()
+        route = "/" + name[:-len(".html")]
+        if route not in [h for h, _ in links]:
+            continue
+        m = _re.search(r'<a\s[^>]*href="' + _re.escape(route) + r'"([^>]*)>', src)
+        check(f"{name} marks itself current in the nav",
+              m is not None and 'aria-current="page"' in m.group(1),
+              "no aria-current on its own nav link")
 
     print("\n[5b] the help page describes features that exist")
     _, helpp = get("/help")

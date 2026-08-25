@@ -11,7 +11,7 @@ using, and the customer's key sat in three nodes' manifests when one was
 routing them. Every one of those is invisible to a test that only asks
 "did register return 200".
 """
-import os, shutil, sqlite3, sys, tempfile, time
+import os, shutil, sqlite3, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
@@ -21,7 +21,7 @@ def check(n, ok, d=""):
     (PASS if ok else FAIL).append(n)
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
-TMP = tempfile.mkdtemp(prefix="0trust-routing-")
+TMP = H.tempdir("0trust-routing-")
 DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 sys.path.insert(0, os.path.join(H.REPO, "api"))

@@ -37,9 +37,12 @@ client/         Go module github.com/0trust/cli (Go 1.22, dep: skip2/go-qrcode)
   internal/gui/gui.go             Browser GUI server on 127.0.0.1:51827
   internal/gui/assets/            index.html, app.css, app.js (embedded)
   internal/export/export.go       Mobile QR config export
-mobile/android/                   Complete Kotlin/Compose app (wireguard-android)
+mobile/android/                   Complete Kotlin/Compose app (wireguard-android).
+                                  gradlew + wrapper jar committed; syntax-check.sh
+                                  parses the Kotlin with no Android SDK present.
 mobile/ios/                       Skeleton — OUT OF SCOPE for v0.1 (QR-export covers iOS)
-installer/windows/                WiX v4 MSI (0trust.wxs)
+installer/windows/                WiX v4 MSI (0trust.wxs), build.ps1,
+                                  resources/make-icon.py -> the committed .ico
 installer/linux/deb/              build.sh → .deb (amd64+arm64), TESTED working
 installer/linux/appimage/         build.sh → AppImage (auto-fetches appimagetool)
 btcpay/                           BTCPay Server deploy + integration (lite path)
@@ -51,7 +54,13 @@ scripts/                          bootstrap.sh, bootstrap-node.sh, audit-verify.
                                   backup.sh, release.sh, verify-release.sh,
                                   install.sh (one-shot VPS), node-runtime.sh
                                   (sysctl/NAT/egress/resolver, shared by the
-                                   node bootstrap and the test installer)
+                                   node bootstrap and the test installer),
+                                  preflight.sh (launch gate: is the DEPLOYMENT
+                                   finished, as opposed to the code),
+                                  generate-keys.sh (the four keys, on the
+                                   operator's own machine — never the server),
+                                  check-wallet.sh (derive and eyeball the
+                                   receive addresses before taking money)
 systemd/                          api / sweep / backup / meshd .service + .timer
 proxy/                            Visitor web proxy (/surf):
                                   guards.py (the security argument),
@@ -69,7 +78,33 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 - **Contact email:** `0trustvpn@proton.me` — SINGLE inbox. All role addresses
   (security@, support@, abuse@, legal@) are optional aliases that route here.
   Every web page uses the proton.me address directly.
-- **Bitcoin xpub:** `zpub6msFuvuWJzY7eGzgLkT2omB8HqBQ5z3KkbVD43Fj2iKGTPDLxyZJphYyJAnJwkDYRYtvTnHB1zJhDC6iFrEmF7puQDD3e11d6zKtQdvP1xU`
+- **Operating entity:** `0trust INC.` Recorded in
+  `web/.well-known/security.txt`, which terms.html §9 makes the governing law
+  of the contract. Its jurisdiction is still outstanding, and that is a
+  different question from where the servers are — see docs/AUDIT.md §2.6.
+- **The Bitcoin xpub is NOT recorded here, deliberately.** It used to be. An
+  extended public key reveals the wallet's entire balance and transaction
+  history to anyone holding it, forever — you cannot rotate one without moving
+  the funds — so committing the live key to a repository puts the operator's
+  finances on display to everyone with read access. It lives in `WALLET_BTC`
+  in `/etc/0trust/api.env` on the control plane and nowhere else.
+  `install.sh --wallet <zpub>` puts it there and validates it on the way in;
+  `scripts/check-wallet.sh` derives the first addresses from whatever is
+  configured so a human can compare them against the wallet. Do that
+  comparison: a wrong key issues addresses the operator cannot spend, and
+  nothing anywhere reports an error.
+- **The wallet's IDENTITY is pinned, in `scripts/wallet.pin`** — the SHA-256 of
+  the chosen extended public key and nothing else. A digest reveals nothing
+  about the wallet and still catches the realistic mistake: a truncated or
+  wrong-account paste derives perfectly valid addresses belonging to somebody
+  else. `check-wallet.sh` exits 3 on a mismatch, and `install.sh --wallet`,
+  `scripts/preflight.sh` and `btcpay/scripts/configure.sh` all refuse on it.
+  The operator wallet chosen 2026-08-25 is
+  `sha256:ac5863cea1b0c134fab8740a50247f1a8e3e6c03c049eaaf01d42377f4bcf484`
+  (BIP84, bc1q…). Re-pin with `check-wallet.sh --pin <key>`; never paste the
+  key into a file that git tracks. **No extended key belongs anywhere in this
+  tree** — `test_audit.py` greps for one, and it has caught a real example key
+  in a copy-pasteable runbook command once already.
 - **Three mesh nodes only**, all outside Five/Nine/Fourteen Eyes:
   - `zur` = Zurich, Switzerland
   - `rey` = Reykjavik, Iceland
@@ -222,7 +257,25 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   stops meaning anything.
 - **The GUI is browser-based, not native.** `0trust gui` runs a localhost web
   server; it's the same code on all 3 desktop OSes. No system tray (v0.2 —
-  systray libs were blocked in the original build env).
+  systray libs were blocked in the original build env). A second `0trust gui`
+  finding the port taken hands the user the running instance instead of an
+  error — the Start Menu shortcut, desktop icon and autostart entry all run
+  the same command.
+- **The Android app declares no VpnService of its own.** wireguard-android's
+  `GoBackend` brings up its own, and Android resolves an app's always-on VPN
+  service by requiring exactly *one* match on the `android.net.VpnService`
+  intent filter — a second declaration silently makes Always-on VPN
+  impossible to enable. `ZeroTrustVpnService` is a plain foreground service
+  that owns the notification.
+- **The Android device keypair is generated once and persisted.** Registration
+  is idempotent on the pubkey, so a stored key means a reconnect reuses the
+  same device and mesh IP. Generating one per connect — which it did — burns
+  the account's device cap in a handful of connects and then locks the
+  customer out. The app also has a device list and a delete for the same
+  reason the CLI does.
+- **User-facing product name is `0trustvpn`; the CLI binary is `0trust`.**
+  Launcher label, Start Menu entry and ARP display name all say 0trustvpn;
+  the executable, package files and release artifacts are named 0trust.
 
 ## Build & validation commands
 
@@ -278,10 +331,18 @@ make -C client linux 2>/dev/null || (cd client && for a in amd64 arm64; do \
 ./installer/linux/deb/build.sh
 ```
 
-The Android app requires Android Studio Hedgehog+ with the NDK to build an
-APK (`./gradlew assembleDebug`). The Windows MSI requires a Windows host with
-WiX (`wix build`). Neither can be built in a headless Linux-only environment;
-the source is complete and validated as far as it can be without those toolchains.
+The Android app needs Android Studio Hedgehog+ and SDK 34 to build an APK
+(`./gradlew assembleDebug`) — no NDK: `com.wireguard.android:tunnel` ships the
+Go data plane prebuilt. The Windows MSI needs a Windows host with WiX
+(`installer/windows/build.ps1`). Neither can be built in a headless Linux-only
+environment, and Google's Maven repo is usually unreachable from one too, so:
+
+- `mobile/android/syntax-check.sh` parses every Kotlin source with the real
+  compiler front-end (downloaded from Maven Central), which catches anything
+  malformed without the SDK. It must stay green.
+- The `apps` emulation module checks what a compiler would not anyway: the
+  Kotlin `@SerialName` keys against real JSON from a live control plane, the
+  manifest invariants, and the MSI's referenced files and uninstall behaviour.
 
 ## Recurring bug classes — check these first when something's off
 
@@ -348,7 +409,8 @@ encrypted DB backup + DR runbook, abuse/DMCA runbook, legal pages
 2. Generate keys: release-signing PGP, support PGP, age backup key. Replace the
    `DEADBEEF` placeholders in web/download.html, web/security-policy.html, and
    scripts/verify-release.sh with real fingerprints.
-3. Compile signed installers on real toolchains: MSI (Windows host), APK
+3. Compile signed installers on real toolchains: MSI (Windows host —
+   `installer/windows/build.ps1 -Version X -SignWith "<cert>"`), APK
    (Android Studio), .deb/AppImage (Linux host — scripts ready).
 4. Legal review of privacy.html + terms.html; set the operating entity name.
 5. Commission a third-party audit (Cure53 / Assured AB) — the audit pack is

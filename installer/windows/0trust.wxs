@@ -1,37 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  0trust VPN — Windows MSI installer
+  0trustvpn — Windows MSI installer
 
   Built with WiX Toolset v4. To compile:
 
     dotnet tool install -g wix
-    wix build 0trust.wxs -arch x64 -d Version=0.1.0 \
-                                   -d BinaryDir=..\\..\\client\\dist \
-                                   -o 0trust-0.1.0-x64.msi
+    wix extension add -g WixToolset.UI.wixext
+    wix extension add -g WixToolset.Util.wixext
+
+    wix build 0trust.wxs -arch x64 ^
+        -d Version=0.1.0 ^
+        -d BinaryDir=..\..\client\dist ^
+        -ext WixToolset.UI.wixext ^
+        -ext WixToolset.Util.wixext ^
+        -o 0trust-0.1.0-x64.msi
+
+  Both -ext flags are required, not optional: this file uses ui:WixUI and
+  util:PermissionEx. The command in this header used to omit them and did not
+  build.
+
+  For the ARM64 build, pass the matching architecture and binary:
+
+    wix build 0trust.wxs -arch arm64 -d Version=0.1.0 ^
+        -d Arch=arm64 -d BinaryDir=..\..\client\dist ^
+        -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext ^
+        -o 0trust-0.1.0-arm64.msi
 
   Then sign:
-    signtool sign /n "Your Code Signing Cert" /tr http://timestamp.digicert.com \
+    signtool sign /n "Your Code Signing Cert" /tr http://timestamp.digicert.com ^
                   /td sha256 /fd sha256 0trust-0.1.0-x64.msi
 
   What the installer does:
     1. Installs 0trust.exe to C:\Program Files\0trust\
     2. Adds 0trust to PATH (per-machine) so users can run it from any shell
-    3. Creates Start Menu shortcut "0trust VPN" that launches the GUI
+    3. Creates Start Menu shortcut "0trustvpn" that launches the GUI
     4. Creates an Uninstall entry in Add/Remove Programs
-    5. Verifies WireGuard for Windows is installed (LaunchCondition);
-       if not, points the user at the download page
-    6. Optionally registers an auto-start entry under HKCU\...\Run
+    5. Detects WireGuard for Windows and, if it is missing, says so on the
+       installer's last page
+    6. Optionally registers an auto-start entry
+    7. On uninstall: stops the tunnel and deletes the tunnel config, which
+       holds this device's WireGuard PRIVATE KEY. Leaving that on disk after
+       someone has removed a privacy VPN is not acceptable.
 
   What it does NOT do:
     - Bundle WireGuard for Windows itself. We deliberately don't repackage
       Jason Donenfeld's installer; users get the official one from
       wireguard.com which is itself signed by ZX2C4 LLC. Our installer
-      detects its presence and surfaces a friendly error if missing.
+      detects its presence and surfaces a friendly note if missing.
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+<?ifndef Version ?><?define Version = "0.1.0" ?><?endif?>
+<?ifndef Arch ?><?define Arch = "amd64" ?><?endif?>
+<?ifndef BinaryDir ?><?define BinaryDir = "..\..\client\dist" ?><?endif?>
 
-  <Package Name="0trust VPN"
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="0trustvpn"
            Manufacturer="0trust"
            Version="$(Version)"
            UpgradeCode="6f4c8d7a-2a1b-4d92-9c7a-7a3b0e8c5e90"
@@ -39,17 +64,21 @@
            Compressed="yes"
            InstallerVersion="500">
 
-    <SummaryInformation Description="0trust VPN — privacy-first mesh VPN client" />
+    <SummaryInformation Description="0trustvpn — privacy-first mesh VPN client" />
 
     <!-- Major-upgrade behavior: replace older versions in place -->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of 0trust VPN is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of 0trustvpn is already installed." />
 
     <Media Id="1" Cabinet="0trust.cab" EmbedCab="yes" />
+
+    <!-- WireGuard for Windows needs Windows 7+; WireGuardNT wants 8.1+. -->
+    <Launch Condition="Installed OR (VersionNT &gt;= 603)"
+            Message="0trustvpn requires Windows 8.1 or later." />
 
     <!-- ===== Prerequisite check ===== -->
     <!--
       Look for WireGuard for Windows in the standard install location.
-      We don't fail outright; we WARN and continue, since the user might
+      We don't fail outright; we note it and continue, since the user might
       install WireGuard right after running our installer.
     -->
     <Property Id="WIREGUARDINSTALLED">
@@ -57,11 +86,6 @@
         <FileSearch Name="wireguard.exe" />
       </DirectorySearch>
     </Property>
-
-    <SetProperty Id="WIREGUARDMISSING" Value="1"
-                 Before="LaunchConditions"
-                 Sequence="both"
-                 Condition="NOT WIREGUARDINSTALLED" />
 
     <!-- ===== UI ===== -->
     <ui:WixUI Id="WixUI_InstallDir" />
@@ -74,12 +98,29 @@
 
     <Icon Id="0trustIcon" SourceFile="resources\0trust.ico" />
 
+    <!--
+      The WireGuard-missing notice, on the installer's final page.
+
+      This was a VBScript custom action popping a MsgBox after InstallFinalize.
+      Three things wrong with that: VBScript is deprecated on Windows and is
+      being removed from the OS, a modal dialog from InstallExecuteSequence
+      hangs any silent or unattended install, and Return="check" meant a
+      failure to show the message failed the whole installation. The exit
+      dialog's optional text does the same job with no script at all, and is
+      simply absent in a silent install.
+    -->
+    <SetProperty Id="WIXUI_EXITDIALOGOPTIONALTEXT"
+                 Sequence="ui"
+                 Before="ExecuteAction"
+                 Condition="NOT Installed AND NOT WIREGUARDINSTALLED"
+                 Value="0trustvpn is installed, but WireGuard for Windows is not. The VPN needs it for the data plane. Install it from https://www.wireguard.com/install/ and 0trustvpn will start working — nothing else to do here." />
+
     <!-- ===== Install layout ===== -->
-    <StandardDirectory Id="ProgramFiles64Folder">
+    <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="0trust">
         <Component Id="MainBinary" Guid="*">
           <File Id="0trustExe"
-                Source="$(BinaryDir)\0trust-windows-amd64.exe"
+                Source="$(BinaryDir)\0trust-windows-$(Arch).exe"
                 Name="0trust.exe"
                 KeyPath="yes" />
           <!-- Add Program Files\0trust to system PATH -->
@@ -104,38 +145,48 @@
         <Component Id="DataFolder" Guid="*" KeyPath="yes">
           <CreateFolder>
             <!-- LocalSystem owns it (the WireGuard tunnel service reads from here) -->
-            <util:PermissionEx xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
-                               User="SYSTEM"
-                               GenericAll="yes" />
-            <util:PermissionEx xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
-                               User="Administrators"
-                               GenericAll="yes" />
+            <util:PermissionEx User="SYSTEM" GenericAll="yes" />
+            <util:PermissionEx User="Administrators" GenericAll="yes" />
           </CreateFolder>
+          <!--
+            On uninstall, take the tunnel config with us. It contains the
+            device's WireGuard private key: a customer who removes a privacy
+            VPN and is left with their key sitting in ProgramData has been
+            handed a liability, not a clean uninstall.
+          -->
+          <RemoveFile Id="RemoveTunnelConfig" Name="*" On="uninstall" />
+          <RemoveFolder Id="RemoveDataDir" On="uninstall" />
         </Component>
       </Directory>
     </StandardDirectory>
 
     <!-- ===== Start Menu shortcut ===== -->
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="StartMenuFolder" Name="0trust VPN">
+      <Directory Id="StartMenuFolder" Name="0trustvpn">
         <Component Id="StartMenuShortcut" Guid="*">
           <Shortcut Id="0trustGuiShortcut"
-                    Name="0trust VPN"
-                    Description="Open the 0trust VPN client"
+                    Name="0trustvpn"
+                    Description="Open the 0trustvpn client"
                     Target="[INSTALLFOLDER]0trust.exe"
                     Arguments="gui"
                     WorkingDirectory="INSTALLFOLDER"
                     Icon="0trustIcon" />
           <Shortcut Id="0trustHelpShortcut"
                     Name="Help"
-                    Description="Open 0trust help &amp; FAQ"
+                    Description="Open 0trustvpn help &amp; FAQ"
                     Target="https://0trustvpn.com/help" />
           <Shortcut Id="0trustUninstall"
-                    Name="Uninstall 0trust VPN"
+                    Name="Uninstall 0trustvpn"
                     Target="[SystemFolder]msiexec.exe"
                     Arguments="/x [ProductCode]" />
           <RemoveFolder Id="RemoveStartMenu" On="uninstall" />
-          <RegistryValue Root="HKCU"
+          <!--
+            Per-machine package, per-machine keypath. These were HKCU, which
+            puts per-user data in a component installed to an all-users folder
+            (ICE38/ICE57) — the shortcut would be reference-counted against
+            whichever administrator happened to run setup.
+          -->
+          <RegistryValue Root="HKLM"
                          Key="Software\0trust"
                          Name="StartMenuInstalled"
                          Type="integer"
@@ -149,13 +200,13 @@
     <StandardDirectory Id="DesktopFolder">
       <Component Id="DesktopShortcut" Guid="*">
         <Shortcut Id="0trustDesktopShortcut"
-                  Name="0trust VPN"
-                  Description="Open the 0trust VPN client"
+                  Name="0trustvpn"
+                  Description="Open the 0trustvpn client"
                   Target="[INSTALLFOLDER]0trust.exe"
                   Arguments="gui"
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="0trustIcon" />
-        <RegistryValue Root="HKCU"
+        <RegistryValue Root="HKLM"
                        Key="Software\0trust"
                        Name="DesktopShortcutInstalled"
                        Type="integer"
@@ -164,19 +215,26 @@
       </Component>
     </StandardDirectory>
 
-    <!-- ===== Auto-start on user login (off by default; user enables) ===== -->
-    <!-- This is opt-in via the InstallDir page checkbox -->
+    <!-- ===== Auto-start on login (off by default; user opts in) ===== -->
+    <!--
+      HKLM, not HKCU, for the same per-machine reason as above.
+
+      Worth knowing: this only auto-starts the GUI. The tunnel itself already
+      survives a reboot without it, because `0trust connect` registers a
+      Windows service through wireguard.exe /installtunnelservice, and that
+      service starts at boot with no user logged in at all.
+    -->
     <Component Id="AutoStart" Guid="*" Directory="INSTALLFOLDER">
-      <RegistryValue Root="HKCU"
+      <RegistryValue Root="HKLM"
                      Key="Software\Microsoft\Windows\CurrentVersion\Run"
-                     Name="0trust"
+                     Name="0trustvpn"
                      Type="string"
                      Value="&quot;[INSTALLFOLDER]0trust.exe&quot; gui --no-browser"
                      KeyPath="yes" />
     </Component>
 
     <!-- ===== Features ===== -->
-    <Feature Id="Main" Title="0trust VPN" Display="expand" Level="1"
+    <Feature Id="Main" Title="0trustvpn" Display="expand" Level="1"
              AllowAdvertise="no" AllowAbsent="no">
       <ComponentRef Id="MainBinary" />
       <ComponentRef Id="LicenseFile" />
@@ -193,26 +251,29 @@
       <ComponentRef Id="AutoStart" />
     </Feature>
 
-    <!-- ===== WireGuard-missing notice ===== -->
+    <!-- ===== Stop the tunnel before we delete the binary that owns it ===== -->
     <!--
-      Shown after install completes. Doesn't block install; user can install
-      WireGuard for Windows separately and the tunnel will start working.
+      Uninstalling used to leave the WireGuardTunnel$0trust0 service running
+      with our config, so the machine kept routing all its traffic through a
+      VPN whose client had just been removed and whose subscription would
+      eventually lapse. `0trust disconnect` calls
+      wireguard.exe /uninstalltunnelservice.
+
+      Deferred and non-impersonating so it runs with the elevated token, and
+      Return="ignore" because a machine with no tunnel up is the common case
+      and must not fail the uninstall.
     -->
-    <CustomAction Id="ShowWireguardWarning"
-                  Script="vbscript"
-                  Execute="immediate"
-                  Return="check">
-      <![CDATA[
-        MsgBox "WireGuard for Windows is not installed." & vbCrLf & vbCrLf & _
-               "Download it from https://wireguard.com/install/ — 0trust will start working " & _
-               "once it's installed. (The 0trust app itself is installed correctly.)", _
-               vbInformation, "0trust VPN"
-      ]]>
-    </CustomAction>
+    <CustomAction Id="StopTunnelOnUninstall"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]0trust.exe&quot; disconnect"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
     <InstallExecuteSequence>
-      <Custom Action="ShowWireguardWarning"
-              After="InstallFinalize"
-              Condition="NOT Installed AND WIREGUARDMISSING=1" />
+      <Custom Action="StopTunnelOnUninstall"
+              Before="RemoveFiles"
+              Condition="REMOVE=&quot;ALL&quot;" />
     </InstallExecuteSequence>
 
   </Package>

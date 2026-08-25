@@ -10,7 +10,11 @@
 #   0trust-<version>-darwin-amd64
 #   0trust-<version>-darwin-arm64
 #   0trust-<version>-windows-amd64.exe
-#   SHA256SUMS                          One sha256 line per binary
+#   0trust_<version>_amd64.deb          Packages, when they have been built
+#   0trust-<version>-x86_64.AppImage
+#   0trust-<version>-x64.msi            (built on Windows; staged, see below)
+#   0trust-<version>.apk                (built in Android Studio; staged)
+#   SHA256SUMS                          One sha256 line per artifact
 #   SHA256SUMS.asc                      Detached ASCII PGP signature
 #   pubkey.asc                          The signing key, for convenience
 #   build-info.txt                      Go version, source rev, build host
@@ -26,6 +30,17 @@
 # Env:
 #   RELEASE_SIGNER_KEY   PGP key fingerprint to sign SHA256SUMS with (required)
 #   RELEASE_DIR          Output directory (default: releases/<version>)
+#   STAGING_DIR          Where artifacts built on other hosts are dropped
+#                        (default: staging/). The MSI needs a Windows box and
+#                        the APK needs Android Studio, so they cannot be built
+#                        here; copy them in and this script signs them with
+#                        everything else.
+#   ALLOW_PARTIAL=1      Cut a release without them anyway. Off by default:
+#                        download.html offered a .deb, an AppImage, an MSI and
+#                        an APK that SHA256SUMS never covered, so the page told
+#                        customers to verify four files that could not be
+#                        verified. On a product whose pitch is that you do not
+#                        have to trust us, that is the worst possible hole.
 # ============================================================================
 set -euo pipefail
 
@@ -42,6 +57,7 @@ VERSION="${1:-}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLIENT_DIR="$REPO_DIR/client"
 RELEASE_DIR="${RELEASE_DIR:-$REPO_DIR/releases/$VERSION}"
+STAGING_DIR="${STAGING_DIR:-$REPO_DIR/staging}"
 
 [[ -d "$CLIENT_DIR" ]] || die "client/ not found at $CLIENT_DIR"
 
@@ -87,13 +103,81 @@ VERSION="$VERSION" make all
 cp dist/0trust-* "$RELEASE_DIR/"
 
 # ----------------------------------------------------------------------------
+log "Collecting packages"
+# ----------------------------------------------------------------------------
+# Everything the download page offers has to end up in SHA256SUMS. The Linux
+# packages build here; the MSI and the APK need other toolchains, so they are
+# picked up from the staging directory if the operator has put them there.
+cd "$REPO_DIR"
+if command -v dpkg-deb >/dev/null 2>&1; then
+    log "  building .deb"
+    # `make all` writes versioned names for the release; the .deb script wants
+    # the unversioned installer inputs, which is what `make linux` is for.
+    ( cd "$CLIENT_DIR" && VERSION="$VERSION" make linux >/dev/null ) \
+        || die "client linux build failed"
+    VERSION="$VERSION" ./installer/linux/deb/build.sh >/dev/null \
+        || die ".deb build failed"
+else
+    log "  dpkg-deb not present — skipping the .deb build"
+fi
+# The AppImage needs appimagetool, which the build script fetches from GitHub.
+# Attempt it, but do not die: an unreachable network is not a reason to fail a
+# release, and the cross-check below will insist the artifact be staged instead.
+if [[ -x installer/linux/appimage/build.sh ]]; then
+    log "  building AppImage"
+    VERSION="$VERSION" ./installer/linux/appimage/build.sh >/dev/null 2>&1 \
+        || log "  AppImage build unavailable here — stage it instead"
+fi
+
+for f in installer/linux/deb/out/*.deb installer/linux/appimage/out/*.AppImage; do
+    [[ -e "$f" ]] || continue
+    cp "$f" "$RELEASE_DIR/" && log "  $(basename "$f")"
+done
+if [[ -d "$STAGING_DIR" ]]; then
+    for f in "$STAGING_DIR"/*; do
+        [[ -f "$f" ]] || continue
+        cp "$f" "$RELEASE_DIR/" && log "  $(basename "$f")  (staged)"
+    done
+fi
+
+# ----------------------------------------------------------------------------
+log "Cross-checking against the download page"
+# ----------------------------------------------------------------------------
+# One source of truth: whatever web/download.html links for this version is
+# what the release must contain. Otherwise the page happily offers a file that
+# was never built, never hashed and never signed.
+DOWNLOAD_PAGE="$REPO_DIR/web/download.html"
+missing=()
+if [[ -f "$DOWNLOAD_PAGE" ]]; then
+    while read -r want; do
+        [[ -n "$want" ]] || continue
+        # The manifest files are written further down, after this check.
+        case "$want" in SHA256SUMS|SHA256SUMS.asc|pubkey.asc|build-info.txt) continue ;; esac
+        [[ -e "$RELEASE_DIR/$want" ]] || missing+=("$want")
+    done < <(grep -oE "/releases/$VERSION/[A-Za-z0-9._+-]+" "$DOWNLOAD_PAGE" \
+             | sed "s|/releases/$VERSION/||" | sort -u)
+fi
+if (( ${#missing[@]} )); then
+    printf '\033[1;31m[!] the download page offers files this release does not have:\033[0m\n' >&2
+    printf '      %s\n' "${missing[@]}" >&2
+    printf '    Build them, or drop them in %s, or set ALLOW_PARTIAL=1.\n' "$STAGING_DIR" >&2
+    [[ -n "${ALLOW_PARTIAL:-}" ]] || die "refusing to sign a release the site over-promises"
+    printf '\033[1;33m[!] ALLOW_PARTIAL set — continuing without them\033[0m\n' >&2
+fi
+
+# ----------------------------------------------------------------------------
 log "Generating SHA256SUMS"
 # ----------------------------------------------------------------------------
 cd "$RELEASE_DIR"
-sha256sum 0trust-* | tee SHA256SUMS
-binary_count=$(grep -c . SHA256SUMS || echo 0)
-[[ $binary_count -ge 5 ]] || die "expected ≥5 binaries, got $binary_count"
-ok "$binary_count binaries hashed"
+# Everything except the manifest files themselves, so a package added above is
+# covered without anyone having to remember to extend a list.
+find . -maxdepth 1 -type f \
+     ! -name SHA256SUMS ! -name 'SHA256SUMS.asc' \
+     ! -name pubkey.asc ! -name build-info.txt \
+     -printf '%P\n' | sort | xargs sha256sum | tee SHA256SUMS
+artifact_count=$(grep -c . SHA256SUMS || echo 0)
+[[ $artifact_count -ge 5 ]] || die "expected ≥5 artifacts, got $artifact_count"
+ok "$artifact_count artifacts hashed"
 
 # ----------------------------------------------------------------------------
 log "Signing SHA256SUMS with $RELEASE_SIGNER_KEY"

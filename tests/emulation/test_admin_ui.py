@@ -9,7 +9,7 @@ button existed.
 
 Skips (77) without Playwright or a browser.
 """
-import functools, glob, http.server, json, os, shutil, sys, tempfile, threading
+import functools, glob, http.server, json, os, shutil, sys, threading
 import urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
@@ -26,7 +26,7 @@ def check(n, ok, d=""):
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
 PORT = H.pick_port()
-TMP = tempfile.mkdtemp(prefix="0trust-adminui-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("0trust-adminui-"); DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 os.environ["ZTV_TRIAL_SECRET"] = "adminui"
 os.environ["ZTV_TRIAL_POW_BITS"] = "10"
@@ -88,14 +88,10 @@ PASSWORD = "operations-password-2026"
 browser = None
 try:
     with sync_playwright() as pw:
-        launch = {}
-        for cand in sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")):
-            launch["executable_path"] = cand
-            break
         try:
-            browser = pw.chromium.launch(**launch)
-        except Exception as e:
-            print(f"  SKIP  chromium unavailable: {e}")
+            browser = H.launch_chromium(pw)
+        except H.SkipModule as e:
+            print(f"  SKIP  {e}")
             sys.exit(77)
 
         page = browser.new_page()

@@ -104,11 +104,21 @@ Use a password manager, generate a 32-char password, store the password
 
 This script never sees your xpub's private key; you paste only the xpub.
 
+**`BTC_XPUB` below is a placeholder, not a key.** It used to be a real
+extended public key copied from BTCPay's own documentation, which is a
+command somebody eventually pastes whole: every customer payment then
+settles into a stranger's wallet, and nothing anywhere reports an error.
+Put your own account zpub in, and confirm it before you take money:
+
+```bash
+./scripts/check-wallet.sh zpub...    # compare address 0 with your wallet
+```
+
 ```bash
 sudo BTCPAY_HOST=pay.0trustvpn.com \
      BTCPAY_ADMIN_EMAIL=0trustvpn@proton.me \
      BTCPAY_ADMIN_PASSWORD='paste-from-password-manager' \
-     BTC_XPUB='zpub6jftahH18ngZxLmXaKw3GSZzZsszmt9WqedkyZdezFtWRFBZqsQH5hyUmb4pCEeZGmVfQuP5bedXTB8is6fTv19U1GQRyQUKQGUTzyHACMF' \
+     BTC_XPUB='PASTE-YOUR-OWN-ACCOUNT-ZPUB-HERE' \
      CONTROL_HOST=0trustvpn.com \
      ./btcpay/scripts/configure.sh
 ```

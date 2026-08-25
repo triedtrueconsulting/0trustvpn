@@ -9,7 +9,7 @@ free signup, and no server-side test would notice.
 
 Skips (exit 77) if Playwright or a browser is unavailable.
 """
-import functools, glob, http.server, os, shutil, sys, tempfile, threading
+import functools, glob, http.server, os, shutil, sys, threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -25,7 +25,7 @@ def check(n, ok, d=""):
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
 WEB_PORT = H.pick_port()
-TMP = tempfile.mkdtemp(prefix="0trust-funnel-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("0trust-funnel-"); DB = os.path.join(TMP, "0trust.db")
 os.environ["ZTV_DB_PATH"] = DB
 os.environ["ZTV_TRIAL_SECRET"] = "funnel-secret"
 os.environ["ZTV_TRIAL_POW_BITS"] = "14"
@@ -79,14 +79,10 @@ try:
         # PLAYWRIGHT_BROWSERS_PATH holds a pinned build that may not match the
         # installed playwright package's expected revision, so find the real
         # binary and point at it rather than triggering a download.
-        launch = {}
-        for cand in sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")):
-            launch["executable_path"] = cand
-            break
         try:
-            browser = pw.chromium.launch(**launch)
-        except Exception as e:
-            print(f"  SKIP  chromium unavailable: {e}")
+            browser = H.launch_chromium(pw)
+        except H.SkipModule as e:
+            print(f"  SKIP  {e}")
             sys.exit(77)
         page = browser.new_page()
         errors = []

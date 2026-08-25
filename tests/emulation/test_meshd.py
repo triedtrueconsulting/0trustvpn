@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Run the REAL meshd against the live control plane with stubbed wg/nft/ip."""
-import os, shutil, signal, sqlite3, subprocess, sys, tempfile, time
+import os, shutil, signal, sqlite3, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -19,7 +19,7 @@ def wait_for(pred, timeout=25, interval=0.4):
     return False
 
 EMU = os.path.dirname(os.path.abspath(__file__))
-TMP = tempfile.mkdtemp(prefix="0trust-meshd-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("0trust-meshd-"); DB = os.path.join(TMP, "0trust.db")
 sys.path.insert(0, os.path.join(H.REPO, "api"))
 os.environ["ZTV_DB_PATH"] = DB
 import main as api_main; api_main.init_db()

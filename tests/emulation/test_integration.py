@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Probe 3: GUI polling pressure, pubkey escaping, rate-limit shape."""
-import base64, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.request
+import base64, json, os, re, shutil, subprocess, sys, time, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -10,7 +10,7 @@ def check(n, ok, d=""):
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
 
 EMU = os.path.dirname(os.path.abspath(__file__))
-TMP = tempfile.mkdtemp(prefix="0trust-p3-"); DB = os.path.join(TMP, "0trust.db")
+TMP = H.tempdir("0trust-p3-"); DB = os.path.join(TMP, "0trust.db")
 HOME = os.path.join(TMP, "home"); os.makedirs(HOME)
 BIN = os.path.join(TMP, "0trust")
 sys.path.insert(0, os.path.join(H.REPO, "api"))

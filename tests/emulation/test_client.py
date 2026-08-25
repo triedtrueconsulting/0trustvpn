@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Drive the REAL compiled 0trust binary against the live stack."""
-import json, os, shutil, subprocess, sys, tempfile
+import json, os, shutil, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -22,7 +22,7 @@ ROOT = os.geteuid() == 0
 NEEDS_ROOT = "needs root; the client refuses to touch netlink without it"
 
 EMU  = os.path.dirname(os.path.abspath(__file__))
-TMP  = tempfile.mkdtemp(prefix="0trust-cli-")
+TMP  = H.tempdir("0trust-cli-")
 DB   = os.path.join(TMP, "0trust.db")
 HOME = os.path.join(TMP, "home"); os.makedirs(HOME)
 BIN  = os.path.join(TMP, "0trust")

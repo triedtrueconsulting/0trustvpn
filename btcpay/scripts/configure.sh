@@ -130,6 +130,22 @@ case "$prefix" in
     *)          die "Unrecognized xpub prefix '$prefix' (expected xpub/ypub/zpub)" ;;
 esac
 
+# The wallet this deployment is meant to pay into is recorded by digest in
+# scripts/wallet.pin. Check it here too: BTCPay will happily accept any valid
+# derivation scheme, issue addresses from it forever, and mark invoices paid —
+# into somebody else's wallet, with nothing to notice.
+CHECK_WALLET="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check-wallet.sh"
+if [[ -x "$CHECK_WALLET" ]]; then
+    rc=0; "$CHECK_WALLET" --count 1 "$BTC_XPUB" >/dev/null 2>&1 || rc=$?
+    if [[ $rc -eq 3 && -z "${ALLOW_UNPINNED_WALLET:-}" ]]; then
+        die "BTC_XPUB is not the wallet pinned in scripts/wallet.pin.
+    Run ./scripts/check-wallet.sh '$prefix…' to see both digests. If this
+    wallet is deliberate, re-pin it (--pin) or set ALLOW_UNPINNED_WALLET=1."
+    fi
+else
+    warn "scripts/check-wallet.sh not found — BTC_XPUB unverified"
+fi
+
 api PUT "/api/v1/stores/$STORE_ID/payment-methods/BTC-CHAIN" "$(jq -nc \
     --arg deriv "$DERIVATION" \
     '{

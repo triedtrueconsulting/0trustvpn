@@ -9,7 +9,7 @@ tests, so this is where its wiring gets proven.
 
 Skips (77) without Playwright or a browser.
 """
-import glob, os, re, shutil, signal, socket, subprocess, sys, tempfile, time
+import glob, os, re, shutil, signal, socket, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -26,7 +26,7 @@ def check(n, ok, d=""):
 
 GUI_PORT = 51827
 EMU = os.path.dirname(os.path.abspath(__file__))
-TMP = tempfile.mkdtemp(prefix="0trust-gui-")
+TMP = H.tempdir("0trust-gui-")
 DB = os.path.join(TMP, "0trust.db")
 HOME = os.path.join(TMP, "home"); os.makedirs(HOME)
 BIN = os.path.join(TMP, "0trust")
@@ -64,6 +64,18 @@ def wait_port(port, timeout=25):
     return False
 
 
+# The GUI's listen address is fixed, so this module cannot pick a free port
+# the way the rest of the suite does. Say so plainly when something already
+# holds it: `0trust gui` now hands a second launch the running instance rather
+# than erroring, which is right for a user double-clicking the Start Menu
+# shortcut and wrong for a test — it would silently drive somebody else's GUI.
+with socket.socket() as _probe:
+    if _probe.connect_ex(("127.0.0.1", GUI_PORT)) == 0:
+        raise SystemExit(
+            f"port {GUI_PORT} is already in use — a stale `0trust gui` from an "
+            "earlier run, most likely. Kill it and re-run:\n"
+            f"    pkill -f '0trust gui'")
+
 gui = subprocess.Popen([BIN, "gui", "--no-browser"], env=GUI_ENV,
                        stdout=open(f"{TMP}/gui.log", "w"), stderr=subprocess.STDOUT)
 browser = None
@@ -72,14 +84,10 @@ try:
         print(open(f"{TMP}/gui.log").read()); raise SystemExit("gui did not start")
 
     with sync_playwright() as pw:
-        launch = {}
-        for cand in sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")):
-            launch["executable_path"] = cand
-            break
         try:
-            browser = pw.chromium.launch(**launch)
-        except Exception as e:
-            print(f"  SKIP  chromium unavailable: {e}")
+            browser = H.launch_chromium(pw)
+        except H.SkipModule as e:
+            print(f"  SKIP  {e}")
             sys.exit(77)
 
         page = browser.new_page()
@@ -260,6 +268,22 @@ try:
                 "() => document.getElementById('status-text').textContent.trim() === 'Disconnected'",
                 timeout=25000)
             check("tunnel shows disconnected after removing self", True)
+
+        print("\n[6] a second launch hands over the running instance")
+        # The Start Menu shortcut, the desktop icon and the Windows autostart
+        # entry all run the same `0trust gui`. A user who clicks one while it
+        # is already running used to get a listen(): address already in use.
+        second = subprocess.run([BIN, "gui", "--no-browser"], env=GUI_ENV,
+                                capture_output=True, text=True, timeout=30)
+        check("the second `0trust gui` exits cleanly", second.returncode == 0,
+              (second.stdout + second.stderr)[-300:])
+        check("and says the GUI is already running",
+              "already running" in second.stdout, second.stdout[-200:])
+        check("without taking the port from the first",
+              wait_port(GUI_PORT, timeout=5))
+        page.reload()
+        page.wait_for_selector("#view-main:not(.hidden)", timeout=20000)
+        check("the original instance is still serving", True)
 
         check("no JS errors across the whole session", not errors, errors)
 finally:

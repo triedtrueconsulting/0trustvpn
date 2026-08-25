@@ -7,7 +7,7 @@ the guard exists precisely to block loopback, so exercising the fetch path
 means carving out the one host we control. Every other guard stays live, and
 test_proxy_guards covers the blocking behaviour with the patch off.
 """
-import os, shutil, socket, subprocess, sys, tempfile, threading, time, urllib.request
+import os, shutil, socket, subprocess, sys, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -78,7 +78,7 @@ def wait_port(port, timeout=20):
     return False
 
 
-TMP = tempfile.mkdtemp(prefix="0trust-proxy-")
+TMP = H.tempdir("0trust-proxy-")
 srv = ThreadingHTTPServer(("127.0.0.1", ORIGIN_PORT), Origin)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 

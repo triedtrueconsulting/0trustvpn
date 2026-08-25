@@ -1,0 +1,55 @@
+# 0trustvpn — security contact
+#
+# RFC 9116. Seven pages point here: security-policy.html for the disclosure
+# process, download.html and scripts/verify-release.sh for the release
+# fingerprint, terms.html §9 for the operating entity, privacy.html and
+# help.html for the support key. Until this file exists and is correct, every
+# one of those is a broken promise.
+#
+# BEFORE LAUNCH, replace both DEADBEEF fingerprints and the entity line, then
+# sign this file:
+#
+#   gpg --clearsign --local-user <security-key> web/.well-known/security.txt
+#   mv web/.well-known/security.txt.asc web/.well-known/security.txt
+#
+# scripts/preflight.sh refuses to call the deployment ready while the
+# placeholders are here or Expires has passed.
+
+Contact: mailto:0trustvpn@proton.me
+Contact: https://0trustvpn.com/security-policy
+
+# RFC 9116 requires this and requires it to be in the future. A security.txt
+# whose Expires has passed is invalid, and researchers' tooling will say so.
+# Re-issue at least annually; the canary cadence is a good place to hang it.
+Expires: 2027-01-01T00:00:00.000Z
+
+Preferred-Languages: en
+Canonical: https://0trustvpn.com/.well-known/security.txt
+Policy: https://0trustvpn.com/security-policy
+
+# Support / disclosure key, discoverable by WKD:
+#   gpg --locate-keys 0trustvpn@proton.me
+Encryption: https://0trustvpn.com/.well-known/openpgpkey/hu/
+Encryption: https://0trustvpn.com/pubkey.asc
+
+# --- Fingerprints ---------------------------------------------------------
+# Release signing key (verifies SHA256SUMS.asc on every download):
+#   DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+# Warrant canary signing key:
+#   DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF DEADBEEF
+
+# --- Operating entity -----------------------------------------------------
+# terms.html §9 says the governing law is that of the jurisdiction where the
+# operating entity is established, and points here for the name.
+#
+#   Entity: 0trust INC.
+#   Jurisdiction: TO BE CONFIRMED
+#
+# The jurisdiction line still needs the country and, if incorporated in the
+# United States, the state. It is not a formality: terms.html §9 makes it the
+# governing law of the contract, and it is a different question from where the
+# servers are. See docs/AUDIT.md §2.6.
+
+# We do not run a paid bug bounty. We do credit reporters who ask to be
+# credited, and we will not pursue anyone who reports in good faith within
+# the scope set out in the policy above.

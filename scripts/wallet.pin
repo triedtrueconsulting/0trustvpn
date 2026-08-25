@@ -1,0 +1,27 @@
+# ============================================================================
+# 0trust receiving wallet — identity pin
+# ============================================================================
+# The SHA-256 of the extended PUBLIC key that receives customer payments.
+#
+# The key itself is not here, and must never be. An xpub exposes the wallet's
+# entire balance and transaction history to anyone holding it, permanently,
+# and it cannot be rotated without moving the funds — so it lives in
+# WALLET_BTC in /etc/0trust/api.env on the control plane and nowhere else.
+#
+# A digest gives up none of that and still catches the failure this project
+# treats as its worst: a truncated, mistyped or wrong-account key derives
+# perfectly valid addresses belonging to somebody else. Invoices never settle,
+# customers pay into a wallet the operator cannot spend from, and every health
+# check stays green the whole time. There is no error to notice.
+#
+# So scripts/check-wallet.sh compares whatever key it is handed against this
+# line, and scripts/install.sh and scripts/preflight.sh both refuse a key that
+# is not the one recorded here.
+#
+# Recorded 2026-08-25: a BIP84 account zpub (native segwit, bc1q… addresses).
+#
+# Running this deployment against a different wallet:
+#     ./scripts/check-wallet.sh --pin <your-zpub>    # rewrites the line below
+# Deleting the line disables the comparison entirely.
+#
+sha256:ac5863cea1b0c134fab8740a50247f1a8e3e6c03c049eaaf01d42377f4bcf484

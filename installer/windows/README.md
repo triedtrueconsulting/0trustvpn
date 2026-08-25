@@ -1,4 +1,4 @@
-# 0trust VPN — Windows installer
+# 0trustvpn — Windows installer
 
 Build a signed MSI installer for the 0trust client. End users get a normal
 Windows installer experience: double-click MSI, click through, app appears
@@ -9,8 +9,9 @@ installer/windows/
 ├── 0trust.wxs          WiX v4 source
 ├── License.rtf         Shown by the installer
 ├── resources/
-│   ├── 0trust.ico      App icon (you provide; see resources/README.txt)
-│   └── README.txt      Icon generation notes
+│   ├── 0trust.ico      App icon (generated + committed)
+│   ├── make-icon.py    Regenerates it; stdlib only
+│   └── README.txt      Icon notes
 └── README.md           (this file)
 ```
 
@@ -35,17 +36,16 @@ winget install Microsoft.WindowsSDK.10
 ## Build
 
 ```powershell
-cd installer\windows
-
-# Make sure the icon is in place
-ls resources\0trust.ico    # if missing, see resources\README.txt
+# One-time: the two WiX extensions this installer uses
+wix extension add -g WixToolset.UI.wixext
+wix extension add -g WixToolset.Util.wixext
 
 # Cross-compile the Go client for Windows from your repo root
-cd ..\..\client
-make windows               # produces dist\0trust-windows-amd64.exe
+cd client
+make windows               # dist\0trust-windows-amd64.exe + -arm64.exe
 cd ..\installer\windows
 
-# Build the MSI
+# x64
 wix build 0trust.wxs `
     -arch x64 `
     -d Version=0.1.0 `
@@ -53,7 +53,19 @@ wix build 0trust.wxs `
     -ext WixToolset.UI.wixext `
     -ext WixToolset.Util.wixext `
     -o 0trust-0.1.0-x64.msi
+
+# ARM64 — same source, different -arch and -d Arch
+wix build 0trust.wxs `
+    -arch arm64 `
+    -d Version=0.1.0 -d Arch=arm64 `
+    -d BinaryDir=..\..\client\dist `
+    -ext WixToolset.UI.wixext `
+    -ext WixToolset.Util.wixext `
+    -o 0trust-0.1.0-arm64.msi
 ```
+
+The icon is already committed; `resources/make-icon.py` regenerates it if the
+mark changes.
 
 The output `0trust-0.1.0-x64.msi` (~6-7 MB) is now installable. It's
 unsigned at this point — Windows SmartScreen will throw a warning on first
@@ -122,14 +134,20 @@ Customers verify with the same `verify-release.sh` script as the other binaries.
 
 1. Installs `0trust.exe` to `C:\Program Files\0trust\`
 2. Adds `C:\Program Files\0trust` to system PATH (so `0trust` works in any shell)
-3. Creates Start Menu shortcut "0trust VPN" that launches `0trust.exe gui`
+3. Creates Start Menu shortcut "0trustvpn" that launches `0trust.exe gui`
 4. Creates the data directory `C:\ProgramData\0trust\` where tunnel configs live
 5. Optional: desktop shortcut (checkbox during install)
 6. Optional: auto-start on Windows login (checkbox during install)
-7. Detects WireGuard for Windows — if missing, shows a friendly post-install
-   message pointing the user at `https://wireguard.com/install/`. Does NOT
-   block the install since the user might install WireGuard afterward.
-8. Registers an Uninstall entry that fully reverses all of the above.
+7. Detects WireGuard for Windows — if missing, says so on the installer's
+   final page, pointing the user at `https://wireguard.com/install/`. Does NOT
+   block the install since the user might install WireGuard afterward, and
+   says nothing at all during a silent install.
+8. Registers an Uninstall entry that fully reverses all of the above. On
+   uninstall it also runs `0trust disconnect` (which removes the
+   `WireGuardTunnel$0trust0` service) and deletes `C:\ProgramData\0trust\`.
+   That directory holds the tunnel config, and the config holds this device's
+   WireGuard **private key** — leaving it behind after someone removes a
+   privacy VPN is not a clean uninstall.
 
 ## What it deliberately does NOT do
 
@@ -146,37 +164,14 @@ Customers verify with the same `verify-release.sh` script as the other binaries.
 
 ## Build automation
 
-The above commands are repetitive across releases. A `build.ps1`:
+`build.ps1` does everything above:
 
 ```powershell
-param([Parameter(Mandatory=$true)][string]$Version)
-
-$ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot
-
-Write-Host "[+] Building 0trust client for Windows" -ForegroundColor Yellow
-Push-Location ..\..\client
-& make windows
-Pop-Location
-
-Write-Host "[+] Signing 0trust.exe" -ForegroundColor Yellow
-signtool sign /n "0trust" /tr http://timestamp.digicert.com `
-              /td sha256 /fd sha256 `
-              ..\..\client\dist\0trust-windows-amd64.exe
-
-Write-Host "[+] Building MSI" -ForegroundColor Yellow
-wix build 0trust.wxs -arch x64 -d Version=$Version `
-                                 -d BinaryDir=..\..\client\dist `
-                                 -ext WixToolset.UI.wixext `
-                                 -ext WixToolset.Util.wixext `
-                                 -o "0trust-$Version-x64.msi"
-
-Write-Host "[+] Signing MSI" -ForegroundColor Yellow
-signtool sign /n "0trust" /tr http://timestamp.digicert.com `
-              /td sha256 /fd sha256 `
-              "0trust-$Version-x64.msi"
-
-Write-Host "[✓] $PSScriptRoot\0trust-$Version-x64.msi" -ForegroundColor Green
+.\build.ps1 -Version 0.1.0                                   # x64, unsigned
+.\build.ps1 -Version 0.1.0 -Arch x64,arm64 -SignWith "0trust"
 ```
 
-Drop that in `installer/windows/build.ps1` and call as `.\build.ps1 -Version 0.1.0`.
+It checks the toolchain is present, adds the two WiX extensions, cross-compiles
+the client for each architecture, signs the exe and the MSI when `-SignWith` is
+given, verifies the resulting signature, and says loudly when it produced
+unsigned output.

@@ -31,37 +31,7 @@ def eq(name, got, want):
     check(name, got == want, f"got  {got}\n          want {want}")
 
 
-def account_zpub_from_mnemonic(mnemonic: str) -> str:
-    """
-    m/84'/0'/0' as a zpub, derived from a BIP39 mnemonic.
-
-    Private derivation, deliberately confined to the test: the product only
-    ever holds a public key, and adding private-key code to it would create a
-    thing worth stealing where none exists today.
-    """
-    seed = hashlib.pbkdf2_hmac("sha512", mnemonic.encode(), b"mnemonic", 2048)
-    I = hmac.new(b"Bitcoin seed", seed, hashlib.sha512).digest()
-    k, c = int.from_bytes(I[:32], "big"), I[32:]
-
-    def ckd_priv(k, c, index):
-        if index >= 0x80000000:
-            data = b"\x00" + k.to_bytes(32, "big") + index.to_bytes(4, "big")
-        else:
-            data = cw._serialize(cw._point_mul(k)) + index.to_bytes(4, "big")
-        I = hmac.new(c, data, hashlib.sha512).digest()
-        return (int.from_bytes(I[:32], "big") + k) % cw.N, I[32:]
-
-    H_ = 0x80000000
-    for idx in (84 + H_, 0 + H_, 0 + H_):
-        k, c = ckd_priv(k, c, idx)
-    body = ((0x04B24746).to_bytes(4, "big") + bytes([3]) + b"\x00\x00\x00\x00"
-            + (0 + H_).to_bytes(4, "big") + c + cw._serialize(cw._point_mul(k)))
-    chk = hashlib.sha256(hashlib.sha256(body).digest()).digest()[:4]
-    num, out = int.from_bytes(body + chk, "big"), ""
-    while num:
-        num, r = divmod(num, 58)
-        out = cw._B58[r] + out
-    return out
+account_zpub_from_mnemonic = H.account_zpub_from_mnemonic
 
 
 try:

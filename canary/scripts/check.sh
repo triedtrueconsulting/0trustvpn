@@ -27,8 +27,31 @@ if [[ ! -f "$CANARY_PATH" ]]; then
 fi
 
 now=$(date +%s)
-mtime=$(stat -c %Y "$CANARY_PATH" 2>/dev/null || stat -f %m "$CANARY_PATH")
-age=$(( now - mtime ))
+
+# Age the canary by what it SAYS, not by the file's mtime.
+#
+# mtime is the wrong question: rsyncing the site, reinstalling the host or
+# restoring a backup all touch the file without re-signing it, and the check
+# would then go quiet about a canary whose content is months stale. The issue
+# date is the only thing that means anything here, and it is inside the
+# document the operator signed.
+issued=$(grep -m1 -E '^Issued at:' "$CANARY_PATH" | sed 's/^Issued at:[[:space:]]*//')
+issued_epoch=""
+if [[ -n "$issued" ]]; then
+    issued_epoch=$(date -u -d "$issued" +%s 2>/dev/null \
+                   || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$issued" +%s 2>/dev/null \
+                   || true)
+fi
+
+if [[ -n "$issued_epoch" ]]; then
+    age=$(( now - issued_epoch ))
+else
+    # An unparseable date is itself worth saying out loud — silently falling
+    # back would hide a mangled canary behind a fresh mtime.
+    echo "WARNING: could not read 'Issued at:' from $CANARY_PATH — falling back to mtime" >&2
+    mtime=$(stat -c %Y "$CANARY_PATH" 2>/dev/null || stat -f %m "$CANARY_PATH")
+    age=$(( now - mtime ))
+fi
 
 if (( age > ALERT_MAX_AGE )); then
     age_days=$(( age / 86400 ))

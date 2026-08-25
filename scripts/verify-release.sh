@@ -60,19 +60,40 @@ cd "$RELEASE_DIR"
 # ----------------------------------------------------------------------------
 command -v gpg >/dev/null || fail "gpg not installed.  Install with: apt-get install -y gnupg"
 
-# If pubkey.asc is alongside, offer to import it (with a confirmation prompt)
-if [[ -f pubkey.asc ]] && ! gpg --list-keys "$EXPECTED_KEY" >/dev/null 2>&1; then
-    warn "Signing key not in your keyring."
-    warn "pubkey.asc is here — fingerprint:"
-    gpg --with-fingerprint --show-keys pubkey.asc 2>&1 | grep -E "(uid|fingerprint|sub)"
-    echo ""
-    warn "Before importing, verify this fingerprint matches the one published at:"
-    warn "  https://0trustvpn.com/.well-known/security.txt"
-    warn "  (and ideally one out-of-band source — Twitter, Mastodon, etc.)"
-    echo ""
-    read -p "Import this key? [y/N] " ans
-    [[ "$ans" =~ ^[Yy]$ ]] || fail "aborted — import the key manually then re-run"
-    gpg --import pubkey.asc
+# Can we check the signature at all, or is the signing key simply absent?
+#
+# This used to ask `gpg --list-keys "$EXPECTED_KEY"`, which is a different
+# question: EXPECTED_KEY is a DEADBEEF placeholder until the operator pins a
+# real fingerprint, so the answer was always "no" and the script always stopped
+# to prompt — including when the key WAS in the keyring and verification would
+# have succeeded. Piped or run from a script, `read` got EOF and it failed
+# outright. Ask whether the signature verifies instead.
+if ! gpg --verify SHA256SUMS.asc SHA256SUMS >/dev/null 2>&1; then
+    if [[ -f pubkey.asc ]]; then
+        warn "Signing key not in your keyring."
+        warn "pubkey.asc is here — fingerprint:"
+        gpg --with-fingerprint --show-keys pubkey.asc 2>&1 | grep -E "(uid|fingerprint|sub)"
+        echo ""
+        warn "Before importing, verify this fingerprint matches the one published at:"
+        warn "  https://0trustvpn.com/.well-known/security.txt"
+        warn "  (and ideally one out-of-band source — Twitter, Mastodon, etc.)"
+        echo ""
+        # Importing a key is a trust decision and it is the customer's to make.
+        # With no terminal there is nobody to make it, so say what to run rather
+        # than reading EOF and calling that a "no".
+        if [[ "${ASSUME_YES:-}" == "1" ]]; then
+            warn "ASSUME_YES=1 — importing without asking"
+            gpg --import pubkey.asc
+        elif [[ -t 0 ]]; then
+            read -r -p "Import this key? [y/N] " ans
+            [[ "$ans" =~ ^[Yy]$ ]] || fail "aborted — import the key manually then re-run"
+            gpg --import pubkey.asc
+        else
+            fail "no terminal to confirm the import on. Check the fingerprint above, then:
+    gpg --import pubkey.asc && $0 ${*:-}
+  or re-run with ASSUME_YES=1 if you have already verified it."
+        fi
+    fi
 fi
 
 # Now verify
