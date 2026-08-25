@@ -93,6 +93,16 @@ printf '  %sprovider: %s%s\n' "$DIM" "$provider" "$NC"
 
 case "$provider" in
   watch)
+    # Which wallet this deployment is supposed to be paying into is a decision,
+    # and it is recorded by digest so the key itself never enters the
+    # repository. Without it every later check can only say "this derives
+    # addresses", not "this derives YOUR addresses".
+    gate wallet-pinned "a receiving wallet is recorded by digest" \
+         "./scripts/check-wallet.sh --pin <your-zpub>, then commit scripts/wallet.pin" <<EOF
+$(grep -qE '^sha256:[0-9a-f]{64}$' scripts/wallet.pin 2>/dev/null && echo ok \
+  || echo "scripts/wallet.pin records no wallet — a mistyped key would go unnoticed")
+EOF
+
     gate wallet-xpub "WALLET_BTC derives real receive addresses" \
          "put your own account xpub/zpub in $ENVFILE — never a private key — then confirm the first address with scripts/check-wallet.sh" <<EOF
 $(w="$(grep -hoP '^WALLET_BTC=\K.*' "$ENVFILE" 2>/dev/null | tail -1)"
@@ -101,8 +111,15 @@ $(w="$(grep -hoP '^WALLET_BTC=\K.*' "$ENVFILE" 2>/dev/null | tail -1)"
   # Derive from it rather than checking the prefix: a typo'"'"'d key still starts
   # with zpub, and the failure it causes has no symptom — invoices simply
   # never settle while every health check stays green.
-  elif ./scripts/check-wallet.sh --count 1 "$w" >/dev/null 2>&1; then echo ok
-  else echo "WALLET_BTC does not derive — run scripts/check-wallet.sh to see why"; fi)
+  else
+    rc=0; ./scripts/check-wallet.sh --count 1 "$w" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      0) if [[ "$w" == [xyz]pub* ]]; then echo ok
+         else echo warn; fi ;;   # a bare address works, but is reused for everyone
+      3) echo "WALLET_BTC is not the wallet pinned in scripts/wallet.pin — a truncated or wrong-account paste looks exactly like this" ;;
+      *) echo "WALLET_BTC does not derive — run scripts/check-wallet.sh to see why" ;;
+    esac
+  fi)
 EOF
     ;;
   btcpay)

@@ -49,10 +49,17 @@ validate_wallet() {
         echo "  and treat that key as compromised." >&2
         exit 1
     fi
-    "$REPO_DIR/scripts/check-wallet.sh" "$key" || {
-        echo "  --wallet did not validate; refusing to install with it." >&2
-        exit 1
-    }
+    local rc=0
+    "$REPO_DIR/scripts/check-wallet.sh" "$key" || rc=$?
+    case "$rc" in
+        0) ;;
+        3)  echo "  --wallet is not the wallet this deployment is pinned to" >&2
+            echo "  (scripts/wallet.pin). Refusing: the likeliest cause is a" >&2
+            echo "  truncated or mistyped paste, and it has no other symptom." >&2
+            exit 1 ;;
+        *)  echo "  --wallet did not validate; refusing to install with it." >&2
+            exit 1 ;;
+    esac
 }
 
 while [[ $# -gt 0 ]]; do

@@ -93,6 +93,18 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   configured so a human can compare them against the wallet. Do that
   comparison: a wrong key issues addresses the operator cannot spend, and
   nothing anywhere reports an error.
+- **The wallet's IDENTITY is pinned, in `scripts/wallet.pin`** — the SHA-256 of
+  the chosen extended public key and nothing else. A digest reveals nothing
+  about the wallet and still catches the realistic mistake: a truncated or
+  wrong-account paste derives perfectly valid addresses belonging to somebody
+  else. `check-wallet.sh` exits 3 on a mismatch, and `install.sh --wallet`,
+  `scripts/preflight.sh` and `btcpay/scripts/configure.sh` all refuse on it.
+  The operator wallet chosen 2026-08-25 is
+  `sha256:ac5863cea1b0c134fab8740a50247f1a8e3e6c03c049eaaf01d42377f4bcf484`
+  (BIP84, bc1q…). Re-pin with `check-wallet.sh --pin <key>`; never paste the
+  key into a file that git tracks. **No extended key belongs anywhere in this
+  tree** — `test_audit.py` greps for one, and it has caught a real example key
+  in a copy-pasteable runbook command once already.
 - **Three mesh nodes only**, all outside Five/Nine/Fourteen Eyes:
   - `zur` = Zurich, Switzerland
   - `rey` = Reykjavik, Iceland

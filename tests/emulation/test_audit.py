@@ -146,10 +146,11 @@ check("check-wallet.sh is executable", os.access(WAL, os.X_OK))
 # harness owns that derivation so both modules share one definition.
 SPEC_ZPUB = H.account_zpub_from_mnemonic(" ".join(["abandon"] * 11 + ["about"]))
 SPEC_FIRST = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
-r = subprocess.run([WAL, SPEC_ZPUB], capture_output=True, text=True, timeout=120,
-                   cwd=H.REPO)
+r = subprocess.run([WAL, "--no-pin", SPEC_ZPUB], capture_output=True, text=True,
+                   timeout=120, cwd=H.REPO)
 check("it derives the BIP84 spec's own first address", SPEC_FIRST in r.stdout,
       f"expected {SPEC_FIRST}\n          {r.stdout[-300:]}{r.stderr[-200:]}")
+check("and exits clean on a good key", r.returncode == 0, r.stderr[-200:])
 
 r = subprocess.run([WAL, SPEC_ZPUB.replace("zpub", "zprv", 1)],
                    capture_output=True, text=True, timeout=120, cwd=H.REPO)
@@ -161,6 +162,73 @@ check("it refuses an extended PRIVATE key", r.returncode != 0
 r = subprocess.run([WAL, "zpubTYPO"], capture_output=True, text=True,
                    timeout=120, cwd=H.REPO)
 check("it refuses a key that does not parse", r.returncode != 0, r.stdout[-200:])
+
+# A bare address is a real configuration — payments.WatchOnlyProvider reuses
+# it — so it must not read as a broken key, or preflight blocks a launch that
+# is merely using the worse option.
+r = subprocess.run([WAL, "--no-pin", SPEC_FIRST], capture_output=True,
+                   text=True, timeout=120, cwd=H.REPO)
+check("it accepts a bare address as the reuse configuration",
+      r.returncode == 0 and SPEC_FIRST in r.stdout, r.stdout[-200:] + r.stderr[-200:])
+check("and says it is reused for every customer", "reused" in r.stdout,
+      "two customers owing the same amount become impossible to tell apart")
+
+print("\n[6b] the wallet pin catches the paste this project fears most")
+# The whole point: the key never enters the repository, but its identity does,
+# so a truncated or wrong-account paste is caught before a customer pays into
+# a wallet the operator cannot spend from.
+PIN = os.path.join(H.REPO, "scripts", "wallet.pin")
+pin_src = open(PIN).read() if os.path.exists(PIN) else ""
+check("scripts/wallet.pin exists", bool(pin_src))
+pinned = re.search(r'^sha256:([0-9a-f]{64})$', pin_src, re.M)
+check("it records a wallet by digest", pinned is not None,
+      "without a pin, check-wallet can only say the key derives SOMETHING")
+check("and the key itself is nowhere in it",
+      not re.search(r'\b[xyz]pub[1-9A-HJ-NP-Za-km-z]{50,}', pin_src),
+      "an xpub in the repo hands the operator's entire balance and payment "
+      "history to everyone with read access, permanently and unrotatably")
+
+# Nothing anywhere in the tree may carry the extended key.
+r = subprocess.run(["git", "grep", "-nIE", r'\b[xyz]pub[1-9A-HJ-NP-Za-km-z]{60,}',
+                    "--", ".", ":!tests/", ":!api/test_chainwatch.py"],
+                   capture_output=True, text=True, timeout=120, cwd=H.REPO)
+check("no extended key is committed anywhere outside the tests",
+      r.returncode != 0, r.stdout[:400])
+
+tmp = H.tempdir("0trust-pin-")
+mine = os.path.join(tmp, "w.pin")
+r = subprocess.run([WAL, "--pin-file", mine, "--pin", SPEC_ZPUB],
+                   capture_output=True, text=True, timeout=120, cwd=H.REPO)
+check("--pin records a wallet for a different operator", r.returncode == 0
+      and re.search(r'^sha256:[0-9a-f]{64}$', open(mine).read(), re.M) is not None,
+      r.stdout[-200:] + r.stderr[-200:])
+check("and records the digest, never the key",
+      SPEC_ZPUB not in open(mine).read(), "the pin file must be commitable")
+
+r = subprocess.run([WAL, "--pin-file", mine, SPEC_ZPUB], capture_output=True,
+                   text=True, timeout=120, cwd=H.REPO)
+check("the pinned key passes", r.returncode == 0, r.stderr[-200:])
+
+# The realistic mistake: a paste that lost its tail. It still starts with
+# zpub, and if it happens to parse it derives somebody else's addresses.
+other = H.account_zpub_from_mnemonic(
+    " ".join(["abandon"] * 11 + ["about"]), account=1)
+r = subprocess.run([WAL, "--pin-file", mine, other], capture_output=True,
+                   text=True, timeout=120, cwd=H.REPO)
+check("a different account of the SAME seed is rejected", r.returncode == 3,
+      f"rc={r.returncode} — this is the wrong-account paste, and it derives "
+      "perfectly valid addresses the operator can see but the invoice cannot")
+check("and the mismatch names both digests",
+      "expected sha256" in r.stderr and "this key" in r.stderr, r.stderr[-200:])
+
+# Everything downstream has to act on that exit code, or the pin is decoration.
+inst = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
+pre = open(PRE).read()
+check("install.sh refuses a key that is not the pinned one",
+      "wallet.pin" in inst and re.search(r'3\)', inst) is not None,
+      "--wallet must not install a wallet the operator cannot spend from")
+check("preflight blocks on it too", "wallet.pin" in pre and "wallet-pinned" in pre,
+      pre[-200:])
 
 print("\n[7] key generation refuses the wrong machine")
 GEN = os.path.join(H.REPO, "scripts", "generate-keys.sh")

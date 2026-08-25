@@ -238,9 +238,9 @@ def launch_chromium(pw, **kw):
     raise SkipModule("no usable chromium:\n    " + "\n    ".join(attempts))
 
 
-def account_zpub_from_mnemonic(mnemonic: str) -> str:
+def account_zpub_from_mnemonic(mnemonic: str, account: int = 0) -> str:
     """
-    m/84'/0'/0' as a zpub, derived from a BIP39 mnemonic.
+    m/84'/0'/<account>' as a zpub, derived from a BIP39 mnemonic.
 
     Private derivation, deliberately confined to the test harness: the product
     only ever holds a public key, and adding private-key code to it would
@@ -250,6 +250,10 @@ def account_zpub_from_mnemonic(mnemonic: str) -> str:
     BIP84 spec vector and the alternative — pasting an extended key from
     memory — is precisely the mistake scripts/check-wallet.sh exists to catch.
     A wrong constant in a test asserts nothing at all.
+
+    `account` exists for the wrong-account paste: m/84'/0'/1' of the same
+    seed is a valid zpub that derives addresses the operator can watch in
+    their wallet and still cannot match to an invoice.
     """
     import sys as _sys
     _sys.path.insert(0, os.path.join(REPO, "api"))
@@ -268,10 +272,11 @@ def account_zpub_from_mnemonic(mnemonic: str) -> str:
         return (int.from_bytes(I[:32], "big") + k) % cw.N, I[32:]
 
     H_ = 0x80000000
-    for idx in (84 + H_, 0 + H_, 0 + H_):
+    for idx in (84 + H_, 0 + H_, account + H_):
         k, c = ckd_priv(k, c, idx)
     body = ((0x04B24746).to_bytes(4, "big") + bytes([3]) + b"\x00\x00\x00\x00"
-            + (0 + H_).to_bytes(4, "big") + c + cw._serialize(cw._point_mul(k)))
+            + (account + H_).to_bytes(4, "big") + c
+            + cw._serialize(cw._point_mul(k)))
     chk = hashlib.sha256(hashlib.sha256(body).digest()).digest()[:4]
     num, out = int.from_bytes(body + chk, "big"), ""
     while num:

@@ -58,6 +58,15 @@ anything that looks like the server, and prints the exact edits afterwards:
       ```bash
       ./scripts/check-wallet.sh zpub...     # before you use it
       ```
+      Its *identity* is pinned in `scripts/wallet.pin` — the SHA-256 of the
+      key, which reveals nothing and still catches a truncated or
+      wrong-account paste. `check-wallet.sh` exits 3 on a mismatch, and
+      `install.sh --wallet`, `preflight.sh` and the BTCPay configure script
+      all refuse to proceed on one. Running this deployment against your own
+      wallet instead:
+      ```bash
+      ./scripts/check-wallet.sh --pin zpub...   # then commit scripts/wallet.pin
+      ```
       - [ ] **Compare the first address it prints against the next receive
             address your wallet shows.** This is the one failure in the system
             with no symptom: a wrong or wrong-account key issues addresses you
