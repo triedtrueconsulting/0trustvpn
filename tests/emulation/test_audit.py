@@ -133,6 +133,47 @@ print(f"      {len(blocked)} blocker(s) on this checkout, each with a fix")
 for expect in ("release-key-pinned", "web-no-placeholder-fpr"):
     check(f"it catches {expect}", expect in r.stdout, r.stdout[-400:])
 
+print("\n[6] the wallet check refuses what it must refuse")
+# A wrong extended key is the one failure here with no symptom: addresses are
+# issued, invoices never settle, every health check stays green. The check
+# exists so a human compares the first address against their wallet.
+WAL = os.path.join(H.REPO, "scripts", "check-wallet.sh")
+check("check-wallet.sh is executable", os.access(WAL, os.X_OK))
+
+# The BIP84 spec's own vector, derived here from the spec's mnemonic rather
+# than pasted: an extended key typed from memory is exactly the mistake this
+# script exists to catch, and a wrong constant here would assert nothing.
+# harness owns that derivation so both modules share one definition.
+SPEC_ZPUB = H.account_zpub_from_mnemonic(" ".join(["abandon"] * 11 + ["about"]))
+SPEC_FIRST = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+r = subprocess.run([WAL, SPEC_ZPUB], capture_output=True, text=True, timeout=120,
+                   cwd=H.REPO)
+check("it derives the BIP84 spec's own first address", SPEC_FIRST in r.stdout,
+      f"expected {SPEC_FIRST}\n          {r.stdout[-300:]}{r.stderr[-200:]}")
+
+r = subprocess.run([WAL, SPEC_ZPUB.replace("zpub", "zprv", 1)],
+                   capture_output=True, text=True, timeout=120, cwd=H.REPO)
+check("it refuses an extended PRIVATE key", r.returncode != 0
+      and "PRIVATE" in r.stderr,
+      "a private key on a server is spending authority on an internet-facing "
+      f"box: {r.stdout[-200:]}{r.stderr[-200:]}")
+
+r = subprocess.run([WAL, "zpubTYPO"], capture_output=True, text=True,
+                   timeout=120, cwd=H.REPO)
+check("it refuses a key that does not parse", r.returncode != 0, r.stdout[-200:])
+
+print("\n[7] key generation refuses the wrong machine")
+GEN = os.path.join(H.REPO, "scripts", "generate-keys.sh")
+check("generate-keys.sh is executable", os.access(GEN, os.X_OK))
+r = subprocess.run([GEN], capture_output=True, text=True, timeout=120,
+                   cwd=H.REPO, env={**os.environ, "CI": "1"})
+check("it will not run in CI", r.returncode != 0, r.stdout[-200:])
+check("and says why", "machine you control" in r.stderr, r.stderr[-200:])
+src = open(GEN).read()
+check("it warns against generating keys on the server",
+      "/etc/0trust" in src and "NOT ON THE SERVER" in src,
+      "a signing key on an internet-facing box signs whatever an intruder wants")
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("  failures: " + ", ".join(FAIL))

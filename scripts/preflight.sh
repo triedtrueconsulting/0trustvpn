@@ -93,13 +93,16 @@ printf '  %sprovider: %s%s\n' "$DIM" "$provider" "$NC"
 
 case "$provider" in
   watch)
-    gate wallet-xpub "WALLET_BTC is an xpub the operator controls" \
-         "put your own account xpub/zpub in $ENVFILE — never a private key" <<EOF
+    gate wallet-xpub "WALLET_BTC derives real receive addresses" \
+         "put your own account xpub/zpub in $ENVFILE — never a private key — then confirm the first address with scripts/check-wallet.sh" <<EOF
 $(w="$(grep -hoP '^WALLET_BTC=\K.*' "$ENVFILE" 2>/dev/null | tail -1)"
   if [[ -z "$w" ]]; then echo "WALLET_BTC is empty — paid signup cannot issue an address"
-  elif [[ "$w" == xprv* || "$w" == *prv* ]]; then echo "that looks like a PRIVATE key. Use the extended PUBLIC key."
-  elif [[ "$w" == xpub* || "$w" == zpub* || "$w" == ypub* ]]; then echo ok
-  else echo "warn"; fi)
+  elif [[ "$w" == *prv* ]]; then echo "that looks like a PRIVATE key. Use the extended PUBLIC key."
+  # Derive from it rather than checking the prefix: a typo'"'"'d key still starts
+  # with zpub, and the failure it causes has no symptom — invoices simply
+  # never settle while every health check stays green.
+  elif ./scripts/check-wallet.sh --count 1 "$w" >/dev/null 2>&1; then echo ok
+  else echo "WALLET_BTC does not derive — run scripts/check-wallet.sh to see why"; fi)
 EOF
     ;;
   btcpay)
@@ -167,12 +170,26 @@ EOF
 # that of wherever the entity is established and points at security.txt for
 # the name. So that is where to look — matching "operating entity" in the
 # terms just matches the sentence doing the deferring.
-gate legal-entity-named "the operating entity is actually named" \
-     "name the entity and jurisdiction in web/.well-known/security.txt, and have both legal pages reviewed" <<EOF
+gate legal-entity-named "the operating entity is named" \
+     "name the entity in web/.well-known/security.txt" <<EOF
 $(f=web/.well-known/security.txt
   if [[ ! -f "$f" ]]; then echo "no security.txt, and terms.html §9 points at it for the entity"
-  elif grep -q 'NOT YET ESTABLISHED' "$f"; then echo "security.txt still says NOT YET ESTABLISHED"
+  elif ! grep -qE '^#?\s*Entity:\s*\S' "$f"; then echo "no Entity: line"
+  elif grep -qE '^#?\s*Entity:.*(NOT YET|TBD|TO BE)' "$f"; then echo "the Entity line is still a placeholder"
   else echo ok; fi)
+EOF
+
+# Separate from the name on purpose: terms.html §9 makes the entity's
+# jurisdiction the governing law of the contract, so a named company with no
+# stated jurisdiction leaves the terms pointing at nothing.
+gate legal-jurisdiction "and its jurisdiction is stated" \
+     "add the country (and US state, if applicable) to the Jurisdiction line in security.txt; see docs/AUDIT.md §2.6" <<EOF
+$(f=web/.well-known/security.txt
+  if [[ ! -f "$f" ]]; then echo "no security.txt"
+  elif grep -qE '^#?\s*Jurisdiction:.*(NOT YET|TBD|TO BE CONFIRMED)' "$f"; then
+       echo "Jurisdiction is still TO BE CONFIRMED — terms.html §9 defers the governing law to it"
+  elif grep -qE '^#?\s*Jurisdiction:\s*\S' "$f"; then echo ok
+  else echo "no Jurisdiction: line"; fi)
 EOF
 
 gate security-txt-valid "security.txt exists and has not expired" \

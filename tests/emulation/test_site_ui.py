@@ -110,14 +110,10 @@ def contrast(a, b):
 browser = None
 try:
     with sync_playwright() as pw:
-        launch = {}
-        for cand in sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")):
-            launch["executable_path"] = cand
-            break
         try:
-            browser = pw.chromium.launch(**launch)
-        except Exception as e:
-            print(f"  SKIP  chromium unavailable: {e}")
+            browser = H.launch_chromium(pw)
+        except H.SkipModule as e:
+            print(f"  SKIP  {e}")
             sys.exit(77)
 
         base = f"http://127.0.0.1:{PORT}"

@@ -209,6 +209,77 @@ def mint_provision_token(db, region, role="both", ttl=3600):
     return tok
 
 
+class SkipModule(Exception):
+    """Prerequisites are genuinely absent. Caller exits 77."""
+
+
+def launch_chromium(pw, **kw):
+    """Launch a browser, or raise SkipModule if there genuinely is not one.
+
+    Every browser module used to carry the same glob over /opt/pw-browsers and
+    treat ANY launch failure as "no chromium, skip". That is wrong in a way
+    that costs coverage silently: pinning a playwright version whose protocol
+    did not match the preinstalled chromium turned four modules from passing to
+    "skipped" in one commit, and a skipped module looks exactly like a module
+    with nothing to say. Try the preinstalled browser, then playwright's own,
+    and only skip when neither exists.
+    """
+    import glob as _glob
+    attempts = []
+    for cand in sorted(_glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")):
+        try:
+            return pw.chromium.launch(executable_path=cand, **kw)
+        except Exception as e:
+            attempts.append(f"{cand}: {type(e).__name__}: {str(e)[:90]}")
+    try:
+        return pw.chromium.launch(**kw)
+    except Exception as e:
+        attempts.append(f"playwright's own browser: {type(e).__name__}: {str(e)[:90]}")
+    raise SkipModule("no usable chromium:\n    " + "\n    ".join(attempts))
+
+
+def account_zpub_from_mnemonic(mnemonic: str) -> str:
+    """
+    m/84'/0'/0' as a zpub, derived from a BIP39 mnemonic.
+
+    Private derivation, deliberately confined to the test harness: the product
+    only ever holds a public key, and adding private-key code to it would
+    create a thing worth stealing where none exists today.
+
+    Lives here rather than in one test module because two modules need the
+    BIP84 spec vector and the alternative — pasting an extended key from
+    memory — is precisely the mistake scripts/check-wallet.sh exists to catch.
+    A wrong constant in a test asserts nothing at all.
+    """
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(REPO, "api"))
+    import chainwatch as cw
+
+    seed = hashlib.pbkdf2_hmac("sha512", mnemonic.encode(), b"mnemonic", 2048)
+    I = hmac.new(b"Bitcoin seed", seed, hashlib.sha512).digest()
+    k, c = int.from_bytes(I[:32], "big"), I[32:]
+
+    def ckd_priv(k, c, index):
+        if index >= 0x80000000:
+            data = b"\x00" + k.to_bytes(32, "big") + index.to_bytes(4, "big")
+        else:
+            data = cw._serialize(cw._point_mul(k)) + index.to_bytes(4, "big")
+        I = hmac.new(c, data, hashlib.sha512).digest()
+        return (int.from_bytes(I[:32], "big") + k) % cw.N, I[32:]
+
+    H_ = 0x80000000
+    for idx in (84 + H_, 0 + H_, 0 + H_):
+        k, c = ckd_priv(k, c, idx)
+    body = ((0x04B24746).to_bytes(4, "big") + bytes([3]) + b"\x00\x00\x00\x00"
+            + (0 + H_).to_bytes(4, "big") + c + cw._serialize(cw._point_mul(k)))
+    chk = hashlib.sha256(hashlib.sha256(body).digest()).digest()[:4]
+    num, out = int.from_bytes(body + chk, "big"), ""
+    while num:
+        num, r = divmod(num, 58)
+        out = cw._B58[r] + out
+    return out
+
+
 def genkey():
     """A syntactically valid 44-char base64 WireGuard pubkey."""
     return base64.b64encode(os.urandom(32)).decode()

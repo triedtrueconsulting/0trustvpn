@@ -40,9 +40,15 @@ Encryption: https://0trustvpn.com/pubkey.asc
 
 # --- Operating entity -----------------------------------------------------
 # terms.html §9 says the governing law is that of the jurisdiction where the
-# operating entity is established, and points here for the name. Fill it in.
-#   Entity: NOT YET ESTABLISHED
-#   Jurisdiction: NOT YET ESTABLISHED
+# operating entity is established, and points here for the name.
+#
+#   Entity: 0trust INC.
+#   Jurisdiction: TO BE CONFIRMED
+#
+# The jurisdiction line still needs the country and, if incorporated in the
+# United States, the state. It is not a formality: terms.html §9 makes it the
+# governing law of the contract, and it is a different question from where the
+# servers are. See docs/AUDIT.md §2.6.
 
 # We do not run a paid bug bounty. We do credit reporters who ask to be
 # credited, and we will not pursue anyone who reports in good faith within

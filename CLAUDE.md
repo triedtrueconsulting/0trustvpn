@@ -54,7 +54,13 @@ scripts/                          bootstrap.sh, bootstrap-node.sh, audit-verify.
                                   backup.sh, release.sh, verify-release.sh,
                                   install.sh (one-shot VPS), node-runtime.sh
                                   (sysctl/NAT/egress/resolver, shared by the
-                                   node bootstrap and the test installer)
+                                   node bootstrap and the test installer),
+                                  preflight.sh (launch gate: is the DEPLOYMENT
+                                   finished, as opposed to the code),
+                                  generate-keys.sh (the four keys, on the
+                                   operator's own machine — never the server),
+                                  check-wallet.sh (derive and eyeball the
+                                   receive addresses before taking money)
 systemd/                          api / sweep / backup / meshd .service + .timer
 proxy/                            Visitor web proxy (/surf):
                                   guards.py (the security argument),
@@ -72,7 +78,21 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 - **Contact email:** `0trustvpn@proton.me` — SINGLE inbox. All role addresses
   (security@, support@, abuse@, legal@) are optional aliases that route here.
   Every web page uses the proton.me address directly.
-- **Bitcoin xpub:** `zpub6msFuvuWJzY7eGzgLkT2omB8HqBQ5z3KkbVD43Fj2iKGTPDLxyZJphYyJAnJwkDYRYtvTnHB1zJhDC6iFrEmF7puQDD3e11d6zKtQdvP1xU`
+- **Operating entity:** `0trust INC.` Recorded in
+  `web/.well-known/security.txt`, which terms.html §9 makes the governing law
+  of the contract. Its jurisdiction is still outstanding, and that is a
+  different question from where the servers are — see docs/AUDIT.md §2.6.
+- **The Bitcoin xpub is NOT recorded here, deliberately.** It used to be. An
+  extended public key reveals the wallet's entire balance and transaction
+  history to anyone holding it, forever — you cannot rotate one without moving
+  the funds — so committing the live key to a repository puts the operator's
+  finances on display to everyone with read access. It lives in `WALLET_BTC`
+  in `/etc/0trust/api.env` on the control plane and nowhere else.
+  `install.sh --wallet <zpub>` puts it there and validates it on the way in;
+  `scripts/check-wallet.sh` derives the first addresses from whatever is
+  configured so a human can compare them against the wallet. Do that
+  comparison: a wrong key issues addresses the operator cannot spend, and
+  nothing anywhere reports an error.
 - **Three mesh nodes only**, all outside Five/Nine/Fourteen Eyes:
   - `zur` = Zurich, Switzerland
   - `rey` = Reykjavik, Iceland

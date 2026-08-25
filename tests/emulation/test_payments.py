@@ -31,13 +31,21 @@ try:
     st, s = H.call("GET", "/api/v1/account/status",
                    headers={"X-Account-Token": acct["token"]})
     check("account active", s["status"] == "active", s)
-    days = s["days_remaining"]
+    # Compare expires_at, not days_remaining. days_remaining is
+    # (expires - now) // 86400, so it ticks down on its own: if the second read
+    # lands the other side of a whole-day boundary the value drops by one and
+    # the test reports a re-credit failure that never happened. That is the
+    # intermittent "30 -> 29" this module produced roughly once in three full
+    # suite runs. The property under test is that the stored expiry does not
+    # move, and that is an absolute timestamp.
+    expires = s["expires_at"]
     for _ in range(3):
         H.settle(acct["invoice_id"])
     s2 = H.call("GET", "/api/v1/account/status",
                 headers={"X-Account-Token": acct["token"]})[1]
-    check("replay still cannot re-credit", s2["days_remaining"] == days,
-          f"{days} -> {s2['days_remaining']}")
+    check("replay still cannot re-credit", s2["expires_at"] == expires,
+          f"expiry moved: {expires} -> {s2['expires_at']} "
+          f"({(s2['expires_at'] - expires) // 86400} extra days credited)")
 finally:
     H.shutdown()
 
@@ -84,15 +92,16 @@ try:
     s = H.call("GET", "/api/v1/account/status",
                headers={"X-Account-Token": acct["token"]})[1]
     check("account active after IPN", s["status"] == "active", s)
-    days = s["days_remaining"]
-    check("12 months credited", days >= 359, days)
+    check("12 months credited", s["days_remaining"] >= 359, s["days_remaining"])
+    hosted_expires = s["expires_at"]
 
     for _ in range(3):
         fake_gateway.ipn(acct["invoice_id"], "finished")
     s2 = H.call("GET", "/api/v1/account/status",
                 headers={"X-Account-Token": acct["token"]})[1]
-    check("hosted IPN replay cannot re-credit", s2["days_remaining"] == days,
-          f"{days} -> {s2['days_remaining']}")
+    check("hosted IPN replay cannot re-credit",
+          s2["expires_at"] == hosted_expires,
+          f"expiry moved: {hosted_expires} -> {s2['expires_at']}")
 
     st, acct2 = H.call("POST", "/api/v1/account", {"months": 1})
     fake_gateway.ipn(acct2["invoice_id"], "expired")
@@ -156,15 +165,16 @@ try:
     s = H.call("GET", "/api/v1/account/status",
                headers={"X-Account-Token": acct["token"]})[1]
     check("the card payment credits the account", s["status"] == "active", s)
-    days = s["days_remaining"]
-    check("3 months credited", days >= 89, days)
+    card_expires = s["expires_at"]
+    check("3 months credited", s["days_remaining"] >= 89, s["days_remaining"])
 
     for _ in range(3):
         fake_cards.stripe_webhook(sid)
     s2 = H.call("GET", "/api/v1/account/status",
                 headers={"X-Account-Token": acct["token"]})[1]
     check("replaying a Stripe webhook cannot re-credit",
-          s2["days_remaining"] == days, f"{days} -> {s2['days_remaining']}")
+          s2["expires_at"] == card_expires,
+          f"expiry moved: {card_expires} -> {s2['expires_at']}")
 
     st, methods = H.call("GET", f"/api/v1/payment/{sid}/methods")
     check("a card provider offers no crypto addresses",
@@ -202,13 +212,14 @@ try:
     s = H.call("GET", "/api/v1/account/status",
                headers={"X-Account-Token": acct2["token"]})[1]
     check("the Square payment credits the account", s["status"] == "active", s)
-    days2 = s["days_remaining"]
+    card_expires2 = s["expires_at"]
     for _ in range(3):
         fake_cards.square_webhook(lid)
     s2 = H.call("GET", "/api/v1/account/status",
                 headers={"X-Account-Token": acct2["token"]})[1]
     check("replaying a Square webhook cannot re-credit",
-          s2["days_remaining"] == days2, f"{days2} -> {s2['days_remaining']}")
+          s2["expires_at"] == card_expires2,
+          f"expiry moved: {card_expires2} -> {s2['expires_at']}")
 
     st, acct3 = H.call("POST", "/api/v1/account", {"months": 1})
     fake_cards.square_webhook(acct3["invoice_id"], status="FAILED")

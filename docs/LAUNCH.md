@@ -12,6 +12,17 @@ Tick items as you go.
 
 ---
 
+## Before you start
+
+```bash
+./scripts/preflight.sh --repo    # what is still outstanding, and how to fix it
+```
+
+Run it again after every day below. It is the checklist that cannot go stale,
+because it reads the files rather than trusting this document.
+
+---
+
 ## Day 1 — Identity and hosts
 
 ### Generate your operator identities
@@ -19,21 +30,41 @@ Tick items as you go.
 These are the keys you'll use forever. Generate them once, carefully,
 on a workstation that is **not** connected to anything 0trust touches.
 
-- [ ] **Bitcoin xpub** — done (you have it: `zpub6msFu...vP1xU`)
+All four at once, on your own machine — the script refuses to run in CI or on
+anything that looks like the server, and prints the exact edits afterwards:
+
+```bash
+./scripts/generate-keys.sh          # release + canary + support PGP, age backup
+```
+
+- [ ] **Release-signing PGP key** — pin its fingerprint in `EXPECTED_KEY`
+      (`scripts/verify-release.sh`) and on the site. Until you do,
+      `scripts/preflight.sh` blocks: the download page tells customers to
+      verify against a fingerprint, and right now that fingerprint is nobody's.
+- [ ] **Warrant canary signing key**
+- [ ] **Support/security PGP key** — publish via WKD (`support/scripts/generate-key.sh`)
+- [ ] **Age key for backups** — the PUBLIC half goes on the control plane; the
+      private half never does. It is the only thing that can read a backup.
+- [ ] **Back up `~/.0trust-keys` offline before doing anything else.** Three of
+      those keys cannot be replaced without telling every customer the old ones
+      are dead.
+
+- [ ] **Bitcoin xpub** — the extended PUBLIC key of the wallet that receives
+      payments. It is deliberately **not** committed anywhere in this repo: an
+      xpub exposes the wallet's whole balance and transaction history to
+      anyone who holds it, permanently, and you cannot rotate one without
+      moving the funds. It belongs in `WALLET_BTC` in `/etc/0trust/api.env`
+      and nowhere else.
+      ```bash
+      ./scripts/check-wallet.sh zpub...     # before you use it
+      ```
+      - [ ] **Compare the first address it prints against the next receive
+            address your wallet shows.** This is the one failure in the system
+            with no symptom: a wrong or wrong-account key issues addresses you
+            cannot spend, invoices never settle, and every health check stays
+            green.
       - [ ] Confirm the seed phrase backup is written down on paper, two copies, two locations
       - [ ] Test-restore from the seed to a different wallet app; verify the same addresses generate
-- [ ] **Release-signing PGP key** (separate from any other keys)
-      ```bash
-      gpg --full-generate-key   # ed25519, no expiry — or 5y if you prefer
-      gpg --armor --export <fpr> > releases-pubkey.asc
-      ```
-      Update `EXPECTED_KEY` in `scripts/verify-release.sh` with the fingerprint.
-- [ ] **Support/security PGP key** (separate again, can be the same key as releases if you prefer simpler ops)
-      ```bash
-      ./support/scripts/generate-key.sh
-      ```
-- [ ] **Warrant canary signing key** (recommend the same as support, since both are "operator identity" rather than "infrastructure identity")
-- [ ] **Age key for backups** — `age-keygen -o ~/.age/0trust-backup.key`
 
 ### Pick your hosting
 
@@ -57,7 +88,17 @@ on a workstation that is **not** connected to anything 0trust touches.
 ### Legal &amp; commercial setup
 
 - [ ] **Review the privacy policy** (`web/privacy.html`) and **terms** (`web/terms.html`) line by line. They are written to match the audit-pack claims exactly; if you change the audit-pack claims, change these too.
-- [ ] **Decide the operating entity** under which you'll take payment (typically a sole prop or LLC depending on jurisdiction). Reflect it in `web/terms.html` §1 and `web/privacy.html` §1.
+- [ ] **Operating entity: `0trust INC.`** Recorded in
+      `web/.well-known/security.txt`, which `terms.html` §9 makes the governing
+      law of the contract.
+      - [ ] **Add the jurisdiction** — country, and the state if incorporated in
+            the US. `preflight.sh` blocks until it is there, because §9 defers
+            the governing law to that line and it currently resolves to nothing.
+      - [ ] Read `docs/AUDIT.md` §2.6. The company's jurisdiction is a different
+            question from the servers', and an auditor will ask. If the entity
+            is US-incorporated, the exposure is an NSL or FISA order with a gag
+            — which is precisely what the warrant canary is structured for, and
+            makes its weekly cadence load-bearing rather than decorative.
 - [ ] **Read `docs/ABUSE.md`** end-to-end and pre-write the response templates so you're not drafting under pressure when the first DMCA arrives (it will, within days).
 - [ ] **Set up `abuse@0trustvpn.com`** as an alias of the proton.me account. Publish it in WHOIS and in the abuse-contact for your IP ranges (your hosting provider configures this).
 - [ ] **Read `docs/DR.md`** end-to-end. Understand which off-host artifacts you need to keep age-encrypted (the list is at the bottom of that doc).

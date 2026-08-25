@@ -12,5 +12,11 @@ PyYAML==6.0.3    # parses wireguard/cloud-init-ephemeral.yaml in scripts/validat
 # cannot see: the trial funnel, the desktop GUI, the operations dashboard and
 # the site's shared nav. Without it those four skip, which is how an
 # unreadable button and a control pushed off the edge of a phone both reached
-# a "green" build. Needs `playwright install chromium` once.
-playwright==1.47.0
+# a "green" build.
+#
+# Deliberately unpinned. The client speaks a protocol version to the browser,
+# so the two have to be installed together: `pip install playwright &&
+# playwright install chromium`. Pinning the client against whatever chromium a
+# machine already had turned four modules from passing to "skipped" in one
+# commit, and a skipped module looks exactly like one with nothing to say.
+playwright

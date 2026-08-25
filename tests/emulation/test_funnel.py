@@ -79,14 +79,10 @@ try:
         # PLAYWRIGHT_BROWSERS_PATH holds a pinned build that may not match the
         # installed playwright package's expected revision, so find the real
         # binary and point at it rather than triggering a download.
-        launch = {}
-        for cand in sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")):
-            launch["executable_path"] = cand
-            break
         try:
-            browser = pw.chromium.launch(**launch)
-        except Exception as e:
-            print(f"  SKIP  chromium unavailable: {e}")
+            browser = H.launch_chromium(pw)
+        except H.SkipModule as e:
+            print(f"  SKIP  {e}")
             sys.exit(77)
         page = browser.new_page()
         errors = []

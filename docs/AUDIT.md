@@ -78,6 +78,46 @@ region code is a regression.
 
 ---
 
+## 2.6 Operator jurisdiction
+
+§2.5 is about where the **servers** are. This is about where the **company**
+is, and they are different questions with different consequences. An auditor
+will ask; better that the pack answers first.
+
+| | |
+|---|---|
+| Operating entity | 0trust INC. |
+| Jurisdiction of incorporation | **to be confirmed** — see `/.well-known/security.txt` |
+
+What follows from that, stated plainly:
+
+1. **The company is subject to legal process where it is incorporated**,
+   whatever the servers' jurisdictions are. Moving a server to Zurich does not
+   move the company. A court in the company's own jurisdiction can compel the
+   operator directly.
+2. **What it can compel is bounded by what exists.** §3 is the complete list
+   of what is stored; a valid order can only reach that. There is no
+   connection log, no IP record and no traffic record to produce, because none
+   is written — which is the point of the design, and the thing the checks in
+   §10 exist to prove rather than assert.
+3. **If the entity is incorporated in the United States**, the specific
+   exposure is a National Security Letter or a FISA order, both of which can
+   carry a gag preventing disclosure. That is exactly the scenario the warrant
+   canary in §9 is structured for, and it is why the canary is a canary rather
+   than a promise. An auditor should treat a US-incorporated operator as
+   raising the importance of the canary's cadence, not as disqualifying.
+4. **This is a disclosed limitation, not a hidden one.** The site's
+   jurisdictional commitment has always been about server placement
+   specifically, and web/privacy.html §6 says the operator will comply with
+   valid legal orders while disclosing the minimum the law requires. Nothing
+   on the site claims the company itself sits outside the Eyes.
+
+**Auditor action:** confirm the entity named in `/.well-known/security.txt`
+matches the registration record, and that terms.html §9 — which defers to that
+file for the governing law — resolves to a real jurisdiction.
+
+---
+
 ## 3. Data we collect (and do not collect)
 
 ### 3.1 At signup
