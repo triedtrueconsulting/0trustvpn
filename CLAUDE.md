@@ -112,9 +112,16 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   (Norway was rejected earlier — it's in Nine Eyes. Romania replaced it.)
   **These region codes must be identical everywhere** — CLI, GUI, Android,
   iOS skeleton, API defaults, docs, landing-page terminal demo.
-- **Currencies: BTC, XMR, ZEC.** ETH and LTC were dropped. The codes live in
-  `payments.CURRENCIES`, the BTCPay checkout config, and web/index.html's
-  crypto tabs — keep them in step.
+- **Currencies: BTC, XMR, ZEC, ETH** (LTC was dropped; ETH was dropped and
+  then re-added). The codes live in `payments.CURRENCIES`, the BTCPay checkout
+  config, and web/index.html's crypto tabs — keep them in step.
+  **But what a deployment can actually take depends on its provider**, and
+  `currencies_for()` is the authority: `watch` returns BTC alone, card
+  providers return "USD (card)", everything else returns all four. The
+  checkout is honest about this — it replaces its tabs from
+  `/api/v1/payment/{id}/methods` — but the marketing and legal copy is not:
+  index.html promises four coins in prose, terms.html §3 says two, and a
+  `watch` deployment can issue an address for one. Reconcile before launch.
 - **Exactly one public chain endpoint is contacted, and only for BTC.** The
   `watch` provider talks to an Esplora API — `mempool.space/api` by default,
   overridable per deployment with `NODE_RPC_BTC` (blockstream.info/api, or
