@@ -140,9 +140,12 @@
             on the node itself.</p>
         </div>
         <div class="card">
-          <h2>Ephemeral node token</h2>
-          <p class="note">One-shot token for a RAM-only node to register itself
-            on first boot. Shown once.</p>
+          <h2>Node enrolment token</h2>
+          <p class="note">Lets a RAM-only node register itself. Shown once.
+            <strong>Uses&nbsp;1</strong> is a one-shot token: fine for a box you
+            will never restart. Anything higher pins the token to the first
+            node's public IP and lets that node rejoin after a reboot — which
+            it needs, because its disk is RAM and a reboot loses its key.</p>
           <form id="ptok-form" class="form-grid">
             <label>Region <select name="region" id="ptok-region"></select></label>
             <label>Role
@@ -152,10 +155,18 @@
                 <option value="exit">exit</option>
               </select>
             </label>
-            <label>Valid for (hours) <input name="ttl_hours" type="number" value="1" min="1" max="168"></label>
+            <label>Valid for (hours) <input name="ttl_hours" type="number" value="1" min="1" max="8784"></label>
+            <label>Uses <input name="uses" type="number" value="1" min="1" max="50"></label>
             <button type="submit" class="primary wide">Mint token</button>
           </form>
           <div id="ptok-out"></div>
+        </div>
+        <div class="card">
+          <h2>Outstanding tokens</h2>
+          <p class="note">Anything that can still put a node into the mesh.
+            Revoking one leaves the node it already registered running — it
+            holds its own PSK — but stops it re-registering.</p>
+          <div id="ptok-list"></div>
         </div>
       </div>
     </section>

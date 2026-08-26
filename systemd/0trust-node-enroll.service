@@ -1,0 +1,32 @@
+[Unit]
+Description=0trust node enrolment (fresh key, register with the control plane)
+Documentation=file:///usr/local/bin/0trust-node-enroll
+After=network-online.target
+Wants=network-online.target
+# meshd has nothing to run on until this has written /etc/0trust/meshd.env —
+# and on a RAM-only node that file does not survive the reboot, so this is not
+# a first-boot-only ordering.
+Before=0trust-meshd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/bin/0trust-node-enroll
+# A node whose control plane is briefly unreachable at boot — a slow network,
+# a control plane still starting — must keep trying rather than sit out of the
+# mesh until somebody notices. Enrolment is idempotent: a retry re-registers
+# the same node id.
+Restart=on-failure
+RestartSec=15s
+TimeoutStartSec=120s
+
+# It writes the WireGuard key and the node PSK, so it needs those paths and
+# nothing else.
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/wireguard /etc/0trust /var/0trust /etc/dnsmasq.d /etc/nftables.d
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

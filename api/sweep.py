@@ -250,11 +250,25 @@ def main():
         log.info("pruned %d spent trial stamps", cur.rowcount)
 
     # ---- 8. Prune provisioning tokens that can no longer be used ----
+    # "Used once, a day ago" is NOT the same as "can no longer be used". A
+    # node's disk is tmpfs, so it re-presents its token on every boot to
+    # rejoin under the same id — an enrolment token stays in service for as
+    # long as the node does. Deleting it here would have worked perfectly for
+    # a day and then, on some reboot weeks later, left the box unable to
+    # register at all: the one failure this whole path exists to prevent, and
+    # invisible until it happened.
+    #
+    # So a token goes only when nothing can present it any more: it expired,
+    # it was revoked, or the node it registered is gone from the mesh.
+    cutoff = now - 86400
     cur = conn.execute(
         """DELETE FROM provision_tokens
-           WHERE (used_at IS NOT NULL AND used_at < ?)
-              OR (used_at IS NULL AND expires_at < ?)""",
-        (now - 86400, now - 86400),
+           WHERE expires_at < :cutoff
+              OR (revoked_at IS NOT NULL AND revoked_at < :cutoff)
+              OR (used_at IS NOT NULL AND used_at < :cutoff
+                  AND (used_node_id IS NULL
+                       OR used_node_id NOT IN (SELECT id FROM mesh_nodes)))""",
+        {"cutoff": cutoff},
     )
     if cur.rowcount:
         log.info("pruned %d spent or expired provisioning tokens", cur.rowcount)

@@ -5,4 +5,10 @@ if [ "$1" = "link" ] && [ "$2" = "show" ]; then
   [ -f "$S/iface-$3.exists" ] && exit 0 || exit 1
 fi
 if [ "$1" = "link" ] && [ "$2" = "add" ]; then touch "$S/iface-$3.exists"; fi
+# `ip -o -4 route show to default` is how the node enrolment finds the
+# interface to masquerade out of. Answering nothing makes it skip NAT, which
+# would let a broken ruleset pass the test unexercised.
+if [ "$*" = "-o -4 route show to default" ]; then
+  echo "default via 203.0.113.1 dev ${STUB_PRIMARY_IF:-eth0} proto dhcp src 203.0.113.9 metric 100"
+fi
 exit 0

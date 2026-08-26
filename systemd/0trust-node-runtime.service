@@ -1,0 +1,19 @@
+[Unit]
+Description=0trust node runtime (NAT, egress filter, mesh resolver)
+Documentation=file:///usr/local/lib/0trust/node-runtime-apply.sh
+After=network-online.target
+Wants=network-online.target
+Before=0trust-meshd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/lib/0trust/node-runtime-apply.sh
+# nftables rules are kernel state and /etc/nftables.conf does not include
+# /etc/nftables.d, so without this an exit node comes back from a reboot doing
+# no masquerading and running no abuse filter — and nothing reports it.
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

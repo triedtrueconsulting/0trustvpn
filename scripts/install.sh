@@ -2,7 +2,7 @@
 # ============================================================================
 # 0trust — one-shot installer for a fresh Ubuntu 24.04 VPS
 # ============================================================================
-# Two modes:
+# Three modes:
 #
 #   test        No domain, no TLS. Serves over plain HTTP on the box's IP, and
 #               turns this one VPS into the ENTIRE product: control plane,
@@ -12,6 +12,17 @@
 #               For kicking the tyres — never for customers. See --no-vpn.
 #
 #   production  Real domain, Let's Encrypt certificate, HSTS, firewall.
+#
+#   node        No control plane, no website. Turns the box into a RAM-only
+#               mesh node and joins it to an existing mesh in one command:
+#               tmpfs for every path that would otherwise hold a key, swap
+#               off, journald volatile, a fresh WireGuard keypair, and a
+#               single call to the control plane that registers the node and
+#               returns its id and PSK. Nothing to paste back afterwards.
+#
+#               sudo ./scripts/install.sh --mode node \
+#                    --control-url https://0trustvpn.com \
+#                    --region zur --provision-token ztvp-...
 #
 # Idempotent: safe to re-run to pick up new code or repair a half-finished run.
 #
@@ -27,12 +38,19 @@
 #   --no-ssh-hardening       leave sshd alone
 #   --no-vpn                 (test) skip the on-box mesh; seed placeholder rows
 #                            instead, as earlier versions did
+#   --control-url <url>      (node) the control plane to join
+#   --provision-token <tok>  (node) minted on the control plane — see
+#                            api/mint-provision-token.py or the dashboard
+#   --region <code>          (node) zur | rey | buc
+#   --role entry|exit|both   (node) default both
+#   --wg-port <port>         (node) default 51820
 #   --dry-run                render everything, touch no system state
 # ============================================================================
 set -euo pipefail
 
 MODE="" DOMAIN="" EMAIL=""
 DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1
+CONTROL_URL="" PROVISION_TOKEN="" REGION="" NODE_ROLE="both" WG_PORT="51820"
 
 WALLET_BTC="${WALLET_BTC:-}"
 
@@ -71,6 +89,11 @@ while [[ $# -gt 0 ]]; do
         --no-ssh-hardening) DO_SSH=0; shift ;;
         --no-vpn) DO_VPN=0; shift ;;
         --wallet) WALLET_BTC="${2:-}"; shift 2 ;;
+        --control-url) CONTROL_URL="${2:-}"; shift 2 ;;
+        --provision-token) PROVISION_TOKEN="${2:-}"; shift 2 ;;
+        --region) REGION="${2:-}"; shift 2 ;;
+        --role) NODE_ROLE="${2:-}"; shift 2 ;;
+        --wg-port) WG_PORT="${2:-}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
         *) echo "unknown flag: $1" >&2; exit 64 ;;
@@ -90,8 +113,24 @@ run() {
     else "$@"; fi
 }
 
-[[ "$MODE" == "test" || "$MODE" == "production" ]] \
-    || die "--mode must be test or production (see --help)"
+[[ "$MODE" == "test" || "$MODE" == "production" || "$MODE" == "node" ]] \
+    || die "--mode must be test, production or node (see --help)"
+if [[ "$MODE" == "node" ]]; then
+    [[ -n "$CONTROL_URL" ]] || die "node needs --control-url https://<control plane>"
+    [[ -n "$PROVISION_TOKEN" ]] || die "node needs --provision-token (mint one on the control plane: api/mint-provision-token.py, or the dashboard)"
+    [[ -n "$REGION" ]] || die "node needs --region (zur|rey|buc)"
+    [[ "$CONTROL_URL" =~ ^https?://[^[:space:]/]+ ]] \
+        || die "--control-url must be a URL, e.g. https://0trustvpn.com"
+    CONTROL_URL="${CONTROL_URL%/}"
+    # A provisioning token over plain HTTP is a credential on the wire, and
+    # the response carries this node's PSK back the same way.
+    [[ "$CONTROL_URL" == https://* ]] \
+        || note "control plane is plain HTTP — the token and the node PSK cross the network in clear"
+    [[ "$REGION" =~ ^[a-z]{2,8}$ ]] || die "--region must be a short lowercase code, e.g. zur"
+    case "$NODE_ROLE" in entry|exit|both) ;; *) die "--role must be entry|exit|both" ;; esac
+    [[ "$WG_PORT" =~ ^[0-9]+$ ]] && (( WG_PORT >= 1 && WG_PORT <= 65535 )) \
+        || die "--wg-port must be 1-65535"
+fi
 if [[ "$MODE" == "production" ]]; then
     [[ -n "$DOMAIN" ]] || die "production needs --domain <fqdn>"
     [[ -n "$EMAIL"  ]] || die "production needs --email <address> for cert notices"
@@ -124,6 +163,218 @@ printf '%s  0trust installer — %s mode%s\n' "$GRN" "$MODE" "$NC"
 [[ -n "$DOMAIN" ]] && note "domain: $DOMAIN"
 [[ $DRY_RUN -eq 1 ]] && note "DRY RUN — nothing will be changed"
 echo
+
+# ============================================================================
+# NODE MODE — a fresh VPS becomes a RAM-only mesh node and joins the mesh
+# ============================================================================
+# Everything below this point in the script is the control plane. A node runs
+# none of it: no nginx, no database, no API, no wallet. It runs WireGuard, a
+# resolver bound to the mesh gateway, and meshd.
+#
+# The design constraint that shapes all of it: web/privacy.html, web/audit.html
+# and docs/AUDIT.md §5.3 all tell customers that every mesh node is a RAM-only
+# ephemeral instance. So this installer has to produce one — tmpfs over every
+# path that would otherwise hold a key, swap off, journald volatile — or the
+# claim stops being true the first time somebody uses it.
+#
+# That has a consequence worth stating plainly, because it drove the enrolment
+# design: after a reboot this box has no WireGuard key and no node id. It has
+# to be able to register itself again, unattended, or a reboot is an outage
+# that needs a human. /etc/0trust-node.env is the one file deliberately left
+# on real disk to make that possible, and it holds an enrolment token that is
+# pinned to this machine's public IP and revocable from the dashboard.
+if [[ "$MODE" == "node" ]]; then
+    ETC_NODE="/etc/0trust-node.env"      # persistent: survives the tmpfs
+    LIBDIR="/usr/local/lib/0trust"
+
+    # ------------------------------------------------------------------
+    log "Installing packages"
+    # ------------------------------------------------------------------
+    NODE_PACKAGES=(wireguard wireguard-tools nftables dnsmasq python3 curl
+                   ca-certificates)
+    [[ $DO_FIREWALL -eq 1 ]] && NODE_PACKAGES+=(ufw)
+    if [[ $DRY_RUN -eq 0 ]]; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq
+        apt-get install -y -qq "${NODE_PACKAGES[@]}" >/dev/null
+    fi
+    ok "packages: ${NODE_PACKAGES[*]}"
+
+    # shellcheck source=scripts/node-runtime.sh
+    source "$REPO_DIR/scripts/node-runtime.sh"
+
+    # ------------------------------------------------------------------
+    log "RAM-only: tmpfs, no swap, volatile logs"
+    # ------------------------------------------------------------------
+    # /etc/wireguard holds the private key; /etc/0trust holds the node PSK.
+    # Both have to be RAM, and they have to be RAM on every subsequent boot
+    # too, which is why this goes in fstab rather than a one-off mount.
+    if [[ $DRY_RUN -eq 0 ]]; then
+        while read -r path size; do
+            mkdir -p "$path"
+            if ! grep -qE "^tmpfs[[:space:]]+$path[[:space:]]" /etc/fstab; then
+                printf 'tmpfs %s tmpfs rw,nosuid,nodev,noexec,size=%s,mode=0700 0 0\n' \
+                       "$path" "$size" >> /etc/fstab
+            fi
+            mountpoint -q "$path" || mount "$path"
+        done <<'MOUNTS'
+/etc/wireguard 1M
+/etc/0trust 4M
+/var/0trust 64M
+MOUNTS
+        # Swap would page a private key to a disk we have just promised holds
+        # none. Off now, and out of fstab so it stays off.
+        swapoff -a || true
+        sed -i -E 's:^([^#].*[[:space:]]swap[[:space:]].*)$:# \1:' /etc/fstab
+        mkdir -p /etc/systemd/journald.conf.d
+        cat > /etc/systemd/journald.conf.d/0trust.conf <<'JCONF'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=32M
+JCONF
+        systemctl restart systemd-journald || true
+        ztv_sysctl_conf > /etc/sysctl.d/99-0trust.conf
+        sysctl -p /etc/sysctl.d/99-0trust.conf >/dev/null
+    fi
+    ok "/etc/wireguard, /etc/0trust, /var/0trust are tmpfs; swap off; journald volatile"
+
+    # ------------------------------------------------------------------
+    log "Enrolment credentials"
+    # ------------------------------------------------------------------
+    # The one file on real disk. Root-only, and named so nobody mistakes it
+    # for part of the tmpfs tree it sits next to.
+    if [[ $DRY_RUN -eq 0 ]]; then
+        umask 077
+        cat > "$ETC_NODE" <<ENV
+# 0trust node enrolment. Read by 0trust-node-enroll on every boot.
+#
+# This is the only 0trust file on persistent disk, deliberately: without it
+# a reboot cannot rejoin the mesh unattended. The token below is scoped to
+# one region and role, pinned to this machine's public IP after its first
+# use, and revocable from the operator dashboard. It grants no access to
+# customer data and cannot read another node's peers.
+CONTROL_URL=$CONTROL_URL
+REGION=$REGION
+NODE_ROLE=$NODE_ROLE
+WG_PORT=$WG_PORT
+ZTV_PROVISION_TOKEN=$PROVISION_TOKEN
+ENV
+        chmod 600 "$ETC_NODE"
+    fi
+    ok "$ETC_NODE (root-only)"
+
+    # ------------------------------------------------------------------
+    log "Installing meshd and the enrolment unit"
+    # ------------------------------------------------------------------
+    if [[ $DRY_RUN -eq 0 ]]; then
+        install -d "$LIBDIR"
+        install -m 0755 "$REPO_DIR/wireguard/0trust-meshd.py" /usr/local/bin/0trust-meshd
+        # Copied rather than sourced from the checkout: this runs at boot, and
+        # a node should not depend on a git working tree still being there.
+        install -m 0644 "$REPO_DIR/scripts/node-runtime.sh" "$LIBDIR/node-runtime.sh"
+        install -m 0755 "$REPO_DIR/scripts/node-runtime-apply.sh" \
+                "$LIBDIR/node-runtime-apply.sh"
+        install -m 0755 "$REPO_DIR/scripts/node-enroll.sh" /usr/local/bin/0trust-node-enroll
+        install -m 0644 "$REPO_DIR/systemd/0trust-node-enroll.service" \
+                /etc/systemd/system/0trust-node-enroll.service
+        install -m 0644 "$REPO_DIR/systemd/0trust-meshd.service" \
+                /etc/systemd/system/0trust-meshd.service
+        systemctl daemon-reload
+        systemctl enable 0trust-node-enroll.service >/dev/null 2>&1 || true
+        systemctl enable 0trust-meshd.service >/dev/null 2>&1 || true
+    fi
+    ok "0trust-node-enroll.service, 0trust-meshd.service"
+
+    # ------------------------------------------------------------------
+    log "Firewall"
+    # ------------------------------------------------------------------
+    if [[ $DO_FIREWALL -eq 1 && $DRY_RUN -eq 0 ]]; then
+        ufw default deny incoming >/dev/null
+        ufw default allow outgoing >/dev/null
+        ufw allow 22/tcp comment 'ssh' >/dev/null
+        ufw allow "$WG_PORT/udp" comment '0trust wireguard' >/dev/null
+        ufw allow in on wg0 >/dev/null 2>&1 || true
+        # No `ufw allow 53`: the resolver binds the mesh gateway only. An open
+        # resolver on a public address is a DNS-amplification abuse report
+        # waiting to happen.
+        if [[ "$NODE_ROLE" == "entry" || "$NODE_ROLE" == "both" ]]; then
+            ufw allow 52000:59999/udp comment '0trust multi-hop' >/dev/null
+        fi
+        ufw --force enable >/dev/null
+    fi
+    ok "ufw: 22, $WG_PORT/udp$([[ "$NODE_ROLE" != exit ]] && echo ', 52000-59999/udp')"
+
+    # ------------------------------------------------------------------
+    log "Joining the mesh"
+    # ------------------------------------------------------------------
+    # One call. It generates the keypair, registers with the control plane and
+    # writes meshd's environment; there is nothing to copy back by hand, and
+    # no SQL for the operator to run on the control plane.
+    if [[ $DRY_RUN -eq 1 ]]; then
+        note "would run: 0trust-node-enroll && systemctl start 0trust-meshd"
+        printf '\n%s  Node install rendered (dry run).%s\n\n' "$GRN" "$NC"
+        exit 0
+    fi
+
+    systemctl start 0trust-node-enroll.service \
+        || die "enrolment failed — journalctl -u 0trust-node-enroll"
+    # shellcheck disable=SC1091
+    NODE_ID="$(grep -hoP '^NODE_ID=\K.*' /etc/0trust/meshd.env 2>/dev/null || true)"
+    [[ -n "$NODE_ID" ]] || die "enrolment produced no node id — journalctl -u 0trust-node-enroll"
+    ok "registered as $NODE_ID"
+
+    systemctl restart 0trust-meshd.service
+    ok "meshd running"
+
+    # ------------------------------------------------------------------
+    log "Node runtime: NAT, egress filter, resolver"
+    # ------------------------------------------------------------------
+    # These are applied by the enrolment unit on every boot as well; doing it
+    # here too means the box is correct now rather than after a reboot.
+    ok "applied by 0trust-node-enroll (nftables + dnsmasq)"
+
+    # ------------------------------------------------------------------
+    log "Verifying"
+    # ------------------------------------------------------------------
+    # A node that registered but is not reachable is the failure that hides:
+    # the control plane hands customers an endpoint, their handshakes time
+    # out, and meshd keeps heartbeating happily over its own outbound HTTPS.
+    sleep 3
+    WG_OK=0; wg show wg0 >/dev/null 2>&1 && WG_OK=1
+    if [[ $WG_OK -eq 1 ]]; then
+        ok "wg0 is up on port $(wg show wg0 listen-port 2>/dev/null)"
+    else
+        note "wg0 is not up yet — journalctl -u 0trust-meshd"
+    fi
+    if curl -fsS --max-time 15 "$CONTROL_URL/api/v1/regions" 2>/dev/null \
+         | grep -q "\"$REGION\""; then
+        ok "the control plane lists $REGION as live"
+    else
+        note "the control plane does not list $REGION yet — meshd heartbeats every 30s"
+    fi
+
+    PUBLIC_IP="$(grep -hoP '^PUBLIC_IP=\K.*' /var/0trust/enrol.state 2>/dev/null || echo '?')"
+    cat <<EOF
+
+  $NODE_ID is in the mesh.
+
+    region     $REGION ($NODE_ROLE)
+    endpoint   $PUBLIC_IP:$WG_PORT
+    disk       tmpfs — the WireGuard key and node PSK are RAM only
+    on reboot  0trust-node-enroll generates a new key and rejoins as $NODE_ID
+
+    status     systemctl status 0trust-meshd
+    logs       journalctl -u 0trust-meshd -f
+    leave      systemctl disable --now 0trust-meshd 0trust-node-enroll
+               then remove the node in the dashboard
+
+  Revoke this box's enrolment token from the dashboard if the machine is ever
+  out of your hands. The node keeps running on the PSK it already holds; it
+  simply cannot register again.
+
+EOF
+    exit 0
+fi
 
 # ----------------------------------------------------------------------------
 log "Installing packages"

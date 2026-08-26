@@ -1,0 +1,11 @@
+#!/bin/bash
+# Stub `systemctl`. Records what a node install would start, enable or
+# restart, so a test can assert on it without a service manager.
+echo "systemctl $*" >> "${STUB_LOG:-/dev/null}"
+S="${STUB_STATE:-/tmp}"
+case "$1" in
+  is-active) [ -e "$S/unit-$2.active" ] && { echo active; exit 0; } || { echo inactive; exit 3; } ;;
+  start|restart|enable) shift; for u in "$@"; do case "$u" in -*|--*) ;; *) touch "$S/unit-$u.active";; esac; done ;;
+  stop|disable) shift; for u in "$@"; do rm -f "$S/unit-$u.active"; done ;;
+esac
+exit 0

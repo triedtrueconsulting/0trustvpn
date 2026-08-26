@@ -5,6 +5,14 @@
 # Run on each WireGuard mesh node (entry/exit point).
 # This box should be SEPARATE from the control plane box.
 #
+# This is the MANUAL path: it sets a node up with a fixed id and the shared
+# node PSK, and leaves you to insert the row on the control plane yourself.
+# For a node that registers itself — and that can rejoin on its own after a
+# reboot, which this one cannot — use:
+#
+#   sudo ./scripts/install.sh --mode node --control-url https://<cp> \
+#        --region zur --provision-token <minted on the control plane>
+#
 # Usage:
 #   sudo CONTROL_URL=https://api.0trustvpn.com \
 #        NODE_API_PSK=<from /etc/0trust/api.env on control plane> \
@@ -77,7 +85,22 @@ ztv_meshd_env "$CONTROL_URL" "$NODE_API_PSK" "$NODE_ID" "$NODE_ROLE" \
 chmod 600 /etc/0trust/meshd.env
 
 cp "$REPO_DIR/systemd/0trust-meshd.service" /etc/systemd/system/0trust-meshd.service
+
+# The NAT and egress rules below are kernel state, and nothing on a stock
+# Ubuntu box replays them at boot — /etc/nftables.conf does not include
+# /etc/nftables.d. Without this unit the node came back from a reboot doing no
+# masquerading at all: customer traffic entered the tunnel and died silently,
+# while meshd went on heartbeating over its own outbound HTTPS and the control
+# plane kept routing customers here.
+install -d /usr/local/lib/0trust
+install -m 0644 "$REPO_DIR/scripts/node-runtime.sh" /usr/local/lib/0trust/node-runtime.sh
+install -m 0755 "$REPO_DIR/scripts/node-runtime-apply.sh" \
+        /usr/local/lib/0trust/node-runtime-apply.sh
+cp "$REPO_DIR/systemd/0trust-node-runtime.service" \
+   /etc/systemd/system/0trust-node-runtime.service
+
 systemctl daemon-reload
+systemctl enable 0trust-node-runtime.service >/dev/null 2>&1 || true
 systemctl enable --now 0trust-meshd.service
 
 # ----------------------------------------------------------------------------

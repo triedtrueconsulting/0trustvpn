@@ -1,6 +1,6 @@
 # Deploying on a fresh Ubuntu 24.04 VPS
 
-One script, two modes. Both are idempotent — re-run to pick up new code or to
+One script, three modes. All idempotent — re-run to pick up new code or to
 repair a half-finished run.
 
 ```bash
@@ -13,6 +13,11 @@ sudo ./scripts/install.sh --mode test
 # 2. Real deployment: domain + Let's Encrypt
 sudo ./scripts/install.sh --mode production \
      --domain 0trustvpn.com --email you@example.com
+
+# 3. A mesh node, joined to an existing control plane in one command
+sudo ./scripts/install.sh --mode node \
+     --control-url https://0trustvpn.com \
+     --region zur --role both --provision-token ztvp-...
 ```
 
 `--dry-run` renders everything and touches nothing, which is the safe way to
@@ -107,11 +112,18 @@ only care about the web side.
 
 ### Moving to real nodes
 
-Nothing about the control plane changes. Build each node with
-`scripts/bootstrap-node.sh` on its own VPS, then point the `mesh_nodes` rows at
-them — or add them from the dashboard's Nodes tab, which mints a one-shot
-provisioning token so the node registers itself. Delete the local rows when
-the real ones are live.
+Nothing about the control plane changes. Mint an enrolment token — dashboard
+**Nodes → Node enrolment token**, or `api/mint-provision-token.py` — and run
+one command on each VPS:
+
+```bash
+sudo ./scripts/install.sh --mode node \
+     --control-url https://<control plane> \
+     --region zur --role both --provision-token ztvp-...
+```
+
+The node registers itself, so there are no `mesh_nodes` rows to write. Delete
+the local placeholder rows once the real nodes are live.
 
 ## Mode 2 — production
 
@@ -131,11 +143,54 @@ Afterwards:
      spells out the trade-off.
    - Webhook URL: `https://<domain>/api/v1/payment/webhook`
 2. **Mesh nodes.** Until at least one exists, `/wg/register` returns 503.
-   `scripts/bootstrap-node.sh` for static nodes, or
-   `api/mint-provision-token.py` for RAM-only ephemeral ones.
+   `install.sh --mode node` on each VPS with a token from
+   `api/mint-provision-token.py`; `scripts/bootstrap-node.sh` if you want to
+   name the node yourself and insert its row by hand.
 3. **Backups.** Generate an age key and enable `0trust-backup.timer`
    (`docs/DR.md`).
 4. The rest of `docs/LAUNCH.md`: signing keys, warrant canary, legal review.
+
+## Mode 3 — node
+
+Turns a fresh VPS into a RAM-only mesh node and joins it to the mesh. It
+installs no control plane: no nginx, no database, no website, no wallet.
+
+| | |
+| --- | --- |
+| `/etc/wireguard`, `/etc/0trust`, `/var/0trust` | tmpfs — the private key and node PSK are RAM only |
+| swap | off, and removed from `/etc/fstab` |
+| journald | `Storage=volatile` |
+| `0trust-node-enroll.service` | fresh key + registration on **every** boot |
+| `0trust-meshd.service` | peer sync, DNAT, heartbeat |
+| `/etc/0trust-node.env` | root-only, persistent: the enrolment token |
+| dnsmasq | bound to the mesh gateway only, no query log |
+| nftables | masquerade + abuse egress filter, reapplied at boot |
+
+Get a token first — dashboard **Nodes → Node enrolment token**, or on the
+control plane:
+
+```bash
+sudo -u 0trust python3 api/mint-provision-token.py \
+     --region zur --role both --uses 20 --ttl 31536000
+```
+
+**One-shot vs enrolment token.** `--uses 1` is burned on first registration.
+That is fine for a box you will never restart, and wrong for anything else:
+the node's disk is RAM, so a reboot loses its key, its id and its PSK, and a
+burned token cannot bring it back. The box comes up and never rejoins, while
+the control plane keeps handing customers an endpoint whose key no longer
+exists. `--uses` above 1 mints a token that pins itself to the node's public
+IP on first use and re-registers that same node id afterwards.
+
+That token sits on the node's disk, which is a deliberate trade and the only
+0trust file there. It is scoped to one region and role, worthless from any
+other address, grants no access to customer data, cannot read another node's
+peers, and is revocable from the dashboard. Revoke it if the machine leaves
+your control: the node keeps running on the PSK it already holds, and simply
+cannot register again.
+
+If the provider changes the node's public IP, the pin stops matching — mint a
+new token and re-run the installer.
 
 ## Verifying a deployment
 
