@@ -264,6 +264,46 @@ check node-dns-no-query-log "In-tunnel resolver keeps no query log (mesh nodes)"
     }
 "
 
+check node-dns-encrypted-upstream "Upstream DNS leaves the node over TLS (mesh nodes)" -- bash -c "
+    # privacy.html \u00a74d says lookups reach Quad9 encrypted and
+    # authenticated, and that a failed TLS connection means no answer rather
+    # than a cleartext retry. Both halves are checkable here.
+    ip link show wg0 >/dev/null 2>&1 || exit 77
+    conf=/etc/dnsmasq.d/0trust.conf
+    [[ -f \$conf ]] || exit 77
+
+    # Every upstream dnsmasq has must be the local stub. One public resolver
+    # in this list and some fraction of queries leave in clear, chosen by
+    # whichever server dnsmasq felt like using.
+    bad=\$(grep -E '^server=' \$conf | grep -vE '^server=127\\.0\\.0\\.1#' || true)
+    if [[ -n \"\$bad\" ]]; then
+        echo \"dnsmasq forwards straight to a public resolver: \$bad\"
+        exit 1
+    fi
+
+    sconf=/etc/stubby/stubby.yml
+    [[ -f \$sconf ]] || {
+        echo 'dnsmasq points at a DoT stub but /etc/stubby/stubby.yml is missing'
+        exit 1
+    }
+    grep -q 'GETDNS_AUTHENTICATION_REQUIRED' \$sconf || {
+        echo 'stub does not require authentication - encrypted to whoever answered'
+        exit 1
+    }
+    grep -q 'tls_auth_name' \$sconf || {
+        echo 'stub checks no certificate name'
+        exit 1
+    }
+    if grep -qE 'GETDNS_TRANSPORT_(UDP|TCP)' \$sconf; then
+        echo 'a cleartext transport is in the stub list - strict mode is off'
+        exit 1
+    fi
+    systemctl is-active --quiet stubby || {
+        echo 'stubby is not running - the resolver has no upstream at all'
+        exit 1
+    }
+"
+
 section "§3. CONTROL-PLANE DATABASE (retention)"
 
 check db-no-abandoned-signups "No unpaid signups retained past 7 days" -- bash -c "

@@ -22,7 +22,7 @@ Also checked here, because both were only true by accident before:
     a stock Ubuntu box replays them, so an exit node came back from a reboot
     doing no NAT at all
 """
-import json, os, re, shutil, sqlite3, subprocess, sys, time
+import json, os, re, shutil, socket, sqlite3, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -264,6 +264,171 @@ try:
                    headers={"X-Provision-Token": rev})
     check("a revoked token cannot re-register, even from the bound box",
           st == 401, (st, b))
+
+    print("\n[8b] upstream DNS leaves the node encrypted, or not at all")
+    # dnsmasq used to forward straight to 9.9.9.9 over UDP 53. The tunnel
+    # encrypted the customer's half of the path and then published the other
+    # half: every hostname readable by the node's hosting provider and by
+    # anyone between them and Quad9.
+    import shutil as _sh
+    rt = os.path.join(H.REPO, "scripts", "node-runtime.sh")
+
+    def render(fn, env=None, args=""):
+        r = subprocess.run(["bash", "-c", f"source {rt}; {fn} {args}"],
+                           capture_output=True, text=True, timeout=60,
+                           env={**os.environ, **(env or {})})
+        return r.stdout
+
+    dnsconf = render("ztv_dnsmasq_conf", args="10.64.0.1")
+    check("dnsmasq forwards to the local DoT stub, not to a public resolver",
+          "server=127.0.0.1#5353" in dnsconf and "server=9.9.9.9" not in dnsconf,
+          dnsconf)
+    check("query logging is still off", "log-queries" not in dnsconf.replace(
+          "# Deliberately NOT set: log-queries", ""), dnsconf)
+
+    stubconf = render("ztv_stubby_conf")
+    check("the stub demands authentication, not just encryption",
+          "GETDNS_AUTHENTICATION_REQUIRED" in stubconf,
+          "without this the connection is encrypted to whoever answered")
+    check("and checks a certificate name",
+          'tls_auth_name: "dns.quad9.net"' in stubconf, stubconf)
+    check("TLS is the only transport offered",
+          "GETDNS_TRANSPORT_TLS" in stubconf and "TRANSPORT_UDP" not in stubconf,
+          "a UDP entry in this list turns strict mode off")
+
+    # The operator escape hatch has to work, and has to be loud.
+    plain = render("ztv_dnsmasq_conf", env={"ZTV_DNS_ENCRYPTED": "0"},
+                   args="10.64.0.1")
+    check("ZTV_DNS_ENCRYPTED=0 goes back to plain resolvers",
+          "server=9.9.9.9" in plain, plain)
+    check("and says in the file that queries now leave in clear",
+          "in clear" in plain, plain)
+
+    if _sh.which("stubby"):
+        # A real file: stubby seeks in its config, so /dev/stdin fails with
+        # "Illegal seek" and would look like a rejected config.
+        sconf = os.path.join(TMP, "stubby.yml")
+        open(sconf, "w").write(stubconf)
+        r = subprocess.run(["stubby", "-C", sconf, "-i"],
+                           capture_output=True, text=True, timeout=60)
+        check("stubby itself accepts the config",
+              r.returncode == 0 or "Strict" in (r.stdout + r.stderr),
+              (r.stdout + r.stderr)[-300:])
+        # Read the settings back out of stubby's own parse, not out of the
+        # file we just wrote: what matters is what stubby resolved them to.
+        parsed = r.stdout + r.stderr
+        check("stubby resolves it to authentication-required",
+              "GETDNS_AUTHENTICATION_REQUIRED" in parsed, parsed[-300:])
+        check("with TLS as the only transport it will use",
+              "GETDNS_TRANSPORT_TLS" in parsed
+              and "GETDNS_TRANSPORT_UDP" not in parsed,
+              "any other transport in this list silently drops strict mode")
+    else:
+        print("      (stubby not installed — config not run)")
+
+    if _sh.which("dnsmasq"):
+        conf = os.path.join(TMP, "dnsmasq.conf")
+        open(conf, "w").write(dnsconf.replace("listen-address=10.64.0.1",
+                                              "listen-address=127.0.0.1"))
+        r = subprocess.run(["dnsmasq", "--test", "--conf-file=" + conf],
+                           capture_output=True, text=True, timeout=60)
+        check("dnsmasq accepts the config", r.returncode == 0,
+              (r.stdout + r.stderr)[-300:])
+
+        # The property that matters: with the stub down, it must not answer.
+        # A resolver that quietly falls back to cleartext when TLS fails is
+        # the same leak with an extra step, and nobody would ever notice.
+        port = H.pick_port()
+        proc = subprocess.Popen(
+            ["dnsmasq", "--keep-in-foreground", "--conf-file=" + conf,
+             f"--port={port}", "--listen-address=127.0.0.1",
+             "--bind-interfaces", "--no-daemon",
+             "--pid-file=" + os.path.join(TMP, "dnsmasq.pid")],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+        import struct, random as _rnd
+        tid = _rnd.randint(0, 65535)
+        pkt = struct.pack(">HHHHHH", tid, 0x0100, 1, 0, 0, 0)
+        for lbl in ("example", "com"):
+            pkt += bytes([len(lbl)]) + lbl.encode()
+        pkt += b"\x00" + struct.pack(">HH", 1, 1)
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sk.settimeout(6)
+        answers = None
+        try:
+            sk.sendto(pkt, ("127.0.0.1", port))
+            data, _ = sk.recvfrom(4096)
+            answers = struct.unpack(">H", data[6:8])[0]
+        except socket.timeout:
+            answers = 0
+        finally:
+            sk.close(); proc.terminate()
+            try: proc.wait(timeout=5)
+            except Exception: proc.kill()
+        check("with the DoT stub down it answers nothing, rather than "
+              "resolving in clear", answers == 0,
+              f"{answers} answers came back with no encrypted upstream running")
+    else:
+        print("      (dnsmasq not installed — resolver not run)")
+
+    print("\n[8c] the node's own footprint")
+    # None of this is obfuscation and the docs must not imply it is. What it
+    # is: not announcing the tunnel on WireGuard's registered port, and not
+    # beaconing on a metronome that netflow alone can pick out.
+    md = os.path.join(H.REPO, "wireguard", "0trust-meshd.py")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("meshd_mod", md)
+    meshd = importlib.util.module_from_spec(spec)
+    os.environ.setdefault("CONTROL_URL", H.API)
+    os.environ.setdefault("NODE_API_PSK", H.NODE_PSK)
+    os.environ.setdefault("NODE_ID", "zur-01")
+    spec.loader.exec_module(meshd)
+
+    vals = [meshd.next_interval() for _ in range(500)]
+    check("the check-in interval is not a metronome",
+          len(set(round(v, 3) for v in vals)) > 400,
+          "a fixed-period beacon to a fixed host is a shape in netflow")
+    check("and stays in a sane band around the configured interval",
+          all(1.0 <= v <= meshd.POLL_INTERVAL * 2 for v in vals),
+          f"min={min(vals):.1f} max={max(vals):.1f}")
+
+    r = subprocess.run(
+        ["bash", "-c",
+         f'ZTV_POLL_JITTER=0 {sys.executable} -c '
+         f'\'import importlib.util,os;'
+         f'os.environ.update(CONTROL_URL="x",NODE_API_PSK="x",NODE_ID="n");'
+         f's=importlib.util.spec_from_file_location("m","{md}");'
+         f'm=importlib.util.module_from_spec(s);s.loader.exec_module(m);'
+         f'print(m.next_interval())\''],
+        capture_output=True, text=True, timeout=60)
+    check("an operator can turn the jitter off", r.stdout.strip() == "30.0",
+          (r.stdout + r.stderr)[-200:])
+
+    # A node on 443 has to be REGISTERED on 443, or the camouflage costs the
+    # customer their connection — which is the bug this suite already caught
+    # once for arbitrary ports.
+    box443 = os.path.join(TMP, "box443"); os.makedirs(box443)
+    tok443 = mint(region="rey", uses=3)
+    env443 = node_env(box443, tok443, region="rey", port=443)
+    r = enroll(box443, env443, public_ip="203.0.113.201")
+    check("a node can run the tunnel on udp 443", r.returncode == 0,
+          (r.stdout + r.stderr)[-400:])
+    row = rows("SELECT * FROM mesh_nodes WHERE public_ip = ?",
+               ("203.0.113.201",))
+    check("and is advertised there", bool(row)
+          and row[0]["endpoint"] == "203.0.113.201:443",
+          row[0]["endpoint"] if row else "no row")
+
+    # The claim discipline: nothing may say the tunnel is hidden.
+    deploy = open(os.path.join(H.REPO, "docs", "DEPLOY.md")).read()
+    check("the docs say plainly that DPI identifies this",
+          "deep packet" in deploy.lower() and "not obfuscated" in deploy.lower(),
+          "a VPN implying stealth it does not have is the worst claim to get "
+          "wrong — people route real risk through it")
+    for page in ("index.html", "help.html", "privacy.html"):
+        txt = open(os.path.join(H.REPO, "web", page)).read().lower()
+        bad = [w for w in ("obfuscat", "undetectable", "stealth",
+                           "bypass censorship", "great firewall") if w in txt]
+        check(f"web/{page} claims no stealth", not bad, bad)
 
     print("\n[9] the sweeper does not delete a token a live node still needs")
     # The sweeper prunes provisioning tokens a day after use, on the reasoning

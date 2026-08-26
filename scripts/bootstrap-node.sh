@@ -52,7 +52,8 @@ log "Installing WireGuard + tooling"
 # ----------------------------------------------------------------------------
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq wireguard wireguard-tools python3 ufw nftables iptables dnsmasq
+apt-get install -y -qq wireguard wireguard-tools python3 ufw nftables iptables \
+                       dnsmasq stubby ca-certificates
 
 # ----------------------------------------------------------------------------
 log "Enabling IP forwarding (exit node functionality)"
@@ -124,6 +125,13 @@ log "Mesh resolver"
 # listening there, so a customer connected successfully and then could not
 # resolve a single name — a tunnel that looks broken to everyone using it.
 MESH_GW="${MESH_GATEWAY%%/*}"
+if command -v stubby >/dev/null; then
+    mkdir -p /etc/stubby
+    ztv_stubby_conf > /etc/stubby/stubby.yml
+    systemctl enable stubby >/dev/null 2>&1 || true
+    systemctl restart stubby >/dev/null 2>&1 \
+        || log "stubby did not start — journalctl -u stubby"
+fi
 mkdir -p /etc/dnsmasq.d
 ztv_dnsmasq_conf "$MESH_GW" > /etc/dnsmasq.d/0trust.conf
 systemctl enable dnsmasq >/dev/null 2>&1 || true

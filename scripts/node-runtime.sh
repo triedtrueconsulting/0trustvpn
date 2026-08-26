@@ -20,8 +20,29 @@ ZTV_CLIENT_NET="${ZTV_CLIENT_NET:-10.64.0.0/10}"
 # masquerades v6 exactly as it does v4 — so what a site sees is the node.
 ZTV_CLIENT_NET6="${ZTV_CLIENT_NET6:-fd0e:5f7a:c21b::/48}"
 
-# Resolvers dnsmasq forwards to. Quad9 by default: a documented no-logging
-# policy, which is the least we can do given customers cannot see this choice.
+# --- Upstream DNS ----------------------------------------------------------
+# The resolver inside the tunnel answers from cache and forwards the rest.
+# What it forwards over used to be plain UDP 53 to Quad9, which meant every
+# hostname a customer looked up was readable on the node's uplink — by the
+# hosting provider and by anyone between them and Quad9. The tunnel encrypted
+# the customer's half of that path and then published the other half.
+#
+# So dnsmasq now forwards to a local DNS-over-TLS stub instead, and the
+# queries leave the node encrypted and authenticated against the resolver's
+# certificate. Quad9 still sees them — it has to, it is answering them — and
+# privacy.html says so. What changes is that nobody else does.
+ZTV_DNS_ENCRYPTED="${ZTV_DNS_ENCRYPTED:-1}"
+# Where the DoT stub listens. dnsmasq is the only thing that talks to it.
+ZTV_DNS_STUB="${ZTV_DNS_STUB:-127.0.0.1#5353}"
+# The DoT upstreams, as "address@port#tls-authentication-name". The name is
+# what the certificate is checked against, so it is not decoration: without
+# it the connection is encrypted to whoever answered, which is not the same
+# thing as encrypted to Quad9.
+ZTV_DNS_TLS_UPSTREAM="${ZTV_DNS_TLS_UPSTREAM:-9.9.9.9@853#dns.quad9.net 149.112.112.112@853#dns.quad9.net}"
+# Plain resolvers. Used only when ZTV_DNS_ENCRYPTED=0 — an operator who would
+# rather have DNS that keeps working on a network that blocks 853 than DNS
+# that stays private. Failing closed is the default because a VPN quietly
+# downgrading to cleartext DNS is worse than one that stops resolving.
 ZTV_DNS_UPSTREAM="${ZTV_DNS_UPSTREAM:-9.9.9.9 149.112.112.112}"
 
 
@@ -128,7 +149,18 @@ domain-needed
 bogus-priv
 
 EOF
-    for up in $ZTV_DNS_UPSTREAM; do echo "server=$up"; done
+    if [[ "$ZTV_DNS_ENCRYPTED" == "1" ]]; then
+        # One upstream, the local DoT stub. Listing plain resolvers alongside
+        # it would let dnsmasq pick either, and the one it picked on any given
+        # query would decide whether that hostname crossed the internet in
+        # clear — a coin flip is not a privacy property.
+        echo "server=${ZTV_DNS_STUB/\#/#}"
+        echo "# Upstream is the local DNS-over-TLS stub (see ztv_stubby_conf)."
+    else
+        for up in $ZTV_DNS_UPSTREAM; do echo "server=$up"; done
+        echo "# WARNING: ZTV_DNS_ENCRYPTED=0 — these queries leave in clear."
+        echo "# web/privacy.html 4d describes the encrypted path this replaces."
+    fi
     cat <<'EOF'
 
 cache-size=1000
@@ -139,6 +171,49 @@ cache-size=1000
 # know that docs/AUDIT.md's claims are false for as long as it is on.
 EOF
     }
+}
+
+
+# --- DNS-over-TLS stub ------------------------------------------------------
+# stubby, listening only on loopback, in front of dnsmasq. Authentication is
+# by certificate name against the system CA store — no pinned key to go stale
+# and no resolver list to fetch at boot, so a node that comes up on a network
+# having a bad morning still resolves as soon as it can reach 853.
+#
+# strict mode on purpose: if the TLS connection cannot be made and verified,
+# the query fails. It does not quietly retry in the clear. A customer whose
+# DNS stops working notices; a customer whose DNS silently downgrades does
+# not, and that is the failure this whole change exists to remove.
+ztv_stubby_conf() {
+    local addr="${ZTV_DNS_STUB%%#*}" port="${ZTV_DNS_STUB##*#}"
+    cat <<EOF
+# 0trust upstream DNS. Managed by scripts/node-runtime.sh.
+resolution_type: GETDNS_RESOLUTION_STUB
+
+# GETDNS_AUTHENTICATION_REQUIRED: no certificate, no answer.
+dns_transport_list:
+  - GETDNS_TRANSPORT_TLS
+tls_authentication: GETDNS_AUTHENTICATION_REQUIRED
+tls_query_padding_blocksize: 128
+edns_client_subnet_private: 1
+
+idle_timeout: 10000
+round_robin_upstreams: 1
+
+listen_addresses:
+  - $addr@$port
+
+upstream_recursive_servers:
+EOF
+    for up in $ZTV_DNS_TLS_UPSTREAM; do
+        local host="${up%%@*}" rest="${up#*@}"
+        local uport="${rest%%#*}" name="${rest##*#}"
+        cat <<EOF
+  - address_data: $host
+    tls_port: $uport
+    tls_auth_name: "$name"
+EOF
+    done
 }
 
 
