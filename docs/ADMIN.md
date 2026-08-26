@@ -75,10 +75,25 @@ That is what lets it work on a box with no domain and no certificate. If the
 explorer is unreachable for a whole run you get a `payments.explorer_down`
 event, because an outage there looks exactly like nobody buying anything.
 
-It is Bitcoin only, on purpose: Monero and Zcash addresses cannot be derived
-from a public key without wallet software, and giving every customer the same
-address would break both attribution and their privacy. For more coins, run
-BTCPay and switch the provider over. Invoices can be credited by
+It takes three coins, and it offers exactly the ones this deployment has a
+wallet for — a coin with nothing behind it never appears at checkout, because
+sending a customer to an address that does not exist is worse than not
+offering it.
+
+**BTC and ZEC** derive a fresh address per invoice from the account xpub you
+paste, and a public explorer is asked whether that address was paid. Zcash
+means **transparent** t1 addresses: a shielded address cannot be derived from
+a public key, and no explorer can tell you it was paid — that is what makes
+it shielded.
+
+**XMR** has no address to paste, for the same reason turned all the way up.
+The Monero chain publishes neither the recipient nor the amount, so detection
+needs the private view key and a scan of every block. That is a wallet, not a
+derivation. `scripts/setup-monero-watch.sh` stands up a view-only
+`monero-wallet-rpc` against a public remote node: no chain on disk, and
+nothing on this box can spend. Set `MONERO_WALLET_RPC` and XMR appears.
+
+Invoices can be credited by
 hand for the case every crypto operator eventually hits: the payment landed
 on chain but the webhook never arrived. That path runs through the same
 credit-once guard as a webhook, so using it twice cannot double an

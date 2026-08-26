@@ -433,6 +433,10 @@ is fixed; a backup cannot contain data the schema doesn't store.
 | Let's Encrypt | LE / EFF | The domain `0trustvpn.com`. No customer data. |
 | DNS provider | (operator's choice) | DNS queries for `0trustvpn.com`. No customer data. |
 | Quad9 (`9.9.9.9`) | Upstream for the in-tunnel resolver, over DNS-over-TLS (RFC 7858, port 853), authenticated against `dns.quad9.net` | Customer DNS queries, sourced from the exit node's address. Not attributable to an account, and not readable by anyone between the node and Quad9. Configurable per deployment (`ZTV_DNS_TLS_UPSTREAM`); `ZTV_DNS_ENCRYPTED=0` reverts to cleartext UDP 53 and the resolver config says so in a comment. Verified by `node-dns-encrypted-upstream`. |
+| Bitcoin explorer (`mempool.space` by default) | Asks whether a derived BTC address has been paid | One receive address per invoice, and the fact that somebody is watching it. No account identifier is ever sent. Configurable (`NODE_RPC_BTC`); any Esplora instance, including your own. |
+| Zcash explorer (`api.blockchair.com/zcash` by default) | The same question for a transparent ZEC address | As above. Configurable (`NODE_RPC_ZEC`); Blockchair and Esplora shapes are both read, chosen from the URL. **Transparent addresses only** — shielded ones cannot be watched from a public key, and are not offered. |
+| Kraken public ticker | USD → coin conversion when an invoice is opened | Nothing but the pair name. No account, no key. Configurable (`ZTV_PRICE_API`). |
+| A Monero remote node (operator's choice) | Blocks for the view-only wallet to scan | That an IP is scanning the chain. It cannot see the wallet's keys, its balance, or which outputs are the operator's. Configured on `monero-wallet-rpc` itself (`--daemon-address`), not by the control plane. |
 | Hosting provider | (operator's choice) | Network metadata visible at the IP layer; no application data. |
 | cdnjs.cloudflare.com | n/a | RESOLVED — the landing page now self-hosts vendored JS from `/vendor/`. See `scripts/vendor-third-party.sh`. |
 

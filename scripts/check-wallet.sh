@@ -18,6 +18,7 @@
 #   ./scripts/check-wallet.sh                        # read /etc/0trust/api.env
 #   ./scripts/check-wallet.sh zpub6q...              # check a key before use
 #   ./scripts/check-wallet.sh --count 5 zpub6q...
+#   ./scripts/check-wallet.sh --coin ZEC zpub6q...   # Zcash t1… addresses
 #   ./scripts/check-wallet.sh --pin zpub6q...        # record a NEW wallet
 #   ./scripts/check-wallet.sh --no-pin zpub6q...     # derive only, no compare
 #
@@ -32,11 +33,13 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COUNT=3
 KEY=""
+COIN="BTC"
 PIN_MODE="compare"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --count) COUNT="${2:-3}"; shift 2 ;;
+        --coin)  COIN="$(printf '%s' "${2:-BTC}" | tr a-z A-Z)"; shift 2 ;;
         --env)   ENVFILE="${2:-}"; shift 2 ;;
         --pin)      PIN_MODE="record"; shift ;;
         --no-pin)   PIN_MODE="skip";   shift ;;
@@ -63,6 +66,7 @@ PY="${ZTV_PYTHON:-python3}"
 [[ -x "$REPO_DIR/.venv/bin/python" ]] && PY="$REPO_DIR/.venv/bin/python"
 
 KEY="$KEY" COUNT="$COUNT" PINFILE="$PINFILE" PIN_MODE="$PIN_MODE" \
+    COIN="$COIN" \
     "$PY" - "$REPO_DIR" <<'PYEOF'
 import hashlib, os, re, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "api"))
@@ -70,6 +74,7 @@ import chainwatch
 
 key = os.environ["KEY"].strip()
 count = int(os.environ["COUNT"])
+coin = os.environ.get("COIN", "BTC").upper()
 pinfile = os.environ["PINFILE"]
 pin_mode = os.environ["PIN_MODE"]
 
@@ -88,8 +93,9 @@ if reused:
     # payments.WatchOnlyProvider accepts a bare address and reuses it, so this
     # is a real configuration and must not read as a broken one — but it is
     # the worse one, and the operator should hear that here too.
-    if not re.fullmatch(r'(bc1[02-9ac-hj-np-z]{11,71}|[13][1-9A-HJ-NP-Za-km-z]{25,34})',
-                        key):
+    if not re.fullmatch(r'(bc1[02-9ac-hj-np-z]{11,71}'
+                        r'|[13][1-9A-HJ-NP-Za-km-z]{25,34}'
+                        r'|t[13][1-9A-HJ-NP-Za-km-z]{25,34})', key):
         print("REFUSED: that is neither an extended public key nor a Bitcoin "
               "address.", file=sys.stderr)
         print("  A wrong key does not fail at runtime — it quietly issues "
@@ -98,15 +104,20 @@ if reused:
     addrs = [key]
 else:
     try:
-        addrs = [chainwatch.receive_address(key, i) for i in range(count)]
+        addrs = [chainwatch.receive_address(key, i, coin=coin)
+                 for i in range(count)]
     except Exception as e:
         print(f"REFUSED: {type(e).__name__}: {e}", file=sys.stderr)
         print("  The key did not parse. A wrong key does not fail at runtime — "
               "it quietly issues addresses you cannot spend.", file=sys.stderr)
         sys.exit(1)
 
-kind = {"x": "BIP44 legacy (1…)", "y": "BIP49 wrapped segwit (3…)",
-        "z": "BIP84 native segwit (bc1…)"}.get(key[0], "unknown")
+if coin == "ZEC":
+    kind = "Zcash transparent (t1…) — shielded addresses cannot be watched"
+else:
+    kind = {"x": "BIP44 legacy (1…)", "y": "BIP49 wrapped segwit (3…)",
+            "z": "BIP84 native segwit (bc1…)"}.get(key[0], "unknown")
+print(f"coin  {coin}")
 print(f"key   {key[:20]}…{key[-6:]}")
 if reused:
     print("type  a single address, reused for every invoice")

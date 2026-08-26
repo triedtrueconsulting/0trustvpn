@@ -120,6 +120,56 @@ try:
     except ValueError:
         check("hardened child is refused", True)
 
+    print("\n[7] Zcash transparent addresses")
+    # A t-addr is Bitcoin's construction — secp256k1, hash160, base58check —
+    # with a two-byte version prefix instead of one. That is why it reuses the
+    # derivation above rather than having its own: the arithmetic is already
+    # checked against the BIP32/BIP84 vectors, and a second implementation
+    # would be a second thing to get subtly wrong.
+    #
+    # Checked here against a base58check written out independently below, not
+    # against what chainwatch produced. Comparing the code to its own output
+    # proves nothing, which is the rule the rest of this file follows.
+    def b58check_independent(payload: bytes) -> str:
+        alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+        chk = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+        raw = payload + chk
+        n, out = int.from_bytes(raw, "big"), ""
+        while n:
+            n, r = divmod(n, 58)
+            out = alphabet[r] + out
+        return "1" * (len(raw) - len(raw.lstrip(b"\x00"))) + out
+
+    key = cw.ExtendedPubkey(ZPUB).child(0).child(0)
+    h160 = key.hash160()
+    zaddr = cw.receive_address(ZPUB, 0, coin="ZEC")
+    expected_zaddr = b58check_independent(b"\x1c\xb8" + h160)
+    check("t-addr matches an independent base58check",
+          zaddr == expected_zaddr, f"{zaddr} vs {expected_zaddr}")
+    # The same hash160 under Bitcoin's prefix has to give Bitcoin's address
+    # for the vector key, which ties the Zcash path to an externally
+    # verifiable number through the code they share.
+    check("and the shared hash160 still yields the BTC vector address",
+          cw.receive_address(ZPUB, 0, coin="BTC")
+          == "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",
+          cw.receive_address(ZPUB, 0, coin="BTC"))
+
+    addrs = [cw.receive_address(ZPUB, i, coin="ZEC") for i in range(25)]
+    check("every t-addr has the mainnet t1 prefix",
+          all(a.startswith("t1") for a in addrs), addrs[:3])
+    check("all 35 characters", {len(a) for a in addrs} == {35},
+          sorted({len(a) for a in addrs}))
+    check("and every index gives a different one",
+          len(set(addrs)) == len(addrs), "index reuse would merge customers")
+
+    # A coin nobody has implemented must fail loudly, not fall through to
+    # Bitcoin and hand out an address on the wrong chain.
+    try:
+        cw.receive_address(ZPUB, 0, coin="DOGE")
+        check("an unknown coin is refused", False, "it derived something")
+    except ValueError:
+        check("an unknown coin is refused", True)
+
 finally:
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL: print("  failures: " + ", ".join(FAIL))

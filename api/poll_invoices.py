@@ -87,7 +87,7 @@ def main() -> int:
 
     rows = conn.execute(
         """SELECT id, account_id, months, payment_address, amount_crypto,
-                  created_at
+                  created_at, pay_currency, derivation_index
              FROM invoices
             WHERE status = 'pending'
               AND payment_address IS NOT NULL
@@ -99,17 +99,28 @@ def main() -> int:
 
     settled = checked = 0
     for inv in rows:
+        # Atomic units per coin. This was hardcoded to 1e8, which is right for
+        # Bitcoin and Zcash and wrong by four orders of magnitude for Monero:
+        # a 1 XMR invoice would have been treated as owing 100 million
+        # piconero, and the first dust payment would have settled it.
+        coin = (inv["pay_currency"] or "BTC").upper()
+        units = payments.COIN_UNITS.get(coin)
+        if units is None:
+            log.warning("invoice %s is in an unknown currency %r",
+                        inv["id"], coin)
+            continue
         try:
-            sats = int(round(float(inv["amount_crypto"] or 0) * 100_000_000))
+            atomic = int(round(float(inv["amount_crypto"] or 0) * units))
         except (TypeError, ValueError):
             log.warning("invoice %s has an unreadable amount", inv["id"])
             continue
         try:
-            result = prov.check(inv["payment_address"], sats)
+            result = prov.check(inv["payment_address"], atomic, coin=coin,
+                                ref=inv["derivation_index"])
         except payments.PaymentError as e:
             # One unreachable explorer must not stop the rest of the batch,
             # and must not look like "nobody has paid".
-            log.warning("explorer check failed for %s: %s", inv["id"], e)
+            log.warning("chain check failed for %s (%s): %s", inv["id"], coin, e)
             continue
         checked += 1
         if result["status"] != payments.SETTLED:
@@ -118,8 +129,9 @@ def main() -> int:
         try:
             if credit(conn, inv, now):
                 settled += 1
-                log.info("settled %s (%d sats at %s)", inv["id"],
-                         result["confirmed_sats"], inv["payment_address"])
+                log.info("settled %s (%d atomic %s at %s)", inv["id"],
+                         result["confirmed_sats"], coin,
+                         inv["payment_address"])
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

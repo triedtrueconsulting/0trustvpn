@@ -125,14 +125,30 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   write a coin into copy that the default provider cannot issue an address
   for: `test_site.py` fails on it, and it once shipped a MONERO ACCEPTED
   ticker over a deployment that could only take BTC.
-- **Exactly one public chain endpoint is contacted, and only for BTC.** The
-  `watch` provider talks to an Esplora API — `mempool.space/api` by default,
-  overridable per deployment with `NODE_RPC_BTC` (blockstream.info/api, or
-  your own Esplora). Two calls: `GET /address/<addr>` for settlement and
-  `GET /v1/prices` for the USD rate. `NODE_RPC_ETH`, `NODE_RPC_XMR` and
-  `NODE_RPC_ZEC` are settings with **no consumer in the codebase** — under
-  `btcpay` or `hosted`, that provider's own infrastructure watches those
-  chains, and `currencies_for("watch")` correctly returns BTC alone.
+- **The `watch` provider takes BTC, ZEC and XMR, and the three do NOT work
+  the same way.** BTC and ZEC derive a fresh address per invoice from the
+  operator's extended PUBLIC key (`chainwatch.py`) and ask a public explorer
+  whether it was paid — Esplora for BTC (`NODE_RPC_BTC`), Blockchair or
+  Esplora for ZEC (`NODE_RPC_ZEC`), the reader chosen from the URL. **Zcash
+  means TRANSPARENT t1 addresses only**; shielded ones cannot be derived from
+  a public key or seen by an explorer, and are never offered.
+  **Monero has neither.** The chain publishes no recipient and no amount, so
+  no explorer can answer for it — detection needs the private view key and a
+  block scan. `monerowatch.py` talks JSON-RPC to a view-only
+  `monero-wallet-rpc` (`MONERO_WALLET_RPC`) pointed at a public remote node:
+  no chain on disk, no spending authority, a subaddress per invoice allocated
+  by the wallet. Never write a Monero scanner here.
+- **Atomic units are per coin: 1e8 for BTC and ZEC, 1e12 for XMR**
+  (`payments.COIN_UNITS`). The poller hardcoded 1e8, which made a dust
+  payment settle a whole XMR invoice. Never compare amounts as floats.
+- **`currencies_for("watch")` asks the provider, and the provider asks the
+  configuration.** A coin with no wallet behind it is not offered — otherwise
+  the checkout sends a customer to an address that does not exist. Adding a
+  coin means adding a wallet setting AND a way to be told it was paid.
+- **USD conversion is its own dependency** (`ZTV_PRICE_API`, Kraken by
+  default). It used to come from Esplora's `/v1/prices`, which only
+  mempool.space serves — pointing `NODE_RPC_BTC` at another Esplora silently
+  broke invoice creation while address lookups kept working.
 - **No self-hosted blockchain node.** `ZTV_PAYMENT_PROVIDER` picks between
   `watch` (default: derive a receive address per invoice from the operator's
   own xpub and confirm via a public explorer — non-custodial, no account

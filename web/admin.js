@@ -457,12 +457,14 @@ const GROUP_LABELS = {
   payments: 'Active provider', btcpay: 'BTCPay Server',
   hosted: 'Hosted crypto gateway', stripe: 'Stripe (cards)',
   square: 'Square (cards)', wallets: 'Business wallets',
+  monero: 'Monero (view-only wallet)',
   chain: 'Public chain endpoints', trial: 'Free trial', ops: 'Operations',
   other: 'Other',
 };
 const GROUP_NOTES = {
-  wallets: 'Where funds actually land. The watch-only provider derives a fresh receive address per invoice from the BTC xpub — paste the PUBLIC key (xpub/ypub/zpub), never a private one. A plain address works but is reused for every customer, which makes two payments of the same amount impossible to tell apart. The other wallet fields are reference only; no provider reads them yet.',
-  chain: 'Whose node we borrow. This deployment never syncs a chain locally. Only the BTC endpoint is consulted, by the watch-only provider; leave it blank for mempool.space. The others are reference only until a provider reads them.',
+  wallets: 'Where funds actually land. The watch-only provider derives a fresh receive address per invoice from these — paste the PUBLIC key (xpub/ypub/zpub), never a private one. A plain address works but is reused for every customer, which makes two payments of the same amount impossible to tell apart. BTC and ZEC are live; ZEC means transparent t1 addresses, since shielded ones cannot be watched from a public key. ETH is read only by BTCPay and hosted gateways.',
+  monero: 'Monero has no address to paste. The chain publishes neither recipient nor amount, so detecting a payment needs the private view key and a block scan — a wallet, not a derivation. Point this at a monero-wallet-rpc running VIEW-ONLY against a public remote node: no chain on disk, and nothing here can spend. scripts/setup-monero-watch.sh walks it. Leave the URL blank and XMR is simply not offered at checkout.',
+  chain: 'Whose node we borrow. This deployment never syncs a chain locally. The BTC endpoint speaks Esplora (blank = mempool.space); the ZEC one speaks Blockchair or Esplora, chosen automatically from the URL. The price ticker converts USD to each coin — blank uses Kraken\'s public endpoint, which needs no account. The ETH row is reference only; nothing reads it.',
   stripe: 'Cards mean a real identity behind every payment, and a processor that can reverse one. See privacy.html before enabling.',
   square: 'Same trade-off as Stripe: identity behind the card, reversible payments, a third party in the middle.',
   ops: 'Where node-down and disk alerts get pushed. Any endpoint that takes a JSON POST — Slack, ntfy, Discord, your own. Leave it blank and events still appear under Events; the webhook is only a nudge.',
