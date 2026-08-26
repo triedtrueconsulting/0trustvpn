@@ -156,6 +156,39 @@ def bech32_encode(hrp: str, witver: int, witprog: bytes) -> str:
 
 # --- BIP32 public derivation ------------------------------------------------
 
+def b58check(payload: bytes) -> str:
+    """base58(payload || first 4 bytes of SHA256d(payload))."""
+    body = payload + hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+    num = int.from_bytes(body, "big")
+    out = ""
+    while num:
+        num, rem = divmod(num, 58)
+        out = _B58[rem] + out
+    # Every leading zero byte is one leading '1' that the integer lost.
+    return "1" * (len(body) - len(body.lstrip(b"\x00"))) + out
+
+
+# Coins this file can derive a receive address for.
+#
+# The rule for adding one: it must be derivable from an extended PUBLIC key
+# alone, and a third party must be able to tell us it was paid. Both hold for
+# Bitcoin and for Zcash's TRANSPARENT addresses, which are Bitcoin's
+# construction with a different prefix.
+#
+# Neither holds for a Zcash SHIELDED address or for Monero. Those are private
+# by design: the chain does not reveal who was paid, so no explorer can answer
+# "did this address receive money" — that is the whole point of them. Watching
+# for those payments needs a viewing key and a scanner, which is a wallet, not
+# a derivation. api/monerowatch.py does it the only honest way.
+COINS = {
+    "BTC": {"kind": "bech32", "hrp": "bc", "p2pkh": b"\x00", "decimals": 8,
+            "name": "Bitcoin"},
+    # t1… — P2PKH transparent. Two-byte prefix, unlike Bitcoin's one.
+    "ZEC": {"kind": "base58", "hrp": None, "p2pkh": b"\x1c\xb8", "decimals": 8,
+            "name": "Zcash"},
+}
+
+
 class ExtendedPubkey:
     """
     An account-level extended public key (xpub / ypub / zpub / tpub / vpub).
@@ -212,31 +245,45 @@ class ExtendedPubkey:
         clone.key = _serialize(child_point)
         return clone
 
-    def address(self) -> str:
-        """The receive address for this exact key."""
-        h160 = hashlib.new("ripemd160", hashlib.sha256(self.key).digest()).digest()
-        if self.style == "p2wpkh":
-            return bech32_encode(self.hrp, 0, h160)
-        # Legacy P2PKH, for an operator who pasted a plain xpub.
-        prefix = b"\x00" if self.hrp == "bc" else b"\x6f"
-        body = prefix + h160
-        checksum = hashlib.sha256(hashlib.sha256(body).digest()).digest()[:4]
-        num = int.from_bytes(body + checksum, "big")
-        out = ""
-        while num:
-            num, rem = divmod(num, 58)
-            out = _B58[rem] + out
-        return "1" * (len(body + checksum) - len((body + checksum).lstrip(b"\x00"))) + out
+    def hash160(self) -> bytes:
+        """RIPEMD160(SHA256(pubkey)) — the payload of every P2PKH-style address."""
+        return hashlib.new("ripemd160", hashlib.sha256(self.key).digest()).digest()
+
+    def address(self, coin: str = "BTC") -> str:
+        """
+        The receive address for this exact key, in `coin`'s encoding.
+
+        Zcash transparent addresses are the same construction as Bitcoin's:
+        secp256k1 pubkey, hash160, base58check. The only difference is a
+        two-byte version prefix, which is why this takes a coin rather than
+        having a second derivation path to keep in step with the first. The
+        arithmetic above is checked against BIP32/BIP84 vectors, and ZEC
+        inherits that verification by reusing it rather than reimplementing.
+        """
+        h160 = self.hash160()
+        spec = COINS.get(coin.upper())
+        if spec is None:
+            raise ValueError(f"unsupported coin {coin!r}")
+
+        if spec["kind"] == "bech32":
+            if self.style != "p2wpkh":
+                # A plain xpub is BIP44; encoding its key as bech32 would hand
+                # out an address the operator's wallet is not watching.
+                return b58check(spec["p2pkh"] + h160)
+            return bech32_encode(spec["hrp"], 0, h160)
+        # Base58 only (Zcash transparent): the script type is in the prefix.
+        return b58check(spec["p2pkh"] + h160)
 
 
-def receive_address(xpub: str, index: int, chain: int = 0) -> str:
+def receive_address(xpub: str, index: int, chain: int = 0,
+                    coin: str = "BTC") -> str:
     """
     The address at m/<chain>/<index> below the given account key.
 
     chain 0 is the receive chain by BIP44 convention; 1 is change, which a
     receiving-only system never needs.
     """
-    return ExtendedPubkey(xpub).child(chain).child(index).address()
+    return ExtendedPubkey(xpub).child(chain).child(index).address(coin)
 
 
 def looks_like_xpub(value: str) -> bool:

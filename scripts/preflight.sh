@@ -103,10 +103,40 @@ $(grep -qE '^sha256:[0-9a-f]{64}$' scripts/wallet.pin 2>/dev/null && echo ok \
   || echo "scripts/wallet.pin records no wallet — a mistyped key would go unnoticed")
 EOF
 
-    gate wallet-xpub "WALLET_BTC derives real receive addresses" \
+    # Any one coin is enough to take money. A ZEC-only or XMR-only deployment
+    # is a real configuration, and telling its operator that WALLET_BTC is
+    # missing would send them to fix a non-problem.
+    gate wallet-any "at least one coin can be paid in" \
+         "set WALLET_BTC, WALLET_ZEC, or MONERO_WALLET_RPC in $ENVFILE — see docs/DEPLOY.md" <<EOF
+$(any=""
+  for k in WALLET_BTC WALLET_ZEC MONERO_WALLET_RPC; do
+    v="$(grep -hoP "^$k=\K.*" "$ENVFILE" 2>/dev/null | tail -1)"
+    [[ -n "$v" ]] && any="$any $k"
+  done
+  if [[ -z "$any" ]]; then
+      echo "no wallet configured — paid signup cannot issue an address in any coin"
+  else echo ok; fi)
+EOF
+
+    gate wallet-xpub "each configured wallet derives real addresses" \
          "put your own account xpub/zpub in $ENVFILE — never a private key — then confirm the first address with scripts/check-wallet.sh" <<EOF
 $(w="$(grep -hoP '^WALLET_BTC=\K.*' "$ENVFILE" 2>/dev/null | tail -1)"
-  if [[ -z "$w" ]]; then echo "WALLET_BTC is empty — paid signup cannot issue an address"
+  z="$(grep -hoP '^WALLET_ZEC=\K.*' "$ENVFILE" 2>/dev/null | tail -1)"
+  # Every configured key must derive. One that does not is the failure with
+  # no symptom: addresses are issued, invoices never settle, health stays green.
+  for pair in "ZEC:$z"; do
+    coin="${pair%%:*}"; key="${pair#*:}"
+    [[ -n "$key" ]] || continue
+    if [[ "$key" == *prv* ]]; then
+        echo "WALLET_$coin looks like a PRIVATE key. Use the extended PUBLIC key."; break
+    fi
+    ./scripts/check-wallet.sh --no-pin --count 1 "$key" >/dev/null 2>&1 \
+      || { echo "WALLET_$coin does not derive — run scripts/check-wallet.sh to see why"; break; }
+  done
+  if [[ -z "$w" ]]; then
+      # Not a blocker on its own any more — wallet-any covers "can we take
+      # money at all". Bitcoin simply is not on offer.
+      echo warn
   elif [[ "$w" == *prv* ]]; then echo "that looks like a PRIVATE key. Use the extended PUBLIC key."
   # Derive from it rather than checking the prefix: a typo'"'"'d key still starts
   # with zpub, and the failure it causes has no symptom — invoices simply

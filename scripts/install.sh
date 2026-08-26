@@ -524,10 +524,15 @@ ZTV_TRIAL_POW_BITS=20
 ZTV_TRIAL_SECRET=$TRIAL_SECRET
 
 # --- Payments ---
-# watch  = your own wallet, watched via a public block explorer. Non-custodial,
+# watch  = your own wallets, watched without running a chain. Non-custodial,
 #          no account anywhere, no chain data on this box, and the only option
 #          that works the day you build the VPS: paste WALLET_BTC below and
-#          paid signup starts working. Bitcoin only.
+#          paid signup starts working.
+#          BTC and ZEC derive an address per invoice from an xpub and watch a
+#          public explorer. ZEC means transparent t1 addresses; shielded ones
+#          cannot be watched from a public key. XMR needs no address here —
+#          run scripts/setup-monero-watch.sh and set MONERO_WALLET_RPC. Each
+#          coin is offered only if it has a wallet.
 # btcpay = BTCPay Server (yours or somebody's). Non-custodial, more coins,
 #          but something has to run BTCPay.
 # hosted = commercial gateway. No infrastructure at all; custodial and

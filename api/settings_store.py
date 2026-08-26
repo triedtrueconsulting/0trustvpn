@@ -82,27 +82,47 @@ SETTING_SPECS: dict[str, dict] = {
                    "label": "Environment"},
 
     # --- business wallets: where crypto actually lands ---
+    # An extended PUBLIC key, so a fresh address is derived per invoice. A
+    # plain address is accepted and reused, which the dashboard warns about:
+    # two customers owing the same amount become impossible to tell apart.
     "WALLET_BTC": {"type": "text", "secret": False, "group": "wallets",
                    "label": "BTC xpub / zpub"},
-    "WALLET_ETH": {"type": "text", "secret": False, "group": "wallets",
-                   "label": "ETH address"},
-    "WALLET_XMR": {"type": "text", "secret": False, "group": "wallets",
-                   "label": "XMR primary address"},
     "WALLET_ZEC": {"type": "text", "secret": False, "group": "wallets",
-                   "label": "ZEC address"},
+                   "label": "ZEC xpub (transparent t1… addresses)"},
+    "WALLET_ETH": {"type": "text", "secret": False, "group": "wallets",
+                   "label": "ETH address (BTCPay/hosted only)"},
+
+    # --- Monero ---
+    # Monero has no wallet field here on purpose. There is no address to
+    # paste: the chain publishes neither recipient nor amount, so payment
+    # detection needs the private view key and a block scan. That is a
+    # wallet, and the wallet is monero-wallet-rpc — run view-only against a
+    # public remote node. scripts/setup-monero-watch.sh sets one up.
+    "MONERO_WALLET_RPC": {"type": "url", "secret": False, "group": "monero",
+                          "label": "monero-wallet-rpc URL (view-only)"},
+    "MONERO_ACCOUNT_INDEX": {"type": "int", "secret": False, "group": "monero",
+                             "label": "Wallet account index"},
+    "MONERO_RPC_USER": {"type": "text", "secret": False, "group": "monero",
+                        "label": "wallet-rpc username (if --rpc-login)"},
+    "MONERO_RPC_PASSWORD": {"type": "text", "secret": True, "group": "monero",
+                            "label": "wallet-rpc password"},
+    "XMR_CONFIRMATIONS": {"type": "int", "secret": False, "group": "monero",
+                          "label": "Confirmations before crediting (10 typical)"},
 
     # --- public chain endpoints ---
     # We host no chain data. These name whose node we borrow.
     "NODE_RPC_BTC": {"type": "url", "secret": False, "group": "chain",
-                     "label": "BTC explorer API"},
+                     "label": "BTC explorer API (Esplora)"},
     "ZTV_BTC_CONFIRMATIONS": {"type": "int", "secret": False, "group": "chain",
-                              "label": "Confirmations before crediting"},
-    "NODE_RPC_ETH": {"type": "url", "secret": False, "group": "chain",
-                     "label": "ETH public RPC"},
-    "NODE_RPC_XMR": {"type": "url", "secret": False, "group": "chain",
-                     "label": "XMR public remote node"},
+                              "label": "BTC confirmations before crediting"},
     "NODE_RPC_ZEC": {"type": "url", "secret": False, "group": "chain",
-                     "label": "ZEC public endpoint"},
+                     "label": "ZEC explorer API (Blockchair or Esplora)"},
+    "ZTV_ZEC_CONFIRMATIONS": {"type": "int", "secret": False, "group": "chain",
+                              "label": "ZEC confirmations before crediting"},
+    "ZTV_PRICE_API": {"type": "url", "secret": False, "group": "chain",
+                      "label": "USD price ticker (Kraken by default)"},
+    "NODE_RPC_ETH": {"type": "url", "secret": False, "group": "chain",
+                     "label": "ETH public RPC (reference only — unread)"},
 
     # --- pricing / trials ---
     "ZTV_TRIAL_ENABLED": {"type": "bool", "secret": False, "group": "trial",

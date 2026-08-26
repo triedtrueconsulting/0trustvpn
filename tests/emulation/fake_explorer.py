@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """
-Fake Esplora. Speaks the two endpoints the watch-only provider uses:
+Fake chain backends for the watch-only provider. Three shapes, one server:
 
-    GET /v1/prices          -> {"USD": ...}
-    GET /address/{addr}     -> {"chain_stats": {...}, "mempool_stats": {...}}
+    GET /address/{addr}                  Esplora  (Bitcoin, and any
+                                         Esplora-compatible Zcash instance)
+    GET /dashboards/address/{addr}       Blockchair (the Zcash default)
+    GET /0/public/Ticker?pair=XXXUSD     Kraken   (the USD price feed)
 
-mempool.space, blockstream.info and any self-hosted Esplora all serve these
-identically, which is why the provider needs no per-explorer code.
+mempool.space, blockstream.info and any self-hosted Esplora serve the first
+identically, which is why the provider needs no per-explorer code. Blockchair
+answers a different shape, so the provider has a second reader and this has to
+exercise it — an untested branch in the code that decides whether a customer
+has paid is not a branch worth having.
+
+    GET /v1/prices                       Esplora's own ticker, kept because
+                                         mempool.space serves it and an
+                                         operator may still point at it.
 
 PAY writes a balance for an address so a test can say "this invoice was paid"
 without a blockchain.
@@ -16,7 +25,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BALANCES, LOCK = {}, threading.Lock()   # address -> (confirmed, mempool) sats
 PRICE = [50_000.0]
+# Per-coin USD prices for the Kraken-shaped ticker. Kraken renames pairs in
+# its response (XBTUSD comes back as XXBTZUSD), and the provider must not
+# depend on getting the name it asked for — so the fake renames too.
+PRICES = {"XXBTZUSD": 50_000.0, "XZECZUSD": 30.0, "XXMRZUSD": 150.0}
+PAIR_ALIAS = {"XBTUSD": "XXBTZUSD", "ZECUSD": "XZECZUSD", "XMRUSD": "XXMRZUSD"}
 DOWN = [False]
+PRICE_DOWN = [False]
 
 
 class H(BaseHTTPRequestHandler):
@@ -35,6 +50,29 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/")
         if path.endswith("/v1/prices"):
             return self._json(200, {"USD": PRICE[0], "EUR": PRICE[0] * 0.9})
+        if "/0/public/Ticker" in self.path:
+            if PRICE_DOWN[0]:
+                return self._json(200, {"error": ["EGeneral:Temporary lockout"],
+                                        "result": {}})
+            q = self.path.split("?", 1)[1] if "?" in self.path else ""
+            pair = dict(p.split("=", 1) for p in q.split("&") if "=" in p).get(
+                "pair", "")
+            name = PAIR_ALIAS.get(pair, pair)
+            if name not in PRICES:
+                return self._json(200, {"error": ["EQuery:Unknown asset pair"],
+                                        "result": {}})
+            px = f"{PRICES[name]:.4f}"
+            return self._json(200, {"error": [], "result": {
+                name: {"c": [px, "1.0"], "a": [px, "1", "1.0"],
+                       "b": [px, "1", "1.0"]}}})
+        if "/dashboards/address/" in path:
+            addr = path.rsplit("/dashboards/address/", 1)[1]
+            with LOCK:
+                conf, mem = BALANCES.get(addr, (0, 0))
+            return self._json(200, {"data": {addr: {"address": {
+                "received": conf, "spent": 0,
+                "unconfirmed_received": mem, "balance": conf - mem,
+            }}}, "context": {"code": 200}})
         if "/address/" in path:
             addr = path.rsplit("/address/", 1)[1]
             with LOCK:

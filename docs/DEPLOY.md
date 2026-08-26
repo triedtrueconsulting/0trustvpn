@@ -150,6 +150,21 @@ Afterwards:
      infrastructure at all, but custodial and usually KYC'd. `api/payments.py`
      spells out the trade-off.
    - Webhook URL: `https://<domain>/api/v1/payment/webhook`
+   **Taking more than Bitcoin.** The `watch` provider takes BTC, ZEC and XMR,
+   and offers exactly the ones it has a wallet for — a coin with nothing
+   behind it never appears at checkout.
+
+   | | |
+   | --- | --- |
+   | BTC | `WALLET_BTC` = your account xpub/zpub. A fresh address per invoice, watched on an Esplora explorer. |
+   | ZEC | `WALLET_ZEC` = an account xpub. **Transparent t1 addresses only** — shielded ones cannot be derived from a public key or seen by any explorer. |
+   | XMR | No address to paste. Run `scripts/setup-monero-watch.sh` to stand up a view-only `monero-wallet-rpc` against a public remote node, then set `MONERO_WALLET_RPC`. No chain on disk, and nothing on this box can spend. |
+
+   Prices come from a public ticker (`ZTV_PRICE_API`, Kraken by default) — no
+   account needed. Confirm what a deployment actually offers with
+   `curl -s https://<domain>/api/v1/config | jq .currencies`; the landing page
+   renders its copy from the same endpoint.
+
 2. **Mesh nodes.** Until at least one exists, `/wg/register` returns 503.
    `install.sh --mode node` on each VPS with a token from
    `api/mint-provision-token.py`; `scripts/bootstrap-node.sh` if you want to

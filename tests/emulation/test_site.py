@@ -129,7 +129,27 @@ try:
     # installer default those differ by three, and the test was enforcing the
     # overstatement rather than catching it.
     import payments as _pay
+    # The floor: what a deployment with nothing but WALLET_BTC can take. That
+    # is what the static copy is written for, because it is the state a fresh
+    # install launches in. currencies_for() used to be a constant; it now
+    # reads the deployment's own configuration, so the floor has to be set up
+    # rather than assumed.
+    _floor_env = {"ZTV_PAYMENT_PROVIDER": "watch",
+                  "WALLET_BTC": "zpub-placeholder-not-parsed-here"}
+    _saved = {k: os.environ.get(k) for k in
+              ("WALLET_BTC", "WALLET_ZEC", "MONERO_WALLET_RPC",
+               "ZTV_PAYMENT_PROVIDER")}
+    for k in ("WALLET_ZEC", "MONERO_WALLET_RPC"):
+        os.environ.pop(k, None)
+    os.environ.update(_floor_env)
+    _pay.reset_provider()
     OFFERED = set(_pay.currencies_for("watch"))
+    for k, v in _saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    _pay.reset_provider()
     NAMES = {"BTC": "Bitcoin", "ETH": "Ethereum", "XMR": "Monero",
              "ZEC": "Zcash", "LTC": "Litecoin"}
     for cur in sorted(OFFERED):
@@ -409,14 +429,27 @@ try:
     # provider, because that is the installer default and the state a
     # deployment launches in. A page may upgrade itself from /api/v1/config
     # when the operator has stood up something that takes more.
-    import payments as pay
-    floor = set(pay.currencies_for("watch"))
-    check("the watch provider still takes Bitcoin alone", floor == {"BTC"},
-          "if this changed, the copy below needs to change with it")
+    check("a BTC-only deployment offers Bitcoin and nothing else",
+          OFFERED == {"BTC"},
+          "the static copy is written for this configuration; if it changed, "
+          "the copy has to change with it")
+    floor = OFFERED
 
     others = {"Monero": "XMR", "Zcash": "ZEC", "Ethereum": "ETH"}
+
+    def visible(text: str) -> str:
+        """Copy a visitor reads. Comments explaining the code are not that.
+
+        Section [4] already strips them for the same reason; this did not,
+        and flagged a comment describing how the page upgrades itself as if
+        it were an advertisement.
+        """
+        text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+        return re.sub(r"^\s*//.*$", "", text, flags=re.M)
+
     for page in ("/", "/terms.html", "/privacy.html", "/help.html"):
-        _, body = get(page)
+        _, raw_body = get(page)
+        body = visible(raw_body)
         named = [name for name, code in others.items()
                  if code not in floor and name.lower() in body.lower()]
         check(f"{page} names no coin this deployment cannot take", not named,

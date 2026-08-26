@@ -1346,11 +1346,11 @@
   })();
 
   // What this deployment can actually take, from the same endpoint. The copy
-  // is written for Bitcoin, because Bitcoin is all the default provider can
-  // issue an address for — it derives them from an xpub, and only Bitcoin's
-  // are derivable without wallet software. An operator who stands up BTCPay
-  // can take more, and the page should say so rather than undersell; one who
-  // has not should never see three coins advertised that produce no address.
+  // is written for Bitcoin, because a fresh install has only WALLET_BTC set —
+  // that is the state it launches in. An operator who adds a Zcash xpub or
+  // stands up the Monero view-only wallet can take more, and the page should
+  // say so rather than undersell; one who has not should never see coins
+  // advertised that produce no address.
   //
   // Additive on purpose. Rewriting the argument from JS would risk producing
   // prose nobody wrote, on the page where being exactly right matters most.

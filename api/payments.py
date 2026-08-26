@@ -40,13 +40,14 @@ import hashlib
 import hmac
 import json
 import os
-
-import chainwatch
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Optional
+
+import chainwatch
+import monerowatch
 
 # The chains we accept. XMR is the private default; BTC is the one everyone
 # already has; ZEC is here for shielded senders; ETH because enough customers
@@ -76,6 +77,27 @@ EXPIRED = "expired"
 INVALID = "invalid"
 
 
+# Atomic units per whole coin. Every balance comparison in this file is in
+# atomic units: a float comparison against a payment is how you credit an
+# account for 0.9999999 of what it owed.
+COIN_UNITS = {"BTC": 10 ** 8, "ZEC": 10 ** 8, "XMR": 10 ** 12}
+
+# Where a USD price comes from for a coin we take.
+#
+# The watch provider used to read BTC's price from the Esplora ticker at
+# /v1/prices. That works on mempool.space and is not part of the Esplora API
+# — an operator who points NODE_RPC_BTC at a different Esplora instance can
+# lose the price feed while address lookups keep working, which fails in the
+# confusing direction: invoices stop being created, and nothing about the
+# explorer looks broken.
+#
+# So price is its own dependency now, named as one. Kraken's public ticker
+# needs no account and quotes all three coins; ZTV_PRICE_API repoints it.
+PRICE_API = "https://api.kraken.com/0/public/Ticker"
+# Kraken's pair names. XBT is Bitcoin.
+PRICE_PAIRS = {"BTC": "XBTUSD", "ZEC": "ZECUSD", "XMR": "XMRUSD"}
+
+
 class PaymentError(Exception):
     """Provider returned a non-2xx, or was unreachable."""
 
@@ -98,6 +120,39 @@ def _http(method: str, url: str, headers: dict, body: dict | None = None,
 # ---------------------------------------------------------------------------
 # BTCPay Server
 # ---------------------------------------------------------------------------
+
+def usd_price(coin: str, api_base: str | None = None,
+              timeout: float = 15.0) -> float:
+    """
+    One coin's USD price, from a public ticker.
+
+    Raises rather than guessing. An invoice priced from a stale or absent
+    feed is either a customer overpaying or a month sold for nothing, and
+    both are worse than telling them to come back in a minute.
+    """
+    coin = coin.upper()
+    pair = PRICE_PAIRS.get(coin)
+    if pair is None:
+        raise PaymentError(f"no price feed configured for {coin}")
+    base = (api_base or os.environ.get("ZTV_PRICE_API") or PRICE_API).rstrip("/")
+    raw = _http("GET", f"{base}?pair={pair}", {}, None, timeout) or {}
+    if raw.get("error"):
+        raise PaymentError(f"price feed error for {coin}: {raw['error'][:1]}")
+    result = raw.get("result") or {}
+    if not result:
+        raise PaymentError(f"price feed returned nothing for {coin}")
+    # Kraken keys the result by its own canonical pair name, which is not
+    # always the one asked for (XBTUSD comes back as XXBTZUSD). There is
+    # exactly one entry, so take it rather than guessing the name.
+    entry = next(iter(result.values()))
+    try:
+        price = float((entry.get("c") or [0])[0])
+    except (TypeError, ValueError, AttributeError):
+        raise PaymentError(f"price feed gave no last-trade price for {coin}")
+    if price <= 0:
+        raise PaymentError(f"price feed returned {price} for {coin}")
+    return price
+
 
 class BTCPayProvider:
     """
@@ -650,32 +705,37 @@ class SquareProvider:
 
 class WatchOnlyProvider:
     """
-    Bitcoin straight into the operator's own wallet, with nothing in between.
+    Crypto straight into the operator's own wallet, with nothing in between.
 
     Every other provider here puts a third party between the customer and the
     money: BTCPay is a server somebody has to run, and a hosted gateway is
-    custodial and usually wants identity documents. This one needs neither. The
-    operator pastes the *public* half of their wallet, we derive a fresh
-    receive address per invoice, and we watch a public block explorer for the
-    payment. Funds land in their wallet directly; the control plane never has
-    the keys and could not move a satoshi if it were seized.
+    custodial and usually wants identity documents. This one needs neither,
+    and it is the only provider that works on a fresh VPS with no accounts
+    signed up for anywhere.
 
-    It is also the only provider that works on a fresh VPS with no accounts
-    signed up for anywhere, which is the point.
+    Three coins, and they do NOT work the same way. The difference is not an
+    implementation detail — it decides what a deployment can offer:
 
-    What it gives up, stated plainly:
+      BTC, ZEC   The operator pastes the PUBLIC half of their wallet. We
+                 derive a fresh receive address per invoice from it and ask a
+                 public explorer whether that address was paid. Zcash here
+                 means TRANSPARENT addresses (t1…): shielded ones are private
+                 by design and no explorer can answer for them.
 
-      - Bitcoin only. Monero and Zcash need per-invoice addresses this cannot
-        derive without wallet software, and reusing one address for every
-        customer would both break payment privacy and make two payments of the
-        same amount impossible to tell apart. currencies_for() says BTC and
-        means it — see docs, and do not add coins here without solving that.
-      - It trusts a public explorer for confirmation. That is one API that can
-        lie or go down. It cannot steal anything, and a wrong answer is
-        recoverable by hand from the dashboard, but it is a dependency and
-        pretending otherwise would be dishonest.
-      - Price comes from the same explorer's ticker, so the USD conversion is
-        theirs, not ours.
+      XMR        No address derivation and no explorer, because Monero
+                 publishes neither recipient nor amount. Detection needs the
+                 private view key and a block scan, which is a wallet. So we
+                 talk to a view-only monero-wallet-rpc pointed at a PUBLIC
+                 remote node — no chain on disk, no spending authority.
+                 api/monerowatch.py explains the trade in full.
+
+    What all three give up, stated plainly:
+
+      - Confirmation comes from something we do not control: an explorer, or
+        the remote node the wallet is scanning against. It can lie or go
+        down. It cannot steal anything, and a wrong answer is recoverable by
+        hand from the dashboard, but it is a dependency.
+      - USD conversion comes from a public ticker, so the rate is theirs.
 
     There is no webhook. Confirmation is by polling, which is what makes this
     deployable without an inbound callback URL, a TLS certificate or a
@@ -684,80 +744,178 @@ class WatchOnlyProvider:
 
     # Esplora's API, which mempool.space, blockstream.info and any self-hosted
     # instance all speak identically.
-    DEFAULT_API = "https://mempool.space/api"
+    DEFAULT_API = {
+        "BTC": "https://mempool.space/api",
+        # Blockchair speaks a different shape; see _explorer_received. Any
+        # Esplora-compatible Zcash endpoint can be set instead.
+        "ZEC": "https://api.blockchair.com/zcash",
+    }
+    ENV_WALLET = {"BTC": "WALLET_BTC", "ZEC": "WALLET_ZEC"}
+    ENV_API = {"BTC": "NODE_RPC_BTC", "ZEC": "NODE_RPC_ZEC"}
 
     def __init__(self, xpub=None, api_base=None, confirmations=None,
                  timeout=15.0):
-        self.xpub = (xpub if xpub is not None
-                     else os.environ.get("WALLET_BTC", "")).strip()
-        self.api = (api_base or os.environ.get("NODE_RPC_BTC")
-                    or self.DEFAULT_API).rstrip("/")
-        self.confirmations = int(
-            confirmations if confirmations is not None
-            else os.environ.get("ZTV_BTC_CONFIRMATIONS", "1"))
+        # `xpub` and `api_base` stay as the Bitcoin ones for compatibility
+        # with every existing caller and test.
+        self.wallets = {}
+        for coin, env in self.ENV_WALLET.items():
+            if coin == "BTC" and xpub is not None:
+                value = xpub
+            else:
+                value = os.environ.get(env, "")
+            self.wallets[coin] = (value or "").strip()
+        self.xpub = self.wallets["BTC"]
+
+        self.apis = {}
+        for coin, env in self.ENV_API.items():
+            if coin == "BTC" and api_base:
+                self.apis[coin] = api_base.rstrip("/")
+            else:
+                self.apis[coin] = (os.environ.get(env)
+                                   or self.DEFAULT_API[coin]).rstrip("/")
+        self.api = self.apis["BTC"]
+
+        self.confirmations = {
+            "BTC": int(confirmations if confirmations is not None
+                       else os.environ.get("ZTV_BTC_CONFIRMATIONS", "1")),
+            # Zcash blocks are ~75s; the network convention is more than one.
+            "ZEC": int(os.environ.get("ZTV_ZEC_CONFIRMATIONS", "5")),
+        }
         self.timeout = timeout
+        self._xmr = None
+
+    # -- what this deployment can actually take -----------------------------
+    def monero(self):
+        """The view-only wallet, or None when one is not configured."""
+        if not os.environ.get("MONERO_WALLET_RPC"):
+            return None
+        if self._xmr is None:
+            self._xmr = monerowatch.MoneroWatcher(timeout=self.timeout)
+        return self._xmr
+
+    def supported(self) -> tuple[str, ...]:
+        """
+        The coins this deployment can issue an address for, right now.
+
+        Not a constant: a coin with no wallet configured cannot be paid in,
+        and offering it on the checkout would send a customer to an address
+        that does not exist. currencies_for() asks this.
+        """
+        out = [c for c in ("BTC", "ZEC") if self.wallets.get(c)]
+        if self.monero() is not None:
+            out.append("XMR")
+        return tuple(out)
 
     # -- addresses ---------------------------------------------------------
-    def address_for(self, index: int) -> str:
+    def address_for(self, index: int, coin: str = "BTC") -> str:
         """
         The receive address for this invoice.
 
-        A plain address in WALLET_BTC is accepted and reused, because some
+        A plain address in a wallet slot is accepted and reused, because some
         operators genuinely want that, but it is worse in every way: payments
         become impossible to attribute when two customers owe the same amount,
         and the whole payment history becomes public and linked. The dashboard
         says so.
         """
-        if not self.xpub:
-            raise PaymentError("WALLET_BTC is not set — no wallet to pay into")
-        if chainwatch.looks_like_xpub(self.xpub):
-            return chainwatch.receive_address(self.xpub, index)
-        return self.xpub
+        coin = coin.upper()
+        wallet = self.wallets.get(coin, "")
+        if not wallet:
+            raise PaymentError(
+                f"{self.ENV_WALLET.get(coin, coin)} is not set — no wallet to pay into")
+        if chainwatch.looks_like_xpub(wallet):
+            return chainwatch.receive_address(wallet, index, coin=coin)
+        return wallet
 
-    def reuses_one_address(self) -> bool:
-        return bool(self.xpub) and not chainwatch.looks_like_xpub(self.xpub)
+    def reuses_one_address(self, coin: str = "BTC") -> bool:
+        w = self.wallets.get(coin.upper(), "")
+        return bool(w) and not chainwatch.looks_like_xpub(w)
 
     # -- price -------------------------------------------------------------
+    def price_usd(self, coin: str = "BTC") -> float:
+        return usd_price(coin, timeout=self.timeout)
+
     def btc_price_usd(self) -> float:
-        raw = _http("GET", f"{self.api}/v1/prices", {}, None, self.timeout)
-        price = float((raw or {}).get("USD") or 0)
-        if price <= 0:
-            raise PaymentError("price feed returned no USD rate")
-        return price
+        """Kept because callers and tests use it by name."""
+        return self.price_usd("BTC")
 
     # -- provider interface -------------------------------------------------
     def create_invoice(self, amount_usd: float, account_id: int, months: int,
                        redirect_url: str | None = None,
-                       index: int | None = None) -> dict:
-        if index is None:
-            raise PaymentError("watch-only invoices need a derivation index")
-        address = self.address_for(index)
-        sats = int(round(amount_usd / self.btc_price_usd() * 100_000_000))
-        if sats <= 0:
-            raise PaymentError("computed a zero-satoshi invoice")
-        btc = f"{sats / 100_000_000:.8f}"
+                       index: int | None = None, coin: str = "BTC") -> dict:
+        coin = (coin or "BTC").upper()
+        if coin not in self.supported():
+            raise PaymentError(
+                f"{coin} is not configured on this deployment "
+                f"(offering {', '.join(self.supported()) or 'nothing'})")
+        units = COIN_UNITS[coin]
+        atomic = int(round(amount_usd / self.price_usd(coin) * units))
+        if atomic <= 0:
+            raise PaymentError(f"computed a zero-value {coin} invoice")
+
+        if coin == "XMR":
+            # The wallet allocates the subaddress and tells us its index; we
+            # do not choose it. That index, not the address, is what payment
+            # detection keys on later.
+            #
+            # MoneroError is not a PaymentError — monerowatch has no reason to
+            # know this module exists — so it has to be translated here. It
+            # was not, and a wallet that was merely down turned signup into a
+            # 500 with a stack trace instead of "processor unavailable".
+            try:
+                address, ref = self.monero().new_subaddress(
+                    f"acct{account_id}-{months}m")
+            except monerowatch.MoneroError as e:
+                raise PaymentError(str(e)) from None
+        else:
+            if index is None:
+                raise PaymentError("watch-only invoices need a derivation index")
+            address, ref = self.address_for(index, coin), index
+
         return {
-            "id": f"btc-{index}-{int(time.time())}",
+            "id": f"{coin.lower()}-{ref}-{int(time.time())}",
             # No hosted checkout to send anyone to: the customer pays from
             # their own wallet. The UI renders the address and a QR.
             "checkout_url": "",
             "status": PENDING,
             "payment_address": address,
-            "amount_crypto": btc,
-            "derivation_index": index,
-            "raw": {"address": address, "sats": sats, "index": index},
+            "amount_crypto": f"{atomic / units:.{8 if units == 10**8 else 12}f}",
+            "derivation_index": ref,
+            "pay_currency": coin,
+            "raw": {"address": address, "atomic": atomic, "index": ref,
+                    "coin": coin},
         }
 
-    def address_received(self, address: str) -> tuple[int, int]:
-        """(confirmed sats, unconfirmed sats) ever received at an address."""
-        raw = _http("GET", f"{self.api}/address/{address}", {}, None,
+    # -- chain lookups ------------------------------------------------------
+    def _esplora_received(self, api: str, address: str) -> tuple[int, int]:
+        raw = _http("GET", f"{api}/address/{address}", {}, None,
                     self.timeout) or {}
         chain = raw.get("chain_stats") or {}
         mem = raw.get("mempool_stats") or {}
         return int(chain.get("funded_txo_sum") or 0), int(
             mem.get("funded_txo_sum") or 0)
 
-    def check(self, address: str, expected_sats: int) -> dict:
+    def _blockchair_received(self, api: str, address: str) -> tuple[int, int]:
+        raw = _http("GET", f"{api}/dashboards/address/{address}", {}, None,
+                    self.timeout) or {}
+        data = (raw.get("data") or {}).get(address) or {}
+        addr = data.get("address") or {}
+        received = int(addr.get("received") or 0)
+        unconfirmed = int(addr.get("unconfirmed_received") or 0)
+        return received, unconfirmed
+
+    def address_received(self, address: str, coin: str = "BTC") -> tuple[int, int]:
+        """(confirmed, unconfirmed) atomic units ever received at an address."""
+        coin = coin.upper()
+        api = self.apis.get(coin, self.api)
+        # Two explorer shapes, chosen by what the URL is rather than by coin,
+        # so an operator who runs their own Esplora for Zcash gets the
+        # Esplora path without a second setting to remember.
+        if "blockchair" in api:
+            return self._blockchair_received(api, address)
+        return self._esplora_received(api, address)
+
+    def check(self, address: str, expected_atomic: int, coin: str = "BTC",
+              ref: int | None = None) -> dict:
         """
         Has this invoice been paid? Called by the poller, which owns crediting.
 
@@ -766,13 +924,28 @@ class WatchOnlyProvider:
         revenue leak, and the amount received is reported so support can
         settle it by hand.
         """
-        confirmed, pending = self.address_received(address)
-        paid = confirmed >= expected_sats
+        coin = (coin or "BTC").upper()
+        if coin == "XMR":
+            xmr = self.monero()
+            if xmr is None:
+                raise PaymentError("an XMR invoice exists but MONERO_WALLET_RPC "
+                                   "is not configured")
+            if ref is None:
+                raise PaymentError("an XMR invoice has no subaddress index")
+            try:
+                confirmed, pending = xmr.received(int(ref))
+            except monerowatch.MoneroError as e:
+                raise PaymentError(str(e)) from None
+        else:
+            confirmed, pending = self.address_received(address, coin)
+
+        paid = confirmed >= expected_atomic
         return {
             "status": SETTLED if paid else PENDING,
+            "coin": coin,
             "confirmed_sats": confirmed,
             "unconfirmed_sats": pending,
-            "expected_sats": expected_sats,
+            "expected_sats": expected_atomic,
             # Seen but not yet confirmed: worth showing the customer so the
             # page stops looking broken while they wait for a block.
             "seen": confirmed > 0 or pending > 0,
@@ -796,20 +969,33 @@ class WatchOnlyProvider:
         return None, PENDING
 
     def health(self) -> tuple[bool, str]:
-        if not self.xpub:
-            return False, "WALLET_BTC is not set"
-        try:
-            addr = self.address_for(0)
-        except Exception as e:
-            return False, f"WALLET_BTC is not usable: {e}"
-        try:
-            price = self.btc_price_usd()
-        except PaymentError as e:
-            return False, f"explorer unreachable: {str(e)[:120]}"
-        note = "reusing one address for every invoice" \
-            if self.reuses_one_address() else f"first address {addr}"
-        return True, (f"watching {self.api}, BTC ${price:,.0f}, "
-                      f"{self.confirmations} confirmation(s); {note}")
+        coins = self.supported()
+        if not coins:
+            return False, ("no wallet configured — set WALLET_BTC, WALLET_ZEC, "
+                           "or MONERO_WALLET_RPC")
+        notes, failed = [], []
+        for coin in coins:
+            if coin == "XMR":
+                ok, detail = self.monero().health()
+                (notes if ok else failed).append(f"XMR: {detail}")
+                continue
+            try:
+                addr = self.address_for(0, coin)
+            except Exception as e:
+                failed.append(f"{coin}: wallet unusable: {e}")
+                continue
+            try:
+                price = self.price_usd(coin)
+            except PaymentError as e:
+                failed.append(f"{coin}: price feed: {str(e)[:80]}")
+                continue
+            where = "one reused address" if self.reuses_one_address(coin) \
+                else f"first address {addr}"
+            notes.append(f"{coin}: ${price:,.2f}, "
+                         f"{self.confirmations.get(coin, 1)} conf, {where}")
+        if failed:
+            return False, "; ".join(failed + notes)[:400]
+        return True, "; ".join(notes)[:400]
 
 
 # ---------------------------------------------------------------------------
@@ -844,8 +1030,11 @@ def reset_provider():
 # Which settings each provider cannot work without. The dashboard uses this to
 # tell an operator what is still missing instead of letting signup 502.
 REQUIRED_SETTINGS = {
-    # Just the wallet. No account anywhere, no callback URL, no secret to
+    # Just a wallet. No account anywhere, no callback URL, no secret to
     # share — which is what lets a fresh VPS take money the day it is built.
+    # Any ONE of these is enough; required_settings() resolves that, because a
+    # Zcash-only deployment is a real configuration and telling its operator
+    # that WALLET_BTC is "missing" would be wrong.
     "watch": ("WALLET_BTC",),
     "btcpay": ("BTCPAY_URL", "BTCPAY_STORE_ID", "BTCPAY_API_KEY",
                "BTCPAY_WEBHOOK_SECRET"),
@@ -857,7 +1046,17 @@ REQUIRED_SETTINGS = {
 
 
 def required_settings(name: str) -> tuple[str, ...]:
-    return REQUIRED_SETTINGS.get((name or "").lower(), ())
+    name = (name or "").lower()
+    if name == "watch":
+        # Satisfied by any configured wallet. Naming BTC when the operator has
+        # deliberately set up Zcash only would send them to fix a non-problem.
+        try:
+            if provider().supported():
+                return ()
+        except Exception:
+            pass
+        return ("WALLET_BTC (or WALLET_ZEC, or MONERO_WALLET_RPC)",)
+    return REQUIRED_SETTINGS.get(name, ())
 
 
 def currencies_for(name: str) -> tuple[str, ...]:
@@ -871,12 +1070,16 @@ def currencies_for(name: str) -> tuple[str, ...]:
     name = (name or "").lower()
     if name in CARD_PROVIDERS:
         return ("USD (card)",)
-    # The watch-only path derives addresses from an extended public key, and
-    # only Bitcoin's is derivable without wallet software. Listing four coins
-    # on a checkout page that can only produce a BTC address would be the
-    # same lie in the other direction.
+    # The watch-only path can take whatever it has a wallet for, which is a
+    # property of this deployment's configuration rather than of the code.
+    # Asking the provider is the only answer that cannot drift: listing a coin
+    # here that no wallet backs would send a customer to an address that does
+    # not exist.
     if name == "watch":
-        return ("BTC",)
+        try:
+            return provider().supported() or ()
+        except Exception:
+            return ()
     return CURRENCIES
 
 

@@ -396,6 +396,10 @@ MIGRATIONS = [
     ("accounts", "note", "TEXT"),
     ("mesh_nodes", "ipv6", "INTEGER NOT NULL DEFAULT 0"),
     ("invoices", "derivation_index", "INTEGER"),
+    # Which coin the customer is paying in. The poller needs it to know which
+    # chain to ask and how many atomic units a whole coin is — 1e8 for BTC and
+    # ZEC, 1e12 for XMR. Rows written before this existed are Bitcoin.
+    ("invoices", "pay_currency", "TEXT NOT NULL DEFAULT 'BTC'"),
     # Reusable, IP-bound enrolment tokens. Existing rows keep max_uses = 1, so
     # a database from before this change behaves exactly as it did.
     ("provision_tokens", "max_uses", "INTEGER NOT NULL DEFAULT 1"),
@@ -509,7 +513,8 @@ def _next_address_index(chain: str = "btc") -> int:
     return idx
 
 
-def create_invoice(account_id: int, months: int, amount_usd: float) -> dict:
+def create_invoice(account_id: int, months: int, amount_usd: float,
+                   coin: str = "") -> dict:
     """
     Open an invoice with whichever provider is configured. Returns the
     normalized shape: {id, checkout_url, status, raw}, plus payment_address
@@ -517,7 +522,23 @@ def create_invoice(account_id: int, months: int, amount_usd: float) -> dict:
     """
     kwargs = {}
     if os.environ.get("ZTV_PAYMENT_PROVIDER", "btcpay").lower() == "watch":
-        kwargs["index"] = _next_address_index("btc")
+        offered = payments.currencies_for("watch")
+        if not offered:
+            raise HTTPException(502, "Payment processor unavailable")
+        coin = (coin or offered[0]).upper()
+        if coin not in offered:
+            # A 400, not a 502: the request asked for something this
+            # deployment does not take, and the client can pick again.
+            raise HTTPException(
+                400, f"{coin} is not accepted here; this deployment takes "
+                     f"{', '.join(offered)}")
+        kwargs["coin"] = coin
+        if coin != "XMR":
+            # Monero's subaddress index comes from the wallet, not from us.
+            # One counter per coin: sharing one would skip indices in each
+            # wallet and leave gaps an operator restoring from seed has to
+            # scan past.
+            kwargs["index"] = _next_address_index(coin.lower())
     try:
         return provider().create_invoice(
             amount_usd=amount_usd,
@@ -526,6 +547,8 @@ def create_invoice(account_id: int, months: int, amount_usd: float) -> dict:
             redirect_url="https://0trustvpn.com/welcome",
             **kwargs,
         )
+    except HTTPException:
+        raise
     except PaymentError as e:
         # Don't leak provider internals to clients
         raise HTTPException(502, "Payment processor unavailable") from e
@@ -537,6 +560,21 @@ def create_invoice(account_id: int, months: int, amount_usd: float) -> dict:
 
 class AccountCreateRequest(BaseModel):
     months: int = Field(..., description="Subscription duration in months")
+    # Which coin to be invoiced in. Validated against what this deployment can
+    # actually issue an address for, not against a constant: offering a coin
+    # with no wallet behind it sends the customer to an address that does not
+    # exist, and they would have no way to know.
+    currency: str = Field("", description="BTC | ZEC | XMR (provider-dependent)")
+
+    @field_validator("currency")
+    @classmethod
+    def known_currency(cls, v: str) -> str:
+        v = (v or "").strip().upper()
+        if not v:
+            return v
+        if not v.isalnum() or len(v) > 8:
+            raise ValueError("currency must be a short code like BTC")
+        return v
 
     @field_validator("months")
     @classmethod
@@ -854,7 +892,8 @@ def create_account(req: AccountCreateRequest):
     # leaving an unreachable pending_payment row behind on every outage; the
     # customer never received the token, so nothing is lost by removing it.
     try:
-        invoice = create_invoice(account_id, req.months, amount)
+        invoice = create_invoice(account_id, req.months, amount,
+                                 coin=req.currency)
     except BaseException:
         with db(write=True) as conn:
             conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
@@ -865,12 +904,13 @@ def create_account(req: AccountCreateRequest):
             """INSERT INTO invoices
                  (id, account_id, months, amount_usd, currency, status,
                   created_at, checkout_url, payment_address, amount_crypto,
-                  derivation_index)
-               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?)""",
+                  derivation_index, pay_currency)
+               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?)""",
             (invoice["id"], account_id, req.months, amount, invoice["status"],
              now, invoice.get("checkout_url", ""),
              invoice.get("payment_address"), invoice.get("amount_crypto"),
-             invoice.get("derivation_index")),
+             invoice.get("derivation_index"),
+             invoice.get("pay_currency", "BTC")),
         )
 
     return AccountCreateResponse(
@@ -1091,7 +1131,8 @@ def mark_notice_read(notice_id: int, account: dict = Depends(require_account)):
 def topup(req: AccountCreateRequest, account: dict = Depends(require_account)):
     """Open another invoice for an existing account. Extends on payment."""
     amount = PRICING[req.months]
-    invoice = create_invoice(account["id"], req.months, amount)
+    invoice = create_invoice(account["id"], req.months, amount,
+                             coin=req.currency)
     now = int(time.time())
 
     with db(write=True) as conn:
@@ -1099,12 +1140,13 @@ def topup(req: AccountCreateRequest, account: dict = Depends(require_account)):
             """INSERT INTO invoices
                  (id, account_id, months, amount_usd, currency, status,
                   created_at, checkout_url, payment_address, amount_crypto,
-                  derivation_index)
-               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?)""",
+                  derivation_index, pay_currency)
+               VALUES (?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?)""",
             (invoice["id"], account["id"], req.months, amount, invoice["status"],
              now, invoice.get("checkout_url", ""),
              invoice.get("payment_address"), invoice.get("amount_crypto"),
-             invoice.get("derivation_index")),
+             invoice.get("derivation_index"),
+             invoice.get("pay_currency", "BTC")),
         )
 
     return AccountCreateResponse(
@@ -1129,7 +1171,8 @@ def payment_methods(invoice_id: str):
     """
     with db() as conn:
         row = conn.execute(
-            """SELECT id, checkout_url, payment_address, amount_crypto
+            """SELECT id, checkout_url, payment_address, amount_crypto,
+                      pay_currency
                  FROM invoices WHERE id = ?""", (invoice_id,)
         ).fetchone()
     if not row:
@@ -1140,13 +1183,21 @@ def payment_methods(invoice_id: str):
     # and would put a third party in the path of rendering a checkout page.
     if row["payment_address"]:
         amount = row["amount_crypto"] or ""
+        coin = (row["pay_currency"] or "BTC").upper()
+        # The URI scheme a wallet app recognises. Getting this wrong means the
+        # customer's QR scan opens the wrong wallet, or nothing at all.
+        scheme = {"BTC": "bitcoin", "ZEC": "zcash", "XMR": "monero"}.get(
+            coin, coin.lower())
+        # Monero's URI parameter is tx_amount, not amount. A Bitcoin-shaped
+        # URI silently loses the amount in every Monero wallet that reads it.
+        amount_key = "tx_amount" if coin == "XMR" else "amount"
         return {"methods": [{
-            "currency": "BTC",
+            "currency": coin,
             "address": row["payment_address"],
             "amount": amount,
             "rate": None,
-            "uri": f"bitcoin:{row['payment_address']}"
-                   + (f"?amount={amount}" if amount else ""),
+            "uri": f"{scheme}:{row['payment_address']}"
+                   + (f"?{amount_key}={amount}" if amount else ""),
         }], "checkout_url": ""}
 
     try:
