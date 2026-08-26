@@ -1126,7 +1126,7 @@ EOF
       Until then paid signup returns 502; free trials work regardless.
 
   Rebuild as three separate nodes when you are done kicking the tyres:
-  scripts/bootstrap-node.sh, one per VPS. docs/DEPLOY.md has the walkthrough.
+  install.sh --mode node, one per VPS. docs/DEPLOY.md has the walkthrough.
 
   Logs   journalctl -u 0trust-api -f
   DB     sqlite3 $VARLIB/0trust.db
@@ -1153,9 +1153,16 @@ ${GRN}  Production deployment is up at https://$DOMAIN${NC}
         hosted: ZTV_PAYMENT_PROVIDER=hosted + the ZTV_PAYMENT_* keys
         stripe/square: cards, and a real identity behind every payment
        Webhook URL for those: https://$DOMAIN/api/v1/payment/webhook
-    2. Mesh nodes — run scripts/bootstrap-node.sh on each, or mint a
-       provisioning token with api/mint-provision-token.py for RAM-only nodes.
-       Until at least one exists, /wg/register returns 503.
+    2. Mesh nodes — until at least one exists, /wg/register returns 503.
+       On THIS box, mint a token per node:
+         sudo -u 0trust python3 $PREFIX/api/mint-provision-token.py \\
+              --region zur --role both --uses 20 --ttl 31536000
+       Then one command on each node VPS, which joins it to the mesh:
+         sudo ./scripts/install.sh --mode node \\
+              --control-url https://$DOMAIN \\
+              --region zur --role both --wg-port 443 \\
+              --provision-token ztvp-...
+       The dashboard's Nodes tab mints the same token and prints the command.
     3. Check the trial secret is set:
        grep ZTV_TRIAL_SECRET $ETC/api.env
     4. Read docs/LAUNCH.md for the rest — keys, canary, legal review.
