@@ -107,6 +107,29 @@ try:
     check("production dry run exits 0", rc == 0, out[-400:])
     check("dry run wrote nothing to /etc", not os.path.exists("/etc/0trust/api.env"))
 
+    print("\n[2b] swap: offered on the control plane, refused on a node")
+    # A 2GB control-plane VPS runs nginx, uvicorn, the proxy and SQLite, and
+    # wants swap. A mesh node must never have it: swap is a persistent file
+    # the kernel can page the WireGuard private key into, and privacy.html,
+    # audit.html and AUDIT.md 5.3 all tell customers the key never touches
+    # persistent storage. The installer has to know the difference.
+    rc, out = run_installer("--mode", "production", "--domain", "example.com",
+                            "--email", "a@b.c", "--swap", "4G")
+    check("production accepts --swap", rc == 0 and "swapfile" in out, out[-300:])
+    check("and says it would go in fstab", "fstab" in out, out[-300:])
+
+    rc, out = run_installer("--mode", "node", "--control-url", "https://c.example",
+                            "--region", "zur", "--provision-token", "t",
+                            "--swap", "4G")
+    check("a node refuses --swap", rc != 0, out[-200:])
+    check("and explains that swap can page the private key to disk",
+          "page the WireGuard" in out or "private key to disk" in out,
+          out[-300:])
+
+    for bad in ("4gigs", "4", "big", "-1G"):
+        rc, out = run_installer("--mode", "test", "--swap", bad)
+        check(f"rejects a bad size: {bad!r}", rc != 0, out[-160:])
+
     print("\n[3] nginx validates what the installer would actually write")
     for mode, extra, label, ports in (
         ("test", [], "test", [("listen 80 default_server;", "listen 8080 default_server;"),
@@ -331,7 +354,7 @@ try:
         ("No TLS", "says there is no TLS"),
         ("one jurisdiction", "says three regions are one machine"),
         ("Multi-hop does not hide you here", "says multi-hop proves nothing here"),
-        ("bootstrap-node.sh", "points at the real, separate-node path"),
+        ("--mode node", "points at the real, separate-node path"),
     ):
         check(f"test summary {why}", want in out, out[-800:])
     rc, out = run_installer("--mode", "test", "--no-vpn")
