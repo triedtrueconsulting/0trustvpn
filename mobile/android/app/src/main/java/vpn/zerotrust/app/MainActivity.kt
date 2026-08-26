@@ -244,7 +244,7 @@ fun LoginScreen(ui: UiState, onLogin: (String) -> Unit) {
 
         Spacer(Modifier.height(8.dp))
         Text(
-            "Don't have a token yet? Visit 0trustvpn.com and pay with Bitcoin or Monero. " +
+            "Don't have a token yet? Visit 0trustvpn.com and pay with Bitcoin. " +
             "You'll receive your token immediately on payment confirmation.",
             color = ZT_InkFnt,
             fontSize = 12.sp,

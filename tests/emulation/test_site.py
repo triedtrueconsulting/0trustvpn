@@ -121,15 +121,23 @@ try:
     # Derived from the code, not a hardcoded list — the supported set has
     # changed twice now, and a test that names currencies by hand goes stale
     # silently the moment it changes again.
-    from payments import CURRENCIES
+    #
+    # Derived from the right thing, too. This used to assert every code in
+    # payments.CURRENCIES appeared on the page, which is how the page came to
+    # advertise four coins: CURRENCIES is what the SOFTWARE can handle, and
+    # what a DEPLOYMENT can take is currencies_for(provider). Under the
+    # installer default those differ by three, and the test was enforcing the
+    # overstatement rather than catching it.
+    import payments as _pay
+    OFFERED = set(_pay.currencies_for("watch"))
     NAMES = {"BTC": "Bitcoin", "ETH": "Ethereum", "XMR": "Monero",
              "ZEC": "Zcash", "LTC": "Litecoin"}
-    for cur in CURRENCIES:
+    for cur in sorted(OFFERED):
         check(f"{cur} is advertised", cur in idx)
     for code, name in NAMES.items():
-        if code in CURRENCIES:
+        if code in OFFERED:
             continue
-        check(f"unsupported currency not advertised: {name}",
+        check(f"currency the default install cannot take is not advertised: {name}",
               name not in idx and f" {code} " not in idx,
               [l.strip() for l in idx.splitlines()
                if name in l or f" {code} " in l][:2])
@@ -387,6 +395,51 @@ try:
           f"TRIAL_DAYS={api_main.TRIAL_DAYS}")
     check("trial page says no email", "No email" in trial)
     check("trial page distinguishes itself from /surf", "surf" in trial.lower())
+
+    print("\n[pay] the copy names only what a deployment can actually take")
+    # The landing page ran a MONERO ACCEPTED ticker and promised four coins in
+    # prose; the terms named a different two; and the default provider derives
+    # addresses from an xpub, which only Bitcoin's are derivable from. Three
+    # claims, none of them what a fresh install can do. The checkout was
+    # honest — it replaces its tabs from the invoice's real payment methods —
+    # so nobody got a dead address, but everything leading them there was
+    # selling a coin we could not take.
+    #
+    # The rule: static copy has to be true under the MOST restrictive
+    # provider, because that is the installer default and the state a
+    # deployment launches in. A page may upgrade itself from /api/v1/config
+    # when the operator has stood up something that takes more.
+    import payments as pay
+    floor = set(pay.currencies_for("watch"))
+    check("the watch provider still takes Bitcoin alone", floor == {"BTC"},
+          "if this changed, the copy below needs to change with it")
+
+    others = {"Monero": "XMR", "Zcash": "ZEC", "Ethereum": "ETH"}
+    for page in ("/", "/terms.html", "/privacy.html", "/help.html"):
+        _, body = get(page)
+        named = [name for name, code in others.items()
+                 if code not in floor and name.lower() in body.lower()]
+        check(f"{page} names no coin this deployment cannot take", not named,
+              f"{named} — a fresh install can only issue a BTC address")
+
+    # And the page has to be able to say more when there IS more, or the
+    # honesty runs the other way the day BTCPay goes up.
+    _, home = get("/")
+    check("the landing page renders the accepted set from the API",
+          'data-pay="codes"' in home and "cfg.currencies" in home,
+          "hardcoded copy drifts the moment the provider changes")
+    check("and the served fallback is the Bitcoin one",
+          "PAID IN BITCOIN" in home, home[:200])
+
+    # privacy.html is where someone decides whether to trust the payment
+    # story, so it has to be specific rather than reassuring.
+    _, priv = get("/privacy.html")
+    check("privacy.html does not call Bitcoin anonymous",
+          "pseudonymous, not anonymous" in priv,
+          "a privacy product claiming Bitcoin is anonymous is the exact "
+          "overstatement this page exists to avoid")
+    check("and says the chain is public and permanent",
+          "public chain" in priv, priv[:200])
 finally:
     srv.shutdown(); H.shutdown()
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")

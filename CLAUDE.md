@@ -118,10 +118,13 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   **But what a deployment can actually take depends on its provider**, and
   `currencies_for()` is the authority: `watch` returns BTC alone, card
   providers return "USD (card)", everything else returns all four. The
-  checkout is honest about this — it replaces its tabs from
-  `/api/v1/payment/{id}/methods` — but the marketing and legal copy is not:
-  index.html promises four coins in prose, terms.html §3 says two, and a
-  `watch` deployment can issue an address for one. Reconcile before launch.
+  checkout replaces its tabs from `/api/v1/payment/{id}/methods`, and the
+  static copy is written for the FLOOR — what `currencies_for("watch")` can
+  take, i.e. Bitcoin — because that is the state a fresh install launches in.
+  A page may upgrade itself from `/api/v1/config`; index.html does. Never
+  write a coin into copy that the default provider cannot issue an address
+  for: `test_site.py` fails on it, and it once shipped a MONERO ACCEPTED
+  ticker over a deployment that could only take BTC.
 - **Exactly one public chain endpoint is contacted, and only for BTC.** The
   `watch` provider talks to an Esplora API — `mempool.space/api` by default,
   overridable per deployment with `NODE_RPC_BTC` (blockstream.info/api, or

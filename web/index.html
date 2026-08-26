@@ -1344,6 +1344,47 @@
       document.querySelectorAll('[data-trial="days"]').forEach(e => e.textContent = t.days);
     } catch (e) { /* keep the static fallback */ }
   })();
+
+  // What this deployment can actually take, from the same endpoint. The copy
+  // is written for Bitcoin, because Bitcoin is all the default provider can
+  // issue an address for — it derives them from an xpub, and only Bitcoin's
+  // are derivable without wallet software. An operator who stands up BTCPay
+  // can take more, and the page should say so rather than undersell; one who
+  // has not should never see three coins advertised that produce no address.
+  //
+  // Additive on purpose. Rewriting the argument from JS would risk producing
+  // prose nobody wrote, on the page where being exactly right matters most.
+  (async () => {
+    try {
+      const cfg = await (await fetch('/api/v1/config', { cache: 'no-store' })).json();
+      const cur = cfg.currencies || [];
+      if (!cur.length) return;
+      const list = cur.length === 1 ? cur[0]
+        : cur.slice(0, -1).join(', ') + ' or ' + cur[cur.length - 1];
+
+      if (cfg.takes_cards) {
+        document.querySelectorAll('[data-pay="codes"]').forEach(
+          e => e.textContent = 'PAID BY CARD');
+        return;
+      }
+      document.querySelectorAll('[data-pay="codes"]').forEach(
+        e => e.textContent = 'PAID IN ' + cur.join(' / '));
+      if (cur.length > 1) {
+        document.querySelectorAll('[data-pay="send"]').forEach(
+          e => e.textContent = 'Send ' + list + ' to the address shown. '
+             + 'It activates on the first confirmation.');
+        document.querySelectorAll('[data-pay="prose"]').forEach((e) => {
+          const extra = document.createElement('span');
+          const rest = cur.filter(c => c !== 'BTC');
+          extra.textContent = ' This deployment also accepts '
+            + (rest.length === 1 ? rest[0]
+               : rest.slice(0, -1).join(', ') + ' and ' + rest[rest.length - 1])
+            + '.';
+          e.appendChild(extra);
+        });
+      }
+    } catch (e) { /* keep the static fallback */ }
+  })();
 </script>
 
 <!-- ============ TICKER ============ -->
@@ -1351,7 +1392,7 @@
   <div class="ticker-track">
     <span><span class="dot">◆</span> NO LOGS</span>
     <span><span class="dot">◆</span> NO EMAIL REQUIRED</span>
-    <span><span class="dot">◆</span> MONERO ACCEPTED</span>
+    <span><span class="dot">◆</span> BITCOIN ACCEPTED</span>
     <span><span class="dot">◆</span> OPEN-SOURCE CLIENT</span>
     <span><span class="dot">◆</span> WIREGUARD PROTOCOL</span>
     <span><span class="dot">◆</span> ZERO-TRUST MESH</span>
@@ -1359,7 +1400,7 @@
     <!-- duplicate for seamless loop -->
     <span><span class="dot">◆</span> NO LOGS</span>
     <span><span class="dot">◆</span> NO EMAIL REQUIRED</span>
-    <span><span class="dot">◆</span> MONERO ACCEPTED</span>
+    <span><span class="dot">◆</span> BITCOIN ACCEPTED</span>
     <span><span class="dot">◆</span> OPEN-SOURCE CLIENT</span>
     <span><span class="dot">◆</span> WIREGUARD PROTOCOL</span>
     <span><span class="dot">◆</span> ZERO-TRUST MESH</span>
@@ -1391,11 +1432,14 @@
     <div class="principle">
       <div class="principle-num">→ 04</div>
       <h3>Crypto <span class="italic">first.</span></h3>
-      <p>Monero, Bitcoin, Zcash and Ethereum. Monero is recommended — it is the
-      only one of the four that hides the amount and the counterparty by
-      default. Cards are available where the operator has enabled them, and
-      they are <em>not</em> anonymous: the processor learns who you are and
-      that you bought a VPN. <a href="/privacy#cards">What that means →</a></p>
+      <p data-pay="prose">Bitcoin. No name, no email, no account with anyone
+      — but Bitcoin is pseudonymous, not anonymous: every payment is on a
+      public chain forever, and if the coins came from an exchange that knows
+      you, that link exists whatever we do. A fresh address per invoice is
+      the most we can do from our side. Cards are available where the
+      operator has enabled them, and they are <em>not</em> private at all:
+      the processor learns who you are and that you bought a VPN.
+      <a href="/privacy#cards">What that means →</a></p>
     </div>
     <div class="principle">
       <div class="principle-num">→ 05</div>
@@ -1428,7 +1472,8 @@
         <div class="step-num">ii.</div>
         <div>
           <h4>Pay in crypto</h4>
-          <p>Send Monero, Bitcoin, Zcash or Ethereum to the shown address. Confirmation typically within ten minutes.</p>
+          <p data-pay="send">Send Bitcoin to the address shown. It activates
+          on the first confirmation — typically ten to twenty minutes.</p>
         </div>
       </div>
       <div class="step">
@@ -1671,7 +1716,7 @@
       <div>
         <button class="btn-primary" onclick="openSignup()">Begin →</button>
         <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-faint); margin-top: 16px; line-height: 1.6;">
-          PAID IN BTC / XMR / ZEC / ETH
+          <span data-pay="codes">PAID IN BITCOIN</span>
         </div>
       </div>
     </div>
@@ -1782,15 +1827,12 @@
         <p style="color: var(--ink-dim); margin-bottom: 8px;">Send the exact amount to the address below. Account activates on first confirmation.</p>
 
         <div class="crypto-tabs">
-          <button class="crypto-tab active" onclick="selectCrypto(this, 'XMR')">XMR</button>
-          <button class="crypto-tab" onclick="selectCrypto(this, 'BTC')">BTC</button>
-          <button class="crypto-tab" onclick="selectCrypto(this, 'ZEC')">ZEC</button>
-          <button class="crypto-tab" onclick="selectCrypto(this, 'ETH')">ETH</button>
+          <button class="crypto-tab active" onclick="selectCrypto(this, 'BTC')">BTC</button>
         </div>
 
         <div class="crypto-payment">
           <div class="crypto-amount">
-            <div class="amt" id="cryptoAmount">0.0823 XMR</div>
+            <div class="amt" id="cryptoAmount">0.00042 BTC</div>
             <div class="label-small" id="cryptoFiat">≈ $13.00 USD</div>
           </div>
 
