@@ -106,7 +106,7 @@ systemctl enable --now 0trust-meshd.service
 # ----------------------------------------------------------------------------
 log "Configuring NAT for exit node"
 # ----------------------------------------------------------------------------
-PRIMARY_IF=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+PRIMARY_IF=$(ip -o -4 route show to default | awk 'NR==1{print $5}')
 mkdir -p /etc/nftables.d
 ztv_nat_ruleset "$PRIMARY_IF" | nft -f -
 nft list table inet ztv_nat > /etc/nftables.d/0trust.nft

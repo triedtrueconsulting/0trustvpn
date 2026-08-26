@@ -63,13 +63,24 @@ check() {
             # the last 20 were the final module's PASS list and the real
             # failure — hundreds of lines earlier — never appeared in CI at
             # all. Diagnosing it meant reproducing the whole runner locally.
-            local hits
-            hits=$(grep -E -A3 'FAIL|FAILED|Traceback|Error:' <<<"$out" | head -60) || true
+            #
+            # -A6 and 200 lines, not -A3 and 60. Three lines of context and a
+            # 60-line cap turned out to be exactly not enough to diagnose a
+            # failure that only happens in CI: the summary showed a check had
+            # failed and cut off before the part that said why, so the only
+            # way forward was to reconstruct the runner's environment locally
+            # and hope the failure reproduced. It did not.
+            local hits full
+            full=$(mktemp)
+            printf '%s\n' "$out" > "$full"
+            hits=$(grep -E -A6 'FAIL|FAILED|Traceback|Error:' "$full" \
+                   | { head -200; cat >/dev/null; }) || true
             if [[ -n "$hits" ]]; then
                 sed 's/^/          /' <<<"$hits"
-                printf '          %s---- end of run ----%s\n' "$DIM" "$NC"
+                printf '          %s---- end of failures (full output: %s) ----%s\n' \
+                       "$DIM" "$full" "$NC"
             fi
-            sed 's/^/          /' <<<"$out" | tail -20 ;;
+            { tail -20 "$full" | sed 's/^/          /'; } ;;
     esac
 }
 
@@ -230,6 +241,15 @@ check regions-current "only zur/rey/buc appear as regions" -- bash -c '
     hits=$(xargs -r -a "$VALIDATE_FILES" \
              grep -nE "\b(ams|fra|lon|sto|nyc|sjc|sgp|tyo)-[0-9]+\b" || true)
     [ -z "$hits" ] || { echo "stale region codes:"; echo "$hits"; exit 1; }'
+
+# `producer | head -N` under `set -o pipefail` fails whenever the producer is
+# still writing when head exits — which depends on scheduling, so it passes on
+# a quiet laptop and fails on a loaded CI runner. It has cost this repo two
+# CI-only failures: an installer dry run that exited non-zero halfway through
+# printing a config, and audit checks that would have reported a finding
+# because the check itself died.
+check pipefail-head "no pipeline can die of SIGPIPE under pipefail" -- \
+    "$PY" "$REPO_DIR/tests/lint/no-sigpipe-head.py"
 
 check auth-header "clients send X-Account-Token, never Bearer" -- bash -c '
     hits=$(grep -rn "Authorization: Bearer" api client mobile || true)

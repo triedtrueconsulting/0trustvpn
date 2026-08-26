@@ -69,7 +69,16 @@ def node_env(box, token, region="zur", role="both", port=51820):
 
 
 def enroll(box, envfile, public_ip="203.0.113.77", ipv6="false"):
-    """Run the real enrolment script with a node's filesystem faked out."""
+    """
+    Run the real enrolment script against a scratch filesystem.
+
+    ZTV_ROOT prefixes every path it writes, so this drives the shipped script
+    unmodified and needs no privileges. The first version bind-mounted /etc
+    inside `unshare -Urm` instead, which worked as root and failed everywhere
+    else — a user namespace maps uid 0 to the caller, so `mkdir /etc/0trust`
+    is still denied. The enrolment path then went untested on exactly the
+    unprivileged CI that was meant to be checking it.
+    """
     root = os.path.join(box, "root")
     for d in ("etc/wireguard", "etc/0trust", "var/0trust", "etc/dnsmasq.d",
               "etc/nftables.d", "lib"):
@@ -83,16 +92,15 @@ def enroll(box, envfile, public_ip="203.0.113.77", ipv6="false"):
         "PATH": os.path.join(EMU, "bin") + ":" + os.environ["PATH"],
         "STUB_LOG": os.path.join(box, "stub.log"),
         "STUB_STATE": root,
+        "ZTV_ROOT": root,
         "ZTV_NODE_ENV": envfile,
         "ZTV_LIBDIR": os.path.join(root, "lib"),
-        "ZTV_STATE_DIR": os.path.join(root, "var/0trust"),
         "ZTV_PUBLIC_IP": public_ip,
         "ZTV_NODE_IPV6": ipv6,
         "HOME": box,
     }
-    r = subprocess.run(["bash", ENROLL], capture_output=True, text=True,
-                       timeout=180, env=env, cwd=root)
-    return r
+    return subprocess.run(["bash", ENROLL], capture_output=True, text=True,
+                          timeout=180, env=env, cwd=root)
 
 
 def rows(sql, args=()):
@@ -102,63 +110,12 @@ def rows(sql, args=()):
     return out
 
 
-# The enrolment script writes to absolute paths (/etc/wireguard, /etc/0trust)
-# that a test cannot own. Run it under a private mount namespace where those
-# are bind-mounted into the scratch tree — the script stays unmodified, which
-# is the whole point of testing it rather than a copy of it.
-def have_userns():
-    r = subprocess.run(["unshare", "-Urm", "true"], capture_output=True)
-    return r.returncode == 0
-
-
-if not shutil.which("unshare") or not have_userns():
-    print("  SKIP  no unprivileged mount namespaces (unshare -Urm)")
-    H.shutdown()
-    sys.exit(77)
-
-
-def enroll_ns(box, envfile, public_ip="203.0.113.77", ipv6="false", port=None):
-    """enroll(), but with /etc/wireguard and friends bound into the box."""
-    root = os.path.join(box, "root")
-    for d in ("etc/wireguard", "etc/0trust", "var/0trust", "etc/dnsmasq.d",
-              "etc/nftables.d", "lib"):
-        os.makedirs(os.path.join(root, d), exist_ok=True)
-    for f in ("node-runtime.sh", "node-runtime-apply.sh"):
-        shutil.copy(os.path.join(H.REPO, "scripts", f),
-                    os.path.join(root, "lib", f))
-    os.chmod(os.path.join(root, "lib", "node-runtime-apply.sh"), 0o755)
-    script = f"""
-        set -e
-        mkdir -p /etc/wireguard /etc/0trust /var/0trust /etc/dnsmasq.d /etc/nftables.d
-        mount --bind {root}/etc/wireguard /etc/wireguard
-        mount --bind {root}/etc/0trust    /etc/0trust
-        mount --bind {root}/var/0trust    /var/0trust
-        mount --bind {root}/etc/dnsmasq.d /etc/dnsmasq.d
-        mount --bind {root}/etc/nftables.d /etc/nftables.d
-        exec bash {ENROLL}
-    """
-    env = {
-        **os.environ,
-        "PATH": os.path.join(EMU, "bin") + ":" + os.environ["PATH"],
-        "STUB_LOG": os.path.join(box, "stub.log"),
-        "STUB_STATE": root,
-        "ZTV_NODE_ENV": envfile,
-        "ZTV_LIBDIR": os.path.join(root, "lib"),
-        "ZTV_STATE_DIR": "/var/0trust",
-        "ZTV_PUBLIC_IP": public_ip,
-        "ZTV_NODE_IPV6": ipv6,
-        "HOME": box,
-    }
-    return subprocess.run(["unshare", "-Urm", "bash", "-c", script],
-                          capture_output=True, text=True, timeout=180, env=env)
-
-
 try:
     print("[1] a fresh VPS joins the mesh in one call")
     box = os.path.join(TMP, "box1"); os.makedirs(box)
     tok = mint(uses=5)
     envf = node_env(box, tok, port=51999)
-    r = enroll_ns(box, envf)
+    r = enroll(box, envf)
     check("enrolment succeeds", r.returncode == 0,
           (r.stdout + r.stderr)[-700:])
     check("it says which node it became",
@@ -220,7 +177,7 @@ try:
     # A reboot on a RAM-only node is exactly this: the tmpfs is empty again.
     for d in ("etc/wireguard", "etc/0trust"):
         shutil.rmtree(os.path.join(box, "root", d)); os.makedirs(os.path.join(box, "root", d))
-    r2 = enroll_ns(box, envf)
+    r2 = enroll(box, envf)
     check("it enrols again after a reboot", r2.returncode == 0,
           (r2.stdout + r2.stderr)[-700:])
     check("and says it rejoined rather than joined",
@@ -241,7 +198,7 @@ try:
     print("\n[5] the token is bound to this box and nothing else")
     box2 = os.path.join(TMP, "box2"); os.makedirs(box2)
     envf2 = node_env(box2, tok)
-    r3 = enroll_ns(box2, envf2, public_ip="198.51.100.44")
+    r3 = enroll(box2, envf2, public_ip="198.51.100.44")
     check("a copy of the token from another address is refused",
           r3.returncode != 0,
           "an enrolment token lives on a node's disk; if it works from "

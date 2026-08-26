@@ -512,7 +512,7 @@ fi
 # and an empty value here would write meshd configs that can never authenticate
 # — nodes silently failing to sync while the installer reports success.
 if [[ $DRY_RUN -eq 0 && -z "${NODE_PSK:-}" && -f "$ETC/api.env" ]]; then
-    NODE_PSK="$(sed -n 's/^NODE_API_PSK=//p' "$ETC/api.env" | head -n1)"
+    NODE_PSK="$(sed -n 's/^NODE_API_PSK=//p' "$ETC/api.env" | tail -n1)"
 fi
 NODE_PSK="${NODE_PSK:-RENDER-ONLY-NO-PSK}"
 
@@ -802,7 +802,13 @@ if [[ $DRY_RUN -eq 1 ]]; then
         cp "$TMP_ZONES" "$ZTV_RENDER_TO/zones.conf"
         note "rendered config written to $ZTV_RENDER_TO"
     else
-        note "rendered site config:"; sed 's/^/      /' "$TMP_SITE" | head -20
+        # head FIRST, then sed. The other way round, head exits after 20
+        # lines and sed dies of SIGPIPE on its next write — which under
+        # `set -o pipefail` fails the pipeline and, under `set -e`, ends the
+        # whole dry run right here with a non-zero exit. Whether it fires is
+        # a scheduling race: never on an idle laptop, reliably on a loaded CI
+        # runner, which is precisely the shape of bug that gets shipped.
+        note "rendered site config:"; head -20 "$TMP_SITE" | sed 's/^/      /'
     fi
 fi
 
@@ -930,7 +936,7 @@ fi
 ok "keys + meshd units for ${#LOCAL_NODES[@]} local nodes"
 
 # --- NAT and the abuse filter, identical to a real node -------------------
-PRIMARY_IF="$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -n1)"
+PRIMARY_IF="$(ip -o -4 route show to default 2>/dev/null | awk 'NR==1{print $5}')"
 PRIMARY_IF="${PRIMARY_IF:-eth0}"
 if [[ $DRY_RUN -eq 0 ]]; then
     mkdir -p /etc/nftables.d

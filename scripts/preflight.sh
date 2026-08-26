@@ -248,7 +248,7 @@ EOF
 
 gate installers-signed "the release carries signed installers" \
      "build the MSI on Windows and the APK in Android Studio, then scripts/release.sh" <<EOF
-$(v="$(grep -oE '/releases/([0-9.]+)/' web/download.html | head -1 | tr -d '/' | sed 's/releases//')"
+$(v="$(grep -om1 -E '/releases/([0-9.]+)/' web/download.html | tr -d '/' | sed 's/releases//')"
   d="releases/$v"
   if [[ ! -d "$d" ]]; then echo "no $d/ yet — nothing has been released"
   elif [[ ! -f "$d/SHA256SUMS.asc" ]]; then echo "$d is unsigned"

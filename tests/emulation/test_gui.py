@@ -76,6 +76,11 @@ with socket.socket() as _probe:
             "earlier run, most likely. Kill it and re-run:\n"
             f"    pkill -f '0trust gui'")
 
+# wg-quick needs root, and so does the GUI's connect handler. Which half of
+# this module can run is decided by that, not by anything about the browser.
+IS_ROOT = os.geteuid() == 0
+CONNECTED = False
+
 gui = subprocess.Popen([BIN, "gui", "--no-browser"], env=GUI_ENV,
                        stdout=open(f"{TMP}/gui.log", "w"), stderr=subprocess.STDOUT)
 browser = None
@@ -117,15 +122,44 @@ try:
         check("no JS errors so far", not errors, errors)
 
         print("\n[3] connect through the GUI")
+        # Bringing a tunnel up needs root — wg-quick writes routes — and the
+        # GUI refuses without it rather than pretending. So there are two
+        # correct outcomes here, and this module used to assert only the one
+        # it happened to get on a developer's root shell: run unprivileged, it
+        # sat waiting 45 seconds for a status change that was never coming and
+        # failed with a bare Playwright timeout that explained nothing.
+        #
+        # Unprivileged is also what most people will hit first, so the message
+        # they get is worth an assertion of its own.
+        # Blank any toast still on screen from the trial step, or the wait
+        # below matches that one and asserts nothing about this click.
+        page.evaluate("() => { const t = document.getElementById('toast');"
+                      "        t.textContent = ''; t.classList.add('hidden'); }")
         page.click("#toggle-btn")
-        page.wait_for_function(
-            "() => document.getElementById('status-text').textContent.trim() !== 'Disconnected'",
-            timeout=45000)
-        st = page.inner_text("#status-text").strip()
-        check("status leaves Disconnected", st != "Disconnected", st)
-        check("device count rose to 1",
-              page.inner_text("#kv-dev").strip().startswith("1"),
-              page.inner_text("#kv-dev"))
+        if IS_ROOT:
+            page.wait_for_function(
+                "() => document.getElementById('status-text').textContent.trim() !== 'Disconnected'",
+                timeout=45000)
+            st = page.inner_text("#status-text").strip()
+            check("status leaves Disconnected", st != "Disconnected", st)
+            check("device count rose to 1",
+                  page.inner_text("#kv-dev").strip().startswith("1"),
+                  page.inner_text("#kv-dev"))
+            CONNECTED = True
+        else:
+            page.wait_for_function(
+                "() => { const t = document.getElementById('toast');"
+                "        return t && !t.classList.contains('hidden')"
+                "               && t.textContent.trim().length > 0; }",
+                timeout=20000)
+            msg = page.inner_text("#toast").strip()
+            check("without root the GUI says why, rather than doing nothing",
+                  "root" in msg.lower() or "sudo" in msg.lower(), msg)
+            check("and the status stays honest about being disconnected",
+                  page.inner_text("#status-text").strip() == "Disconnected",
+                  page.inner_text("#status-text"))
+            print("      (not root: the tunnel path is exercised when this "
+                  "module runs as root)")
 
         print("\n[3b] the kill switch is reachable without the CLI")
         # A safety control that only exists as a command-line flag is one most
@@ -144,14 +178,22 @@ try:
             # The rules are wg-quick PostUp/PreDown, so they land on the next
             # connect. Tearing a live tunnel down under someone who ticked a
             # box would be a worse surprise than the delay.
-            check("and it says the running tunnel is not covered yet",
-                  "next time you connect" in page.inner_text("#ks-hint"),
-                  page.inner_text("#ks-hint"))
-            # The message has to survive the 3s poll repainting the panel.
-            page.wait_for_timeout(3500)
-            check("and keeps saying so after the next poll",
-                  "next time you connect" in page.inner_text("#ks-hint"),
-                  page.inner_text("#ks-hint"))
+            if CONNECTED:
+                check("and it says the running tunnel is not covered yet",
+                      "next time you connect" in page.inner_text("#ks-hint"),
+                      page.inner_text("#ks-hint"))
+                # The message has to survive the 3s poll repainting the panel.
+                page.wait_for_timeout(3500)
+                check("and keeps saying so after the next poll",
+                      "next time you connect" in page.inner_text("#ks-hint"),
+                      page.inner_text("#ks-hint"))
+            else:
+                # Nothing is running, so nothing is uncovered. Saying a change
+                # is "not in force yet" with no tunnel up would be the same
+                # kind of lie in the other direction.
+                check("with no tunnel it does not claim something is pending",
+                      "next time you connect" not in page.inner_text("#ks-hint"),
+                      page.inner_text("#ks-hint"))
             page.uncheck("#ks-toggle")
             page.wait_for_function(
                 "() => document.getElementById('ks-label').textContent === 'off'",
@@ -200,7 +242,14 @@ try:
             "() => !document.getElementById('devices-list').textContent.includes('Loading')",
             timeout=20000)
         listed = page.inner_text("#devices-list")
-        check("this device is listed", "this device" in listed, listed[:300])
+        if CONNECTED:
+            check("this device is listed", "this device" in listed, listed[:300])
+        else:
+            # The keypair is created by connect, so there is genuinely nothing
+            # here yet — and an empty list has to say so rather than looking
+            # like a failed load.
+            check("an account with no devices says so plainly",
+                  "no devices" in listed.lower(), listed[:300])
         count = page.inner_text("#devices-count")
         check("slot count reflects the trial cap", "of 2 slots" in count, count)
 
@@ -250,13 +299,16 @@ try:
                   all(d["pubkey"] != other for d in devs), devs)
 
         print("\n[5] removing THIS device tears the tunnel down")
-        rows = page.query_selector_all("#devices-list .device-row")
+        rows = page.query_selector_all("#devices-list .device-row") if CONNECTED else []
+        if not CONNECTED:
+            print("      (needs a tunnel, which needs root — skipped here)")
         this_row = None
         for row in rows:
             if "this device" in row.inner_text().lower():
                 this_row = row
                 break
-        check("found this device's row", this_row is not None)
+        if CONNECTED:
+            check("found this device's row", this_row is not None)
         if this_row:
             this_row.query_selector("button").click()
             page.wait_for_function(

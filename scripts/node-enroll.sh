@@ -28,9 +28,18 @@
 # ============================================================================
 set -euo pipefail
 
-ENVFILE="${ZTV_NODE_ENV:-/etc/0trust-node.env}"
+# ZTV_ROOT prefixes every system path this writes. Empty in production, which
+# is the only value a node ever uses. It exists so the whole script can be run
+# end to end against a scratch directory — the alternative was a test that
+# needed real root to write /etc, which meant the enrolment path went
+# unexercised on exactly the unprivileged CI that was supposed to be checking
+# it.
+ROOT="${ZTV_ROOT:-}"
+ENVFILE="${ZTV_NODE_ENV:-$ROOT/etc/0trust-node.env}"
 LIBDIR="${ZTV_LIBDIR:-/usr/local/lib/0trust}"
-STATE_DIR="${ZTV_STATE_DIR:-/var/0trust}"
+WG_DIR="${ZTV_WG_DIR:-$ROOT/etc/wireguard}"
+CONF_DIR="${ZTV_CONF_DIR:-$ROOT/etc/0trust}"
+STATE_DIR="${ZTV_STATE_DIR:-$ROOT/var/0trust}"
 WG_IFACE="${ZTV_WG_IFACE:-wg0}"
 MESH_GATEWAY="${ZTV_MESH_GATEWAY:-10.64.0.1/10}"
 
@@ -49,17 +58,18 @@ WG_PORT="${WG_PORT:-51820}"
 CONTROL_URL="${CONTROL_URL%/}"
 
 umask 077
-mkdir -p /etc/wireguard /etc/0trust "$STATE_DIR"
+mkdir -p "$WG_DIR" "$CONF_DIR" "$STATE_DIR"
 
 # --- 1. a key that has never existed before ---------------------------------
 # Unconditionally regenerated. If /etc/wireguard is somehow NOT tmpfs, this is
 # also what stops yesterday's key living on: it is overwritten every boot.
-wg genkey > /etc/wireguard/$WG_IFACE.key
-wg pubkey < /etc/wireguard/$WG_IFACE.key > /etc/wireguard/$WG_IFACE.pub
-chmod 600 /etc/wireguard/$WG_IFACE.key
-PUBKEY="$(cat /etc/wireguard/$WG_IFACE.pub)"
+wg genkey > "$WG_DIR/$WG_IFACE.key"
+wg pubkey < "$WG_DIR/$WG_IFACE.key" > "$WG_DIR/$WG_IFACE.pub"
+chmod 600 "$WG_DIR/$WG_IFACE.key"
+PUBKEY="$(cat "$WG_DIR/$WG_IFACE.pub")"
 
-if ! grep -qE "[[:space:]]/etc/wireguard[[:space:]]+tmpfs" /proc/mounts; then
+if [[ -z "$ROOT" ]] \
+   && ! grep -qE "[[:space:]]/etc/wireguard[[:space:]]+tmpfs" /proc/mounts; then
     log "WARNING: /etc/wireguard is not tmpfs — the private key is on disk,"
     log "         which contradicts what the site tells customers."
 fi
@@ -132,8 +142,8 @@ fi
 source "$LIBDIR/node-runtime.sh"
 ztv_meshd_env "$CONTROL_URL" "$NODE_PSK" "$NODE_ID" "$NODE_ROLE" \
               "$WG_IFACE" "$WG_PORT" "$MESH_GATEWAY" ztv_forward \
-              > /etc/0trust/meshd.env
-chmod 600 /etc/0trust/meshd.env
+              > "$CONF_DIR/meshd.env"
+chmod 600 "$CONF_DIR/meshd.env"
 
 # Not a secret: the id and address this box is known by, for the installer and
 # for anyone reading the box later. The PSK stays out of it.
@@ -151,7 +161,7 @@ chmod 644 "$STATE_DIR/enrol.state"
 # --- 5. the runtime a reboot would otherwise lose ---------------------------
 # NAT, the abuse egress filter and the mesh resolver, in one place shared with
 # the persistent-node path so the two cannot drift.
-ZTV_LIBDIR="$LIBDIR" ZTV_MESH_GATEWAY="$MESH_GATEWAY" \
+ZTV_ROOT="$ROOT" ZTV_LIBDIR="$LIBDIR" ZTV_MESH_GATEWAY="$MESH_GATEWAY" \
     "${ZTV_RUNTIME_APPLY:-$LIBDIR/node-runtime-apply.sh}"
 
 log "ready — meshd starts next"

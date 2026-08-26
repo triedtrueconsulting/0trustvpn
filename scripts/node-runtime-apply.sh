@@ -16,8 +16,12 @@
 # ============================================================================
 set -euo pipefail
 
+# See node-enroll.sh: empty in production, a scratch prefix under test.
+ROOT="${ZTV_ROOT:-}"
 LIBDIR="${ZTV_LIBDIR:-/usr/local/lib/0trust}"
 MESH_GATEWAY="${ZTV_MESH_GATEWAY:-10.64.0.1/10}"
+NFT_DIR="${ZTV_NFT_DIR:-$ROOT/etc/nftables.d}"
+DNSMASQ_DIR="${ZTV_DNSMASQ_DIR:-$ROOT/etc/dnsmasq.d}"
 
 log() { printf '[runtime] %s\n' "$*"; }
 
@@ -28,13 +32,13 @@ else
     source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/node-runtime.sh"
 fi
 
-PRIMARY_IF="$(ip -o -4 route show to default | awk '{print $5}' | head -n1)"
+PRIMARY_IF="$(ip -o -4 route show to default | awk 'NR==1{print $5}')"
 if [[ -n "$PRIMARY_IF" ]]; then
-    mkdir -p /etc/nftables.d
+    mkdir -p "$NFT_DIR"
     ztv_nat_ruleset "$PRIMARY_IF" | nft -f -
     ztv_egress_ruleset | nft -f -
     { nft list table inet ztv_nat; nft list table inet ztv_egress; } \
-        > /etc/nftables.d/0trust.nft 2>/dev/null || true
+        > "$NFT_DIR/0trust.nft" 2>/dev/null || true
     log "nftables: NAT via $PRIMARY_IF, egress filter applied"
 else
     log "WARNING: no default route found; NAT not applied"
@@ -43,8 +47,8 @@ fi
 # Clients are handed DNS = the mesh gateway, so something has to answer there.
 # bind-interfaces, and never on the public address: an open resolver is a
 # DNS-amplification abuse report waiting to happen.
-mkdir -p /etc/dnsmasq.d
-ztv_dnsmasq_conf "${MESH_GATEWAY%%/*}" > /etc/dnsmasq.d/0trust.conf
+mkdir -p "$DNSMASQ_DIR"
+ztv_dnsmasq_conf "${MESH_GATEWAY%%/*}" > "$DNSMASQ_DIR/0trust.conf"
 systemctl enable dnsmasq >/dev/null 2>&1 || true
 # dnsmasq cannot bind the gateway address until meshd has created wg0, and on
 # a fresh boot meshd starts after this. Its own restarts pick it up.

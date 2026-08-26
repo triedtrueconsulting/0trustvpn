@@ -62,7 +62,7 @@ check() {
         ((SKIP++))
     else
         echo "${RED}FAIL${NC}"
-        echo "    ${DIM}${out}${NC}" | head -10
+        head -10 <<<"    ${DIM}${out}${NC}"
         ((FAIL++))
     fi
 }
@@ -337,8 +337,9 @@ check wg-no-monitoring "No periodic 'wg show' polling writing to disk" -- bash -
 check meshd-log-no-customer-data "meshd journal has no customer pubkeys" -- bash -c "
     command -v journalctl >/dev/null || exit 77
     # WG public keys are base64 with trailing '=', 44 chars total
-    if journalctl -u 0trust-meshd --since '1 hour ago' 2>/dev/null \
-        | grep -oE '[A-Za-z0-9+/]{43}=' | head -1 | grep -q .; then
+    hit=\$(journalctl -u 0trust-meshd --since '1 hour ago' 2>/dev/null \
+        | grep -oE '[A-Za-z0-9+/]{43}=' | { head -1; cat >/dev/null; } || true)
+    if [[ -n \"\$hit\" ]]; then
         echo 'Potential pubkey in meshd log'
         exit 1
     fi
@@ -381,9 +382,10 @@ section "§7. APPLICATION (API) LOGS"
 check api-log-no-tokens "Recent API log has no account-token leakage" -- bash -c "
     command -v journalctl >/dev/null || exit 77
     # Account tokens are XXXX-XXXX-XXXX-XXXX (Crockford base32, no I/L/O/U/1/0)
-    if journalctl -u 0trust-api --since '1 hour ago' 2>/dev/null \
+    hit=\$(journalctl -u 0trust-api --since '1 hour ago' 2>/dev/null \
         | grep -oE '\\b[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}\\b' \
-        | head -1 | grep -q .; then
+        | { head -1; cat >/dev/null; } || true)
+    if [[ -n \"\$hit\" ]]; then
         echo 'Account token visible in API journal'
         exit 1
     fi
@@ -391,8 +393,10 @@ check api-log-no-tokens "Recent API log has no account-token leakage" -- bash -c
 
 check api-log-no-pubkeys "Recent API log has no WireGuard pubkeys" -- bash -c "
     command -v journalctl >/dev/null || exit 77
-    if journalctl -u 0trust-api --since '1 hour ago' 2>/dev/null \
-        | grep -oE '\"pubkey\"\\s*:\\s*\"[A-Za-z0-9+/]{43}='  | head -1 | grep -q .; then
+    hit=\$(journalctl -u 0trust-api --since '1 hour ago' 2>/dev/null \
+        | grep -oE '\"pubkey\"\\s*:\\s*\"[A-Za-z0-9+/]{43}=' \
+        | { head -1; cat >/dev/null; } || true)
+    if [[ -n \"\$hit\" ]]; then
         echo 'Pubkey visible in API journal'
         exit 1
     fi
@@ -401,7 +405,7 @@ check api-log-no-pubkeys "Recent API log has no WireGuard pubkeys" -- bash -c "
 check api-journald-retention "journald retention ≤ 7 days" -- bash -c "
     command -v journalctl >/dev/null || exit 77
     # Get the journal's earliest entry; if older than 7 days, retention is too long
-    first=\$(journalctl --output=short-iso 2>/dev/null | head -1 | awk '{print \$1}')
+    first=\$(journalctl --output=short-iso -n 1 --reverse 2>/dev/null | awk '{print \$1}')
     [[ -n \"\$first\" ]] || { echo 'no journal data'; exit 77; }
     first_epoch=\$(date -d \"\$first\" +%s 2>/dev/null || echo 0)
     age=\$(( \$(date +%s) - first_epoch ))
@@ -435,13 +439,14 @@ check backups-encrypted "No UNENCRYPTED database copies on disk" -- bash -c '
         grep -aq "CREATE TABLE.*mesh_nodes" "$f" 2>/dev/null || continue
         grep -aq "CREATE TABLE.*accounts"  "$f" 2>/dev/null || continue
         echo "$f"
-    done | head -5)
+    done | { head -5; cat >/dev/null; })
     [ -z "$plaintext" ] || {
         echo "unencrypted copy of the 0trust database: $plaintext"; exit 1; }
 '
 
 check backups-no-leftover-snapshot "No leftover plaintext .snap-* snapshots" -- bash -c '
-    leftover=$(find / -name ".snap-*.db" -not -path "/proc/*" 2>/dev/null | head -3)
+    leftover=$(find / -name ".snap-*.db" -not -path "/proc/*" 2>/dev/null \
+                 | { head -3; cat >/dev/null; })
     [ -z "$leftover" ] || { echo "leftover snapshot (backup.sh should shred): $leftover"; exit 1; }
 '
 
@@ -452,7 +457,8 @@ check no-cdnjs "Landing page does not reference cdnjs or other CDNs" -- bash -c 
     web_root=/var/www/0trust
     [[ -d \$web_root ]] || exit 77
     if grep -rqE 'cdnjs|unpkg|jsdelivr|googleapis\\.com/ajax' \$web_root 2>/dev/null; then
-        bad=\$(grep -rlE 'cdnjs|unpkg|jsdelivr|googleapis\\.com/ajax' \$web_root | head -3)
+        bad=\$(grep -rlE 'cdnjs|unpkg|jsdelivr|googleapis\\.com/ajax' \$web_root \
+                 | { head -3; cat >/dev/null; })
         echo \"third-party CDN reference found in: \$bad\"
         exit 1
     fi
