@@ -535,7 +535,8 @@ private fun AccountCard(ui: UiState) {
             Text("ACCOUNT", style = MaterialTheme.typography.labelSmall, color = ZT_InkFnt)
             kv("Token", acct.token.take(4) + "-****-****-" + acct.token.takeLast(4))
             kv("Subscription", acct.mode)
-            kv("Expires in", "${acct.daysRemaining} days")
+            kv("Expires in", "${acct.daysRemaining} " +
+                if (acct.daysRemaining == 1) "day" else "days")
             // The cap is per-plan: a trial account gets fewer devices than a
             // paid one. Printing a constant "8" told trial customers a number
             // the API would then refuse to honour.

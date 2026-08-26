@@ -182,8 +182,8 @@ func cmdLogin() error {
 	if err := st.Save(); err != nil {
 		return err
 	}
-	fmt.Printf("✓ logged in — subscription %s (%d days remaining)\n",
-		status.Status, status.DaysRemaining)
+	fmt.Printf("✓ logged in — subscription %s (%s remaining)\n",
+		status.Status, plural(status.DaysRemaining, "day"))
 	return nil
 }
 
@@ -247,18 +247,27 @@ func cmdStatus() error {
 		}
 	}
 
+	// The device cap is per-plan — a trial account gets fewer than a paid one
+	// — so it has to come from the server. Printing a constant 8 told trial
+	// customers they had six devices spare when the next register would 409.
+	// Same bug the Android app carried. Fall back only if the field is absent.
+	devCap := s.MaxDevices
+	if devCap <= 0 {
+		devCap = 8
+	}
+
 	fmt.Printf(`  account     : %s
   status      : %s
-  expires     : %s  (%d days)
-  devices     : %d / 8
+  expires     : %s  (%s)
+  devices     : %d / %d
   tunnel      : %s
   mode        : %s
   ipv6        : %s
   kill switch : %s
   next rotate : %s
 `,
-		maskToken(st.Token), s.Status, expiryStr, s.DaysRemaining,
-		s.DeviceCount, tunnelState(), mode, ipv6Str, killStr, rotateStr)
+		maskToken(st.Token), s.Status, expiryStr, plural(s.DaysRemaining, "day"),
+		s.DeviceCount, devCap, tunnelState(), mode, ipv6Str, killStr, rotateStr)
 	return nil
 }
 
@@ -691,6 +700,15 @@ func maskToken(t string) string {
 		return t
 	}
 	return t[:4] + "-****-****-" + t[len(t)-4:]
+}
+
+// plural renders a count with its unit, so a customer on their last day reads
+// "1 day" rather than "1 days".
+func plural(n int, unit string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, unit)
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
 }
 
 func tunnelState() string {

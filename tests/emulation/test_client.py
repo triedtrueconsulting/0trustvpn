@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Drive the REAL compiled 0trust binary against the live stack."""
-import json, os, shutil, subprocess, sys
+import json, os, shutil, sqlite3, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -68,6 +68,21 @@ try:
     # it has to actually say it.
     check("status reports the IPv6 situation", "ipv6" in out.lower(), out)
     check("status reports the kill switch", "kill switch" in out.lower(), out)
+    check("status shows the paid device cap", "/ 8" in out, out)
+
+    # The cap is per-plan, and the CLI used to print a constant 8. A trial
+    # customer with a cap of 2 was told they had six devices spare, and found
+    # out otherwise when the next register returned 409. The GUI reads
+    # max_devices off the same response; so must this.
+    c = sqlite3.connect(DB)
+    c.execute("UPDATE accounts SET plan = 'trial' WHERE plan != 'trial'")
+    c.commit(); c.close()
+    rc, out = cli("status")
+    check("a trial account is shown the TRIAL device cap, not the paid one",
+          "/ 2" in out and "/ 8" not in out, out)
+    c = sqlite3.connect(DB)
+    c.execute("UPDATE accounts SET plan = 'paid' WHERE plan = 'trial'")
+    c.commit(); c.close()
 
     print("\n[2] regions")
     rc, out = cli("regions")

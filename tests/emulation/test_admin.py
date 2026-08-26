@@ -179,13 +179,16 @@ try:
     st, s = H.call("GET", "/api/v1/account/status",
                    headers={"X-Account-Token": b["token"]})
     check("manual settlement credits the account", s["status"] == "active", s)
-    days = s["days_remaining"]
+    # expires_at, not days_remaining: the latter is derived from the current
+    # clock and ticks down between the two reads, which reads as a re-credit
+    # that never happened. See test_payments.py.
+    expires = s["expires_at"]
     st, r = adm("POST", f"/invoices/{b['invoice_id']}/settle")
     check("settling twice is refused as a duplicate", r.get("duplicate"), r)
     s2 = H.call("GET", "/api/v1/account/status",
                 headers={"X-Account-Token": b["token"]})[1]
-    check("and does not double the subscription", s2["days_remaining"] == days,
-          f"{days} -> {s2['days_remaining']}")
+    check("and does not double the subscription", s2["expires_at"] == expires,
+          f"expiry moved {expires} -> {s2['expires_at']}")
 
     print("\n[8] settings")
     st, cfg = adm("GET", "/settings")
