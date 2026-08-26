@@ -152,7 +152,8 @@ function loadTab(name) {
     (b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('[data-panel]').forEach(
     (p) => p.classList.toggle('hidden', p.dataset.panel !== name));
-  ({ overview: loadOverview, accounts: loadAccounts, nodes: loadNodes,
+  ({ overview: loadOverview, accounts: loadAccounts,
+     nodes: () => { loadNodes(); loadPtokens(); },
      payments: loadPayments, notices: loadNotices, settings: loadSettings,
      events: loadEvents, audit: loadAudit }[name] || (() => {}))();
 }
@@ -329,15 +330,51 @@ $('node-form').addEventListener('submit', async (e) => {
 $('ptok-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = Object.fromEntries(new FormData(e.target).entries());
-  f.ttl_hours = Number(f.ttl_hours);
+  f.ttl_hours = Number(f.ttl_hours); f.uses = Number(f.uses || 1);
   try {
     const r = await api('/nodes/provision-token', { method: 'POST', body: f });
+    const cmd = `sudo ./scripts/install.sh --mode node \\\n` +
+      `     --control-url ${location.origin} \\\n` +
+      `     --region ${r.region} --role ${r.role} \\\n` +
+      `     --provision-token ${r.token}`;
     $('ptok-out').replaceChildren(
       el('div', { class: 'secret-out', text: r.token }),
       el('p', { class: 'note', text:
-        `Valid until ${fmtTime(r.expires_at)}. Shown once — copy it now. Pass it as ZTV_PROVISION_TOKEN in the node's cloud-init.` }));
+        `Valid until ${fmtTime(r.expires_at)}, ${r.uses} use${r.uses === 1 ? '' : 's'}. Shown once — copy it now.` }),
+      el('pre', { class: 'secret-out', text: cmd }),
+      el('p', { class: 'note', text: r.uses === 1
+        ? 'One-shot: this node will not be able to rejoin after a reboot.'
+        : 'It binds to the first node\'s public IP and rejoins after a reboot.' }));
+    loadPtokens();
   } catch (err) { toast(err.message, true); }
 });
+
+async function loadPtokens() {
+  const r = await api('/nodes/provision-tokens');
+  const rows = (r.tokens || []).map((t) => [
+    { node: el('code', { text: t.id }) },
+    `${t.region}/${t.role}`,
+    { node: el('span', { class: 'pill ' + (t.state === 'live' ? 'ok' : 'bad'),
+                         text: t.state }) },
+    `${t.uses}/${t.max_uses}`,
+    t.bound_to || '—',
+    t.node_id || '—',
+    fmtTime(t.expires_at),
+    { node: t.state === 'live'
+        ? el('button', { class: 'small danger', text: 'Revoke',
+            onclick: async () => {
+              if (!confirm(`Revoke token ${t.id}? Its node keeps running but cannot re-register.`)) return;
+              try {
+                await api(`/nodes/provision-tokens/${t.id}/revoke`, { method: 'POST' });
+                toast(`Token ${t.id} revoked`); loadPtokens();
+              } catch (err) { toast(err.message, true); }
+            } })
+        : el('span', { class: 'note', text: '—' }) },
+  ]);
+  $('ptok-list').replaceChildren(rows.length
+    ? table(['Id', 'Scope', 'State', 'Used', 'Bound to', 'Node', 'Expires', ''], rows)
+    : el('p', { class: 'note', text: 'No tokens have been minted.' }));
+}
 
 /* --- payments ------------------------------------------------------------ */
 async function loadPayments() { await Promise.all([loadPayHealth(), loadInvoices()]); }

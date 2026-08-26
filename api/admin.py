@@ -32,6 +32,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -751,14 +752,21 @@ def remove_node(node_id: str, admin: dict = Depends(csrf_guard)):
 class ProvisionTokenRequest(BaseModel):
     region: str = Field(..., min_length=2, max_length=8)
     role: str = Field("both", pattern=r"^(entry|exit|both)$")
-    ttl_hours: int = Field(1, ge=1, le=168)
+    # A year, not a week. A one-shot token is used minutes after it is minted,
+    # but an enrolment token has to still work the night the VPS reboots
+    # unattended, which is the whole reason it exists.
+    ttl_hours: int = Field(1, ge=1, le=8784)
+    # 1 = the original one-shot token. More than 1 mints an enrolment token:
+    # it pins itself to the first node's public IP and can re-register that
+    # node after a reboot, when its tmpfs disk has forgotten everything.
+    uses: int = Field(1, ge=1, le=50)
 
 
 @router.post("/nodes/provision-token")
 def mint_provision_token(req: ProvisionTokenRequest,
                          admin: dict = Depends(csrf_guard)):
     """
-    Mint a one-shot token for an ephemeral RAM-only node to register itself.
+    Mint a token for a RAM-only node to register itself.
     Shown once; only its hash is stored.
     """
     import main
@@ -766,18 +774,81 @@ def mint_provision_token(req: ProvisionTokenRequest,
         raise HTTPException(400, f"Unknown region {req.region!r}")
     token = "ztvp-" + secrets.token_urlsafe(24)
     now = int(time.time())
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
     with _db(write=True) as conn:
         conn.execute(
             """INSERT INTO provision_tokens
-                 (token_hash, region, role, created_at, expires_at)
-               VALUES (?,?,?,?,?)""",
-            (hashlib.sha256(token.encode()).hexdigest(), req.region, req.role,
-             now, now + req.ttl_hours * 3600))
+                 (token_hash, region, role, created_at, expires_at, max_uses)
+               VALUES (?,?,?,?,?,?)""",
+            (token_hash, req.region, req.role,
+             now, now + req.ttl_hours * 3600, req.uses))
         audit(conn, admin, "node.provision_token", f"{req.region}/{req.role}",
-              f"ttl={req.ttl_hours}h")
+              f"ttl={req.ttl_hours}h uses={req.uses}")
     return {"token": token, "region": req.region, "role": req.role,
             "expires_at": now + req.ttl_hours * 3600,
-            "note": "Shown once. Pass as ZTV_PROVISION_TOKEN to the node's cloud-init."}
+            "uses": req.uses, "id": token_hash[:12],
+            "note": ("Shown once. Pass as --provision-token to "
+                     "install.sh --mode node, or ZTV_PROVISION_TOKEN in "
+                     "cloud-init.")}
+
+
+@router.get("/nodes/provision-tokens")
+def list_provision_tokens(admin: dict = Depends(current_admin)):
+    """
+    Outstanding tokens, so an operator can see what can still register a node
+    and kill anything they do not recognise. The token itself is not stored
+    and cannot be shown again — rows are identified by a hash prefix.
+    """
+    now = int(time.time())
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT token_hash, region, role, created_at, expires_at,
+                      used_at, used_node_id, max_uses, used_count, bind_ip,
+                      revoked_at
+                 FROM provision_tokens
+                ORDER BY created_at DESC, rowid DESC LIMIT 100""").fetchall()
+    out = []
+    for r in rows:
+        used = max(r["used_count"] or 0, 1 if r["used_at"] else 0)
+        max_uses = r["max_uses"] or 1
+        if r["revoked_at"]:
+            state = "revoked"
+        elif r["expires_at"] < now:
+            state = "expired"
+        elif used >= max_uses:
+            state = "spent"
+        else:
+            state = "live"
+        out.append({"id": r["token_hash"][:12], "region": r["region"],
+                    "role": r["role"], "created_at": r["created_at"],
+                    "expires_at": r["expires_at"], "node_id": r["used_node_id"],
+                    "uses": used, "max_uses": max_uses,
+                    "bound_to": r["bind_ip"], "state": state})
+    return {"tokens": out}
+
+
+@router.post("/nodes/provision-tokens/{token_id}/revoke")
+def revoke_provision_token(token_id: str, admin: dict = Depends(csrf_guard)):
+    """
+    Kill a token. The node it already registered keeps running — it holds its
+    own PSK — but it cannot re-register, and nothing else can use the token.
+    """
+    if not re.fullmatch(r"[0-9a-f]{6,64}", token_id or ""):
+        raise HTTPException(400, "Bad token id")
+    now = int(time.time())
+    with _db(write=True) as conn:
+        rows = conn.execute(
+            "SELECT token_hash FROM provision_tokens WHERE token_hash LIKE ?",
+            (token_id + "%",)).fetchall()
+        if not rows:
+            raise HTTPException(404, "No such token")
+        if len(rows) > 1:
+            raise HTTPException(409, "Ambiguous token id")
+        conn.execute(
+            "UPDATE provision_tokens SET revoked_at = ? WHERE token_hash = ?",
+            (now, rows[0]["token_hash"]))
+        audit(conn, admin, "node.provision_token_revoke", token_id, "")
+    return {"ok": True, "id": token_id}
 
 
 # ---------------------------------------------------------------------------

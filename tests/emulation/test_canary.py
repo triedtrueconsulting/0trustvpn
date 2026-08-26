@@ -52,7 +52,15 @@ shutil.copytree(os.path.join(H.REPO, "canary"), CANARY)
 
 ENV = {**os.environ, "GNUPGHOME": GNUPGHOME,
        "CANARY_SIGNER_NAME": "A. Operator",
-       "CANARY_WEB_ROOT": WEB_ROOT}
+       "CANARY_WEB_ROOT": WEB_ROOT,
+       # Point the block lookup at nothing, so the manual fallback below is
+       # exercised on every machine. The test used to rely on this host having
+       # no route to blockchain.info: where the fetch SUCCEEDED — a CI runner
+       # with ordinary internet — the two block lines fed on stdin were never
+       # consumed, every later answer shifted up by two, and the run ended
+       # with a headline being read as the y/N confirmation. Green here, red
+       # there, for a reason nothing in the output explained.
+       "CANARY_BLOCK_URL": "http://127.0.0.1:1/latestblock"}
 
 # A headline with the characters that broke the old sed substitution, and one
 # with the shell/regex metacharacters that tend to come next.
@@ -85,7 +93,7 @@ try:
     ENV["CANARY_SIGNER_KEY"] = fpr
 
     print("\n[2] generate.sh, with headlines that used to break it")
-    # blockchain.info is not reachable from here, which exercises the manual
+    # The block lookup is pointed at a closed port, which exercises the manual
     # fallback — a path that used to be dead code, because the failing grep
     # pipeline killed the script under `set -o pipefail` before reaching it.
     BLOCK = ["912345",
@@ -169,6 +177,23 @@ try:
                            env={**ENV, "CANARY_PATH": live + ".missing"},
                            capture_output=True, text=True, timeout=120)
         check("a missing canary is critical", c.returncode == 1, c.stderr[-200:])
+
+    print("\n[7] the block reference can be supplied instead of fetched")
+    # An operator scripting the weekly signing, or one who would rather read
+    # the block from a source they trust than from blockchain.info, should not
+    # have to answer two prompts to do it.
+    ENV2 = {**ENV, "CANARY_BLOCK_HEIGHT": "913000",
+            "CANARY_BLOCK_HASH": "0" * 60 + "beef"}
+    r2 = subprocess.run(["bash", os.path.join(CANARY, "scripts", "generate.sh")],
+                        cwd=CANARY, env=ENV2,
+                        input="\n".join(HEADLINES) + "\ny\n",
+                        capture_output=True, text=True, timeout=300)
+    check("generate.sh prompts only for the headlines", r2.returncode == 0,
+          (r2.stdout[-400:] + r2.stderr[-400:]))
+    if r2.returncode == 0:
+        txt = open(os.path.join(CANARY, "build", "canary.txt")).read()
+        check("the supplied block is the one in the document",
+              "913000" in txt and "beef" in txt, txt[:400])
 
 finally:
     pass

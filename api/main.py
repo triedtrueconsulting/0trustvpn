@@ -188,16 +188,31 @@ CREATE TABLE IF NOT EXISTS ops_events (
 );
 CREATE INDEX IF NOT EXISTS idx_ops_events_time ON ops_events(created_at DESC);
 
--- One-time provisioning tokens for ephemeral RAM nodes. Each row authorizes
--- exactly one node registration. Burned after use.
+-- Provisioning tokens for RAM-only mesh nodes. A token authorizes a node to
+-- register itself, and is scoped to one region and role so a leaked copy
+-- cannot inject a node elsewhere in the mesh.
+--
+-- max_uses = 1 is the original one-shot token: burned on first use, for a node
+-- launched by hand or from cloud-init and never expected to come back.
+--
+-- A node that reboots is the harder case. Its disk is tmpfs, so its WireGuard
+-- key and its node id are gone, and a one-shot token cannot re-register it —
+-- the box comes back up and never rejoins. An enrolment token (max_uses > 1)
+-- covers that: on first use it binds to the registering node's public IP, and
+-- from then on only that address can present it. A copy exfiltrated anywhere
+-- else is inert, and revoked_at kills it from the dashboard.
 CREATE TABLE IF NOT EXISTS provision_tokens (
   token_hash    TEXT PRIMARY KEY,             -- SHA256(plain_token)
   region        TEXT NOT NULL,                -- restricts the token to a region
   role          TEXT NOT NULL DEFAULT 'both', -- entry | exit | both
   created_at    INTEGER NOT NULL,
   expires_at    INTEGER NOT NULL,
-  used_at       INTEGER,                      -- NULL = unused
-  used_node_id  TEXT
+  used_at       INTEGER,                      -- NULL = unused; else last use
+  used_node_id  TEXT,                         -- the node it registered
+  max_uses      INTEGER NOT NULL DEFAULT 1,
+  used_count    INTEGER NOT NULL DEFAULT 0,
+  bind_ip       TEXT,                         -- pinned on first use when reusable
+  revoked_at    INTEGER                       -- operator killed it
 );
 
 -- Operator accounts for the admin dashboard. Separate from customer
@@ -381,6 +396,12 @@ MIGRATIONS = [
     ("accounts", "note", "TEXT"),
     ("mesh_nodes", "ipv6", "INTEGER NOT NULL DEFAULT 0"),
     ("invoices", "derivation_index", "INTEGER"),
+    # Reusable, IP-bound enrolment tokens. Existing rows keep max_uses = 1, so
+    # a database from before this change behaves exactly as it did.
+    ("provision_tokens", "max_uses", "INTEGER NOT NULL DEFAULT 1"),
+    ("provision_tokens", "used_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("provision_tokens", "bind_ip", "TEXT"),
+    ("provision_tokens", "revoked_at", "INTEGER"),
 ]
 
 
@@ -1771,11 +1792,23 @@ class NodeProvisionRequest(BaseModel):
     region: str
     role: str = "both"
     ipv6: bool = False
+    # The port the node's WireGuard interface actually listens on. This used
+    # to be assumed to be 51820 and written into the endpoint regardless, so a
+    # node brought up on any other port was registered at an address nothing
+    # was listening on: handshakes from every client it was handed to timed
+    # out, and the control plane went on believing the node was fine because
+    # meshd's heartbeat is a separate outbound HTTPS call that kept working.
+    wg_port: int = 51820
 
 
 class NodeProvisionResponse(BaseModel):
     node_id: str
     node_psk: str
+    # True when this call replaced an existing registration rather than
+    # creating one — a node that rebooted and came back. The installer prints
+    # a different line for each, because "rejoined as zur-01" and "joined as
+    # zur-04" mean different things to an operator watching a mesh.
+    rejoined: bool = False
 
 
 def _next_node_id(conn, region: str) -> str:
@@ -1807,6 +1840,8 @@ def node_provision(req: NodeProvisionRequest, request: Request):
 
     if req.role not in ("entry", "exit", "both"):
         raise HTTPException(400, "role must be entry|exit|both")
+    if not 1 <= req.wg_port <= 65535:
+        raise HTTPException(400, "wg_port out of range")
 
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     now = int(time.time())
@@ -1821,36 +1856,93 @@ def node_provision(req: NodeProvisionRequest, request: Request):
         ).fetchone()
         if not row:
             raise HTTPException(401, "Invalid provisioning token")
-        if row["used_at"]:
-            raise HTTPException(401, "Token already used")
+        if row["revoked_at"]:
+            raise HTTPException(401, "Token revoked")
         if row["expires_at"] < now:
             raise HTTPException(401, "Token expired")
         if row["region"] != req.region or row["role"] != req.role:
             raise HTTPException(400, "Token / request mismatch")
 
-        node_id = _next_node_id(conn, req.region)
+        max_uses = row["max_uses"] or 1
+        # Rows written before used_count existed record a spent one-shot token
+        # as used_at alone, so count that as the one use it was.
+        used = max(row["used_count"] or 0, 1 if row["used_at"] else 0)
+
+        # An enrolment token pins itself to the first address that presents
+        # it. That is what makes it safe to leave one on a node's disk: the
+        # copy is worthless anywhere except the box it is already on, and the
+        # attacker who has that box has the box.
+        if row["bind_ip"] and row["bind_ip"] != req.public_ip:
+            raise HTTPException(401, "Token is bound to another address")
+
+        # A node that rebooted re-registers under the id it already had, with
+        # the fresh key it generated on boot. Allocating a new id each time
+        # would leave the mesh accumulating dead rows for one box, and the
+        # operator reading a node count that means nothing.
+        prior = None
+        if row["used_node_id"]:
+            prior = conn.execute(
+                "SELECT * FROM mesh_nodes WHERE id = ?", (row["used_node_id"],),
+            ).fetchone()
+        rejoin = prior is not None and prior["public_ip"] == req.public_ip
+
+        if not rejoin and used >= max_uses:
+            raise HTTPException(401, "Token already used")
+
         node_psk = secrets.token_hex(32)
         psk_hash = hashlib.sha256(node_psk.encode()).hexdigest()
+        endpoint = f"{req.public_ip}:{req.wg_port}"
+
+        if rejoin:
+            node_id = prior["id"]
+            conn.execute(
+                """UPDATE mesh_nodes
+                      SET pubkey = ?, endpoint = ?, role = ?, ipv6 = ?,
+                          psk_hash = ?, last_heartbeat = ?, active = 1
+                    WHERE id = ?""",
+                (req.pubkey, endpoint, req.role, 1 if req.ipv6 else 0,
+                 psk_hash, now, node_id),
+            )
+            # Its old peers pointed at a key that no longer exists. Clearing
+            # the assignments makes the next /wg/register place those devices
+            # somewhere live instead of onto a node that cannot answer them.
+            conn.execute("DELETE FROM device_nodes WHERE node_id = ?", (node_id,))
+            conn.execute(
+                "DELETE FROM hop_pairs WHERE entry_node = ? OR exit_node = ?",
+                (node_id, node_id),
+            )
+        else:
+            node_id = _next_node_id(conn, req.region)
+            conn.execute(
+                """INSERT INTO mesh_nodes
+                     (id, hostname, pubkey, endpoint, region, role, public_ip,
+                      ephemeral, psk_hash, last_heartbeat, active, ipv6)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?)""",
+                (
+                    node_id, f"{node_id}.0trust",
+                    req.pubkey, endpoint,
+                    req.region, req.role, req.public_ip,
+                    psk_hash, now, 1 if req.ipv6 else 0,
+                ),
+            )
 
         conn.execute(
-            """INSERT INTO mesh_nodes
-                 (id, hostname, pubkey, endpoint, region, role, public_ip,
-                  ephemeral, psk_hash, last_heartbeat, active, ipv6)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?)""",
-            (
-                node_id, f"{node_id}.0trust",
-                req.pubkey, f"{req.public_ip}:51820",
-                req.region, req.role, req.public_ip,
-                psk_hash, now, 1 if req.ipv6 else 0,
-            ),
+            """UPDATE provision_tokens
+                  SET used_at = ?, used_node_id = ?, used_count = ?,
+                      bind_ip = COALESCE(bind_ip, ?)
+                WHERE token_hash = ?""",
+            (now, node_id, used if rejoin else used + 1,
+             req.public_ip if max_uses > 1 else None, token_hash),
         )
 
-        conn.execute(
-            "UPDATE provision_tokens SET used_at=?, used_node_id=? WHERE token_hash=?",
-            (now, node_id, token_hash),
-        )
+        ops_alerts.record(
+            conn, "node.rejoin" if rejoin else "node.provision", "info",
+            node_id,
+            f"{req.region}/{req.role} at {req.public_ip}:{req.wg_port}"
+            + (" (rebooted)" if rejoin else ""))
 
-    return NodeProvisionResponse(node_id=node_id, node_psk=node_psk)
+    return NodeProvisionResponse(node_id=node_id, node_psk=node_psk,
+                                 rejoined=rejoin)
 
 
 class NodeHeartbeatRequest(BaseModel):

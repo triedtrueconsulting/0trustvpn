@@ -91,7 +91,8 @@ trap cleanup EXIT
 # Step 2 — Find or create the store
 # ----------------------------------------------------------------------------
 log "Finding or creating store '$STORE_NAME'"
-existing=$(api GET "/api/v1/stores" | jq -r --arg n "$STORE_NAME" '.[] | select(.name == $n) | .id' | head -1)
+existing=$(api GET "/api/v1/stores" \
+             | jq -r --arg n "$STORE_NAME" 'first(.[] | select(.name == $n) | .id) // empty')
 if [[ -n "$existing" ]]; then
     STORE_ID="$existing"
     log "Using existing store $STORE_ID"
@@ -170,8 +171,7 @@ log "  BTC payment method: $(echo "$btc_method" | jq -r .enabled) (watching-only
 # bootstrap.sh with ENABLE_MONERO=1.
 log "Configuring Monero payment method"
 xmr_resp=$(api GET "/api/v1/stores/$STORE_ID/payment-methods" \
-    | jq -r '.[] | select(.paymentMethodId | startswith("XMR-")) | .paymentMethodId' \
-    | head -1)
+    | jq -r 'first(.[] | select(.paymentMethodId | startswith("XMR-")) | .paymentMethodId) // empty')
 if [[ -n "$xmr_resp" ]]; then
     api PUT "/api/v1/stores/$STORE_ID/payment-methods/$xmr_resp" '{"enabled": true}' >/dev/null
     log "  XMR payment method enabled (hot wallet on BTCPay host — sweep regularly)"

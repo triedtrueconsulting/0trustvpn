@@ -50,7 +50,7 @@ log "Dumping PostgreSQL"
 # ----------------------------------------------------------------------------
 # BTCPay's deployment names the postgres container `postgres_1` or similar.
 # Find it by service label rather than hard-coding.
-PG_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E 'postgres' | head -1)
+PG_CONTAINER=$(docker ps --format '{{.Names}}' | grep -m1 -E 'postgres' || true)
 [[ -n "$PG_CONTAINER" ]] || die "could not find postgres container"
 
 docker exec -t "$PG_CONTAINER" pg_dumpall -U postgres > "$work/postgres.sql"
@@ -65,7 +65,7 @@ cp "$BTCPAY_DIR/.env"            "$work/btcpay-config/env" 2>/dev/null || true
 cp -r "$BTCPAY_DIR/Generated"    "$work/btcpay-config/" 2>/dev/null || true
 
 # Let's Encrypt — letsencrypt volume
-LE_VOLUME=$(docker volume ls -q | grep -E 'letsencrypt' | head -1)
+LE_VOLUME=$(docker volume ls -q | grep -m1 -E 'letsencrypt' || true)
 if [[ -n "$LE_VOLUME" ]]; then
     docker run --rm \
         -v "$LE_VOLUME:/data:ro" \
@@ -80,7 +80,7 @@ log "Backing up Monero wallet (THIS HAS SPEND KEYS)"
 # The Monero plugin keeps wallet files under the monerod_data volume at
 # /home/monero/wallets. Spend key + view key live there. Without this file,
 # funds in the hot wallet are gone forever.
-XMR_VOLUME=$(docker volume ls -q | grep -E '(monero|wallet)' | head -1)
+XMR_VOLUME=$(docker volume ls -q | grep -m1 -E '(monero|wallet)' || true)
 if [[ -n "$XMR_VOLUME" ]]; then
     docker run --rm \
         -v "$XMR_VOLUME:/data:ro" \

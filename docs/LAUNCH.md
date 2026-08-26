@@ -216,16 +216,64 @@ outside any Eyes alliance.
 | `rey` | 1984.is, FlokiNET (IS) | Reykjavik, IS | both |
 | `buc` | M247 Bucharest, Hosterion, FlokiNET (RO) | Bucharest, RO | both |
 
-For each of the three boxes (Ubuntu 24.04, 1 vCPU / 1GB / 10GB):
+For each of the three boxes (Ubuntu 24.04, 1 vCPU / 1GB / 10GB), two steps.
+
+**On the control plane**, mint an enrolment token for that region:
 
 ```bash
-# Substitute REGION_CODE for zur / rey / buc as appropriate
-sudo NODE_API_PSK=<from-control-plane:/etc/0trust/api.env> \
-     NODE_REGION=<zur|rey|buc> \
+sudo -u 0trust python3 /opt/0trust/api/mint-provision-token.py \
+     --region zur --role both --uses 20 --ttl 31536000
+```
+
+or the same thing from the dashboard: **Nodes → Node enrolment token**, which
+prints the exact command to run next.
+
+**On the node**, one command:
+
+```bash
+sudo ./scripts/install.sh --mode node \
+     --control-url https://0trustvpn.com \
+     --region zur --role both \
+     --provision-token ztvp-...
+```
+
+That is the whole deployment. The installer makes the box RAM-only — `/etc/wireguard`,
+`/etc/0trust` and `/var/0trust` are tmpfs, swap is off, journald is volatile, which
+is what web/privacy.html and `docs/AUDIT.md` §5.3 promise customers — generates a
+WireGuard keypair in RAM, registers with the control plane, and starts meshd. There
+is no SQL to run afterwards and nothing to copy back.
+
+**Why `--uses 20` and not a one-shot token.** The node's disk is RAM, so a reboot
+loses its key, its node id and its PSK. A single-use token cannot bring it back:
+the box comes up and silently never rejoins, while the control plane goes on
+handing customers an endpoint whose key no longer exists. An enrolment token pins
+itself to that node's public IP on first use and re-registers the *same* node id
+afterwards, so a reboot is a rejoin. The token lives in `/etc/0trust-node.env`
+(root-only, the one 0trust file deliberately on persistent disk) and is inert
+anywhere but that address.
+
+- [ ] Revoke a node's token from the dashboard if the box ever leaves your
+      control. The node keeps running on the PSK it holds; it just cannot
+      register again.
+- [ ] If the provider changes the node's public IP, the pinned token stops
+      matching. Mint a new one and re-run the installer.
+
+<details><summary>Manual alternative (fixed node id, shared PSK)</summary>
+
+`scripts/bootstrap-node.sh` still exists for a node you want to name yourself.
+It does not self-register — it prints the `INSERT` for you to run on the
+control plane — and it cannot rejoin unattended after a reboot.
+
+```bash
+sudo CONTROL_URL=https://0trustvpn.com \
+     NODE_API_PSK=<from-control-plane:/etc/0trust/api.env> \
+     NODE_ID=zur-01 \
+     REGION=zur \
      NODE_ROLE=both \
-     CONTROL_URL=https://0trustvpn.com \
      /opt/0trust-src/scripts/bootstrap-node.sh
 ```
+
+</details>
 
 The `both` role means each node serves as either entry or exit depending
 on the customer's chosen route. With three `both` nodes you get:
@@ -236,8 +284,8 @@ on the customer's chosen route. With three `both` nodes you get:
 
 For better privacy you can deploy more nodes per country later (e.g.,
 two `zur` nodes both running `both` role). The schema and routing logic
-already handle it; just `bootstrap-node.sh` more boxes with the same
-region code.
+already handle it; just run the node installer on more boxes with the same
+region code, each with its own enrolment token.
 
 ### Verification (run after deploying all three)
 

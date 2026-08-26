@@ -88,7 +88,8 @@ http {{
 try:
     print("[1] flag handling")
     rc, out = run_installer("--mode", "bogus")
-    check("unknown mode rejected", rc != 0 and "must be test or production" in out, out[-200:])
+    check("unknown mode rejected",
+          rc != 0 and "must be test, production or node" in out, out[-200:])
     rc, out = run_installer("--mode", "production")
     check("production without --domain rejected", rc != 0 and "--domain" in out, out[-200:])
     rc, out = run_installer("--mode", "production", "--domain", "x.com")
@@ -371,8 +372,12 @@ try:
                   os.path.basename(rel) in installer,
                   f"{exe} is run by the unit but never installed")
 
-    # Units the installer knows about should exist in the repo.
-    for unit in re.findall(r"(0trust-[a-z]+@?\.(?:service|timer))", installer):
+    # Units the installer knows about should exist in the repo. The character
+    # class has to include the hyphen: it did not, so every multi-word unit
+    # name — 0trust-node-enroll.service among them — was silently exempt from
+    # this check, which is exactly where a typo'd filename would hide.
+    for unit in sorted(set(
+            re.findall(r"(0trust-[a-z-]+@?\.(?:service|timer))", installer))):
         check(f"installer references a real unit: {unit}",
               os.path.exists(os.path.join(H.REPO, "systemd", unit)),
               f"systemd/{unit} missing")

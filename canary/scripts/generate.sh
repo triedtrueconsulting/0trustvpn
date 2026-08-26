@@ -53,11 +53,20 @@ log "Fetching proof-of-freshness data"
 # killed the script outright — the "enter it manually" fallback written
 # directly below could never be reached. The one job of this block is to
 # degrade to asking a human.
-BLOCK_INFO=$(curl -fsS https://blockchain.info/latestblock 2>/dev/null || echo '{}')
-BLOCK_HEIGHT=$(echo "$BLOCK_INFO" | grep -oE '"height":[0-9]+' \
-               | grep -oE '[0-9]+' | head -1 || true)
-BLOCK_HASH=$(echo "$BLOCK_INFO" | grep -oE '"hash":"[a-f0-9]+"' | head -1 \
-             | sed 's/.*"\([a-f0-9]*\)"/\1/' || true)
+# CANARY_BLOCK_HEIGHT / CANARY_BLOCK_HASH short-circuit the fetch entirely,
+# for an operator scripting this or reading the block from somewhere they
+# trust more. CANARY_BLOCK_URL repoints the lookup.
+BLOCK_URL="${CANARY_BLOCK_URL:-https://blockchain.info/latestblock}"
+if [[ -n "${CANARY_BLOCK_HEIGHT:-}" && -n "${CANARY_BLOCK_HASH:-}" ]]; then
+    BLOCK_INFO='{}'
+else
+    BLOCK_INFO=$(curl -fsS --max-time 20 "$BLOCK_URL" 2>/dev/null || echo '{}')
+fi
+BLOCK_HEIGHT="${CANARY_BLOCK_HEIGHT:-$(echo "$BLOCK_INFO" \
+               | grep -om1 -E '"height":[0-9]+' | grep -oE '[0-9]+' || true)}"
+BLOCK_HASH="${CANARY_BLOCK_HASH:-$(echo "$BLOCK_INFO" \
+             | grep -om1 -E '"hash":"[a-f0-9]+"' \
+             | sed 's/.*"\([a-f0-9]*\)"/\1/' || true)}"
 
 if [[ -z "$BLOCK_HEIGHT" || -z "$BLOCK_HASH" ]]; then
     warn "Could not fetch Bitcoin block info — please enter manually."

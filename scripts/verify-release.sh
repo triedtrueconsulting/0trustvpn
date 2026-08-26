@@ -101,8 +101,8 @@ output=$(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>&1) || \
     fail "signature verification FAILED — release is tampered or signed by wrong key"
 
 # Pull the actual signing key fingerprint out of gpg's output
-signer=$(echo "$output" | grep -oE 'GOODSIG [A-F0-9]+' | head -1 | awk '{print $2}')
-signer_full=$(echo "$output" | grep -oE 'VALIDSIG [A-F0-9]+' | head -1 | awk '{print $2}')
+signer=$(echo "$output" | grep -om1 -E 'GOODSIG [A-F0-9]+' | awk '{print $2}')
+signer_full=$(echo "$output" | grep -om1 -E 'VALIDSIG [A-F0-9]+' | awk '{print $2}')
 
 ok "PGP signature valid (key: $signer_full)"
 

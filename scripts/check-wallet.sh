@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
         --pin)      PIN_MODE="record"; shift ;;
         --no-pin)   PIN_MODE="skip";   shift ;;
         --pin-file) PINFILE="${2:-}";  shift 2 ;;
-        -h|--help) sed -n '2,30p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help) sed -n '2,29p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) KEY="$1"; shift ;;
     esac
 done

@@ -198,6 +198,40 @@ try:
                           headers={"X-Provision-Token": tokentext})
         check("the token from the UI actually provisions a node", st == 200, prov)
 
+        # The command an operator will actually paste onto the VPS. If the UI
+        # only shows the token, they have to go and find the flags somewhere
+        # else, and the flag that gets forgotten is the one that matters.
+        check("and the page hands over the command to run on the node",
+              "install.sh --mode node" in page.inner_text("#ptok-out"),
+              page.inner_text("#ptok-out")[:300])
+
+        page.wait_for_selector("#ptok-list table", timeout=15000)
+        listed = page.inner_text("#ptok-list")
+        check("the token appears in the outstanding list", "spent" in listed
+              or "live" in listed, listed[:300])
+        check("and shows what it is scoped to", "zur/both" in listed,
+              listed[:300])
+
+        # An enrolment token lives on a node's disk, so being able to kill one
+        # from here is the difference between a seized box being a problem and
+        # being a way back into the mesh.
+        page.fill("#ptok-form [name=uses]", "5")
+        page.click("#ptok-form button[type=submit]")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#ptok-list tbody tr').length >= 2",
+            timeout=15000)
+        check("an enrolment token can be minted with more than one use",
+              "5" in page.inner_text("#ptok-list"), page.inner_text("#ptok-list")[:400])
+        # A dialog handler is already registered for the whole session; a
+        # second one double-accepts the same confirm() and throws.
+        # Only live rows carry a button — a spent or expired token has nothing
+        # left to revoke — so target the button rather than a row position.
+        page.click("#ptok-list button")
+        page.wait_for_function(
+            "() => document.querySelector('#ptok-list').innerText.includes('revoked')",
+            timeout=15000)
+        check("and revoked from the dashboard", True)
+
         print("\n[5] settings")
         page.click("#tabs button[data-tab=settings]")
         page.wait_for_selector("#settings-groups .set-group", timeout=15000)

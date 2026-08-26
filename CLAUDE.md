@@ -115,6 +115,14 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 - **Currencies: BTC, XMR, ZEC.** ETH and LTC were dropped. The codes live in
   `payments.CURRENCIES`, the BTCPay checkout config, and web/index.html's
   crypto tabs — keep them in step.
+- **Exactly one public chain endpoint is contacted, and only for BTC.** The
+  `watch` provider talks to an Esplora API — `mempool.space/api` by default,
+  overridable per deployment with `NODE_RPC_BTC` (blockstream.info/api, or
+  your own Esplora). Two calls: `GET /address/<addr>` for settlement and
+  `GET /v1/prices` for the USD rate. `NODE_RPC_ETH`, `NODE_RPC_XMR` and
+  `NODE_RPC_ZEC` are settings with **no consumer in the codebase** — under
+  `btcpay` or `hosted`, that provider's own infrastructure watches those
+  chains, and `currencies_for("watch")` correctly returns BTC alone.
 - **No self-hosted blockchain node.** `ZTV_PAYMENT_PROVIDER` picks between
   `watch` (default: derive a receive address per invoice from the operator's
   own xpub and confirm via a public explorer — non-custodial, no account
@@ -185,6 +193,32 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   per-customer prefix, which would be a tracking identifier.
 - **Multi-hop requires entry ≠ exit.** Enforced by `_validate_regions()` in
   the API, shared by both register and rotate endpoints.
+- **A node joins the mesh by registering itself, never by hand-written SQL.**
+  `install.sh --mode node` on a fresh Ubuntu 24.04 VPS does the whole thing:
+  RAM-only hardening, a keypair generated in tmpfs, `POST /api/v1/node/provision`
+  with a token minted on the control plane, meshd, NAT, egress filter, resolver.
+  `scripts/bootstrap-node.sh` remains the manual path for a node you want to
+  name yourself, and it still prints an INSERT for the operator to run.
+- **A reboot must be a rejoin, not an outage.** The node's disk is tmpfs, so a
+  restart loses its WireGuard key, its node id and its PSK — and a one-shot
+  provisioning token cannot bring it back. `provision_tokens.max_uses > 1`
+  mints an enrolment token instead: pinned to the node's public IP on first
+  use (`bind_ip`), re-registering the SAME node id thereafter rather than
+  accumulating a row per boot, and revocable (`revoked_at`). It lives in
+  `/etc/0trust-node.env`, the one 0trust file deliberately on persistent disk.
+  `scripts/node-enroll.sh` runs on every boot, before meshd.
+- **NAT and the egress filter are kernel state that nothing replays.**
+  `/etc/nftables.conf` does not include `/etc/nftables.d`, so an exit node came
+  back from a reboot doing no masquerading — customer traffic entered the
+  tunnel and died silently while meshd went on heartbeating over its own
+  outbound HTTPS. `scripts/node-runtime-apply.sh` reapplies them at boot, via
+  the enrolment unit on a RAM node and `0trust-node-runtime.service` on a
+  manual one.
+- **A node's registered endpoint carries the port it actually listens on.**
+  `/api/v1/node/provision` used to write `:51820` regardless of `wg_port`, so
+  a node on any other port was advertised at an address nothing answered on —
+  and looked healthy the whole time, because the heartbeat is a separate
+  outbound call.
 - **RAM-only ephemeral nodes:** tmpfs paths, swap off, fresh WG keys on boot,
   journald volatile. A seized node reveals nothing operational beyond the
   customers it was itself routing — `/wg/peers` is scoped per node, so one
