@@ -44,6 +44,10 @@
 #   --region <code>          (node) zur | rey | buc
 #   --role entry|exit|both   (node) default both
 #   --wg-port <port>         (node) default 51820
+#   --swap <size>            (test/production) make a swapfile, e.g. 4G.
+#                            REFUSED on a node: swap can page the WireGuard
+#                            private key to persistent disk, which is the one
+#                            thing the RAM-only design exists to prevent.
 #   --dry-run                render everything, touch no system state
 # ============================================================================
 set -euo pipefail
@@ -51,6 +55,7 @@ set -euo pipefail
 MODE="" DOMAIN="" EMAIL=""
 DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1
 CONTROL_URL="" PROVISION_TOKEN="" REGION="" NODE_ROLE="both" WG_PORT="51820"
+SWAP_SIZE=""
 
 WALLET_BTC="${WALLET_BTC:-}"
 
@@ -94,6 +99,7 @@ while [[ $# -gt 0 ]]; do
         --region) REGION="${2:-}"; shift 2 ;;
         --role) NODE_ROLE="${2:-}"; shift 2 ;;
         --wg-port) WG_PORT="${2:-}"; shift 2 ;;
+        --swap) SWAP_SIZE="${2:-}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
         *) echo "unknown flag: $1" >&2; exit 64 ;;
@@ -130,6 +136,16 @@ if [[ "$MODE" == "node" ]]; then
     case "$NODE_ROLE" in entry|exit|both) ;; *) die "--role must be entry|exit|both" ;; esac
     [[ "$WG_PORT" =~ ^[0-9]+$ ]] && (( WG_PORT >= 1 && WG_PORT <= 65535 )) \
         || die "--wg-port must be 1-65535"
+    # Not a matter of taste. A mesh node keeps its WireGuard private key on
+    # tmpfs so it never touches persistent storage, and web/privacy.html,
+    # web/audit.html and docs/AUDIT.md 5.3 all tell customers so. Swap is a
+    # persistent file the kernel may page that key into. Turning it on here
+    # would make those pages false and audit-verify's ram-no-swap fail.
+    [[ -z "$SWAP_SIZE" ]] \
+        || die "--swap is refused on a node. Swap can page the WireGuard
+    private key to disk, and the RAM-only claim on web/privacy.html depends on
+    it being off. If the node is short of memory, give it more RAM — a mesh
+    node needs very little, and paging is not the answer here."
 fi
 if [[ "$MODE" == "production" ]]; then
     [[ -n "$DOMAIN" ]] || die "production needs --domain <fqdn>"
@@ -376,6 +392,54 @@ ENV
 
 EOF
     exit 0
+fi
+
+# ----------------------------------------------------------------------------
+# Swap, on the control plane only
+# ----------------------------------------------------------------------------
+# A 2GB control-plane VPS runs nginx, uvicorn, the proxy and SQLite, and the
+# install itself builds a venv. Swap is the difference between a slow moment
+# and the OOM killer taking out the API mid-request.
+#
+# It is off by default and refused outright on a node — see the validation
+# above. On this box the database is already on disk, so a swapfile changes
+# what an attacker with the disk could recover by a matter of degree, not
+# kind. Encrypt the volume if that degree matters to you.
+if [[ -n "$SWAP_SIZE" ]]; then
+    log "Swap ($SWAP_SIZE)"
+    [[ "$SWAP_SIZE" =~ ^[0-9]+[MG]$ ]] \
+        || die "--swap takes a size like 4G or 512M, got: $SWAP_SIZE"
+    SWAPFILE="${ZTV_SWAPFILE:-/swapfile}"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        note "would create $SWAPFILE ($SWAP_SIZE), enable it, and add it to /etc/fstab"
+    elif swapon --show --noheadings 2>/dev/null | grep -q .; then
+        ok "swap is already active: $(swapon --show=NAME,SIZE --noheadings | tr '\n' ' ')"
+    else
+        # fallocate is instant but gives a file with holes on some
+        # filesystems, and swapon rejects those. dd is slower and always
+        # works; on a 4G file that is a few seconds once, at install time.
+        swap_mb="${SWAP_SIZE%[MG]}"
+        [[ "$SWAP_SIZE" == *G ]] && swap_mb=$(( swap_mb * 1024 ))
+        if ! fallocate -l "$SWAP_SIZE" "$SWAPFILE" 2>/dev/null; then
+            # Not just a fallback for a missing fallocate: on filesystems that
+            # give it a sparse file, swapon refuses the result outright. dd is
+            # slower and always produces something swapon accepts.
+            note "fallocate unusable here, writing ${swap_mb}M with dd (slower)"
+            rm -f "$SWAPFILE"
+            dd if=/dev/zero of="$SWAPFILE" bs=1M count="$swap_mb" status=none
+        fi
+        chmod 600 "$SWAPFILE"
+        mkswap "$SWAPFILE" >/dev/null
+        swapon "$SWAPFILE"
+        grep -q "^$SWAPFILE " /etc/fstab \
+            || printf '%s none swap sw 0 0\n' "$SWAPFILE" >> /etc/fstab
+        # A database box should reach for swap late, not eagerly: paging
+        # SQLite's page cache out is how a fast query becomes a slow one.
+        printf 'vm.swappiness=10\nvm.vfs_cache_pressure=50\n' \
+            > /etc/sysctl.d/99-0trust-swap.conf
+        sysctl -p /etc/sysctl.d/99-0trust-swap.conf >/dev/null
+        ok "$SWAPFILE active ($SWAP_SIZE), in /etc/fstab, swappiness 10"
+    fi
 fi
 
 # ----------------------------------------------------------------------------

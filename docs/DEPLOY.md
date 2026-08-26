@@ -23,6 +23,14 @@ sudo ./scripts/install.sh --mode node \
 `--dry-run` renders everything and touches nothing, which is the safe way to
 see what a run would do before letting it near a live box.
 
+`--swap 4G` adds a swapfile, enables it, puts it in `/etc/fstab` and sets
+`vm.swappiness=10` so a database box reaches for it late. Worth it on a 2GB
+control plane, where the alternative is the OOM killer taking out the API
+mid-request. It is **refused on `--mode node`**: swap is a persistent file the
+kernel can page the WireGuard private key into, and the RAM-only claim on
+web/privacy.html depends on there being none. A node short of memory needs
+more RAM, not paging — it uses very little.
+
 ## What gets installed
 
 | | |
