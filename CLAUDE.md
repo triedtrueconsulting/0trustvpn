@@ -112,9 +112,19 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   (Norway was rejected earlier — it's in Nine Eyes. Romania replaced it.)
   **These region codes must be identical everywhere** — CLI, GUI, Android,
   iOS skeleton, API defaults, docs, landing-page terminal demo.
-- **Currencies: BTC, XMR, ZEC.** ETH and LTC were dropped. The codes live in
-  `payments.CURRENCIES`, the BTCPay checkout config, and web/index.html's
-  crypto tabs — keep them in step.
+- **Currencies: BTC, XMR, ZEC, ETH** (LTC was dropped; ETH was dropped and
+  then re-added). The codes live in `payments.CURRENCIES`, the BTCPay checkout
+  config, and web/index.html's crypto tabs — keep them in step.
+  **But what a deployment can actually take depends on its provider**, and
+  `currencies_for()` is the authority: `watch` returns BTC alone, card
+  providers return "USD (card)", everything else returns all four. The
+  checkout replaces its tabs from `/api/v1/payment/{id}/methods`, and the
+  static copy is written for the FLOOR — what `currencies_for("watch")` can
+  take, i.e. Bitcoin — because that is the state a fresh install launches in.
+  A page may upgrade itself from `/api/v1/config`; index.html does. Never
+  write a coin into copy that the default provider cannot issue an address
+  for: `test_site.py` fails on it, and it once shipped a MONERO ACCEPTED
+  ticker over a deployment that could only take BTC.
 - **Exactly one public chain endpoint is contacted, and only for BTC.** The
   `watch` provider talks to an Esplora API — `mempool.space/api` by default,
   overridable per deployment with `NODE_RPC_BTC` (blockstream.info/api, or

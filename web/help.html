@@ -238,10 +238,11 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   <div class="q">
     <h3>I paid but my account is still inactive.</h3>
     <p>
-      Check the invoice status in the BTCPay UI link from your signup page —
-      Bitcoin needs 1 on-chain confirmation, Monero needs 10. That's
-      typically 10-20 minutes for BTC, 20-30 minutes for XMR. After that,
-      the webhook fires within seconds and your account activates.
+      Your account activates on the first on-chain confirmation, which is
+      typically 10&ndash;20 minutes after you send. We check the chain once a
+      minute, so activation follows the confirmation within about that long.
+      Leave the signup page open and it will update on its own; the account
+      token is on it either way.
     </p>
     <p>
       If 60+ minutes have passed and the invoice shows <em>Settled</em>
