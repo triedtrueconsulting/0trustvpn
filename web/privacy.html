@@ -222,12 +222,25 @@ tunnel was.</p>
 <p>The resolver on the node <strong>does not log queries</strong>. It holds a
 short in-memory cache and nothing on disk; the query-logging option is
 switched off, and turning it on would contradict this page and our
-<a href="/audit">audit pack</a>. What it cannot do is answer by itself: it
-forwards what it cannot serve from cache to <strong>Quad9</strong>
-(<code>9.9.9.9</code>), a public resolver with its own no-logging policy that
-we do not control and cannot audit for you. Quad9 sees the queries as coming
-from the node&rsquo;s address, not yours, and cannot tell which customer asked
-&mdash; but it does see them.</p>
+<a href="/audit">audit pack</a>.</p>
+
+<p>What it cannot do is answer by itself. Anything it cannot serve from cache
+goes to <strong>Quad9</strong>, and it goes there over
+<strong>DNS-over-TLS</strong> &mdash; encrypted, and authenticated against
+Quad9&rsquo;s certificate, so the node knows it is talking to Quad9 and
+nobody in between can read the question. That matters because the alternative
+is what most of this industry still does: the tunnel protects your half of
+the path and then the exit node broadcasts every hostname you asked for, in
+plaintext, to its own hosting provider and everyone else along the way. If
+the encrypted connection cannot be made, the lookup <strong>fails</strong>.
+It does not quietly retry in the clear.</p>
+
+<p>Quad9 itself still sees the queries &mdash; it is the one answering them.
+It has its own no-logging policy, which we do not control and cannot audit
+for you. What it sees comes from the node&rsquo;s address, mixed in with
+every other customer on that node, so it cannot tell which of you asked. What
+changes with DNS-over-TLS is that Quad9 is now the <em>only</em> party that
+sees it.</p>
 
 <p>Operators running their own deployment can point this at a different
 upstream, or at a resolver they run themselves. If you would rather not rely

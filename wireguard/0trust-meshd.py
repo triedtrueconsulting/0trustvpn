@@ -26,6 +26,7 @@ import ipaddress
 import json
 import logging
 import os
+import random
 import subprocess
 import tempfile
 import time
@@ -47,6 +48,14 @@ MESH_NETWORK6 = os.environ.get("MESH_NETWORK6", "fd0e:5f7a:c21b::/48")
 # gateway's v4 address embedded in the low 32 bits of the ULA prefix.
 MESH_GATEWAY6 = os.environ.get("MESH_GATEWAY6", "")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
+# How much to vary that, as a fraction. A node checks in over its own outbound
+# HTTPS, so the traffic itself gives nothing away — but a request to the same
+# host every 30.00 seconds, forever, is a shape. Anyone watching the node's
+# uplink (its hosting provider, most obviously) can pick a metronome out of
+# netflow records without reading a single byte, and once picked out it
+# identifies the box as part of something coordinated. Jitter costs nothing
+# and removes the pattern. Set ZTV_POLL_JITTER=0 for a fixed cadence.
+POLL_JITTER = float(os.environ.get("ZTV_POLL_JITTER", "0.35"))
 
 # NOT "0trust_forward": nftables identifiers cannot start with a digit, and
 # nft parses the leading 0 as a number — "syntax error, unexpected number".
@@ -419,6 +428,19 @@ def heartbeat() -> None:
         log.warning("heartbeat failed: %s", e)
 
 
+def next_interval() -> float:
+    """
+    The next poll delay, jittered around POLL_INTERVAL.
+
+    Never below a second — a jitter fraction someone sets to 1.0 should slow
+    the node down, not turn it into a busy loop against the control plane.
+    """
+    if POLL_JITTER <= 0:
+        return float(POLL_INTERVAL)
+    spread = POLL_INTERVAL * min(POLL_JITTER, 0.9)
+    return max(1.0, POLL_INTERVAL + random.uniform(-spread, spread))
+
+
 def main():
     role = NODE_ROLE.lower()
     if role not in ("entry", "exit", "both"):
@@ -440,7 +462,7 @@ def main():
                 do_entry_sync(state)
         except Exception as e:
             log.error("sync failed: %s", e)
-        time.sleep(POLL_INTERVAL)
+        time.sleep(next_interval())
 
 
 if __name__ == "__main__":

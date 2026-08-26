@@ -269,6 +269,23 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   there. One node gets away with it via the `/10` connected route; three
   interfaces in one `/10` do not, and replies go to the wrong interface. Routes
   carry `proto static` so the daemon never deletes the kernel's own.
+- **Upstream DNS leaves a node over TLS, or not at all.** dnsmasq's only
+  forwarder is a local stubby stub (`ZTV_DNS_STUB`, 127.0.0.1#5353) doing
+  DNS-over-TLS to Quad9, authenticated by certificate name — not a pinned
+  key, so nothing goes stale, and no resolver list to fetch at boot. It
+  forwarded straight to 9.9.9.9 on UDP 53 before, which meant the tunnel
+  encrypted the customer's half of the path and published the other half.
+  If TLS cannot be established the lookup FAILS; there is deliberately no
+  cleartext retry, because a silent downgrade is the same leak unnoticed.
+  `ZTV_DNS_ENCRYPTED=0` reverts, loudly, in a comment in the config.
+  privacy.html §4d, `docs/AUDIT.md`'s third-party table and
+  `node-dns-encrypted-upstream` all state this and must move together.
+- **Nodes run plain WireGuard: no obfuscation, and DPI identifies it.** Never
+  let copy imply otherwise. What exists is port-level camouflage
+  (`--wg-port 443`, recommended, blends with QUIC in netflow), WireGuard's own
+  silence to unauthenticated packets, a jittered meshd check-in
+  (`ZTV_POLL_JITTER`) so the beacon is not metronomic, and keepalive chatter.
+  Obfuscation proper is v0.2 and is a client change as much as a node one.
 - **Clients are handed `DNS = 10.64.0.1` (plus the v6 gateway where v6 is
   carried), so something must answer there.**
   `dnsmasq` on the mesh gateway, `bind-interfaces` (an open resolver on the

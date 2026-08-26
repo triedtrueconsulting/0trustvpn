@@ -192,6 +192,34 @@ cannot register again.
 If the provider changes the node's public IP, the pin stops matching — mint a
 new token and re-run the installer.
 
+### What the node does about being noticed
+
+Be precise about this, because it is the area where VPN marketing lies most.
+**0trust runs plain WireGuard. It is not obfuscated, and deep packet
+inspection identifies it.** WireGuard's handshake is a fixed-size packet with
+a constant type byte in a known position; any DPI box worth the name
+fingerprints it in one packet, and a national firewall will block it. If you
+need to work through that, you need an obfuscation layer that does not exist
+here yet — it is on the v0.2 list, and it is a client-side change as much as
+a node-side one.
+
+What the node does do:
+
+| | |
+| --- | --- |
+| `--wg-port 443` | Recommended. UDP 443 is where QUIC lives, so at the netflow level — ports and volumes, no payload — the tunnel looks like ordinary web traffic instead of announcing itself on 51820, WireGuard's registered port. It does not survive DPI, which reads the handshake. It does survive naive port blocking, which is what most restrictive networks actually do. |
+| Silence to strangers | WireGuard does not reply to a packet it cannot authenticate — no banner, no error, nothing. A UDP scan of the node cannot distinguish the tunnel port from a closed one. This is WireGuard's design, not ours. |
+| Jittered check-in | meshd polls the control plane over its own outbound HTTPS. That used to be every 30.00 seconds forever, which is a shape visible in netflow at the hosting provider without reading a byte. It now varies (`ZTV_POLL_JITTER`, default ±35%). |
+| Nothing branded on the wire | The node sets no hostname of its own and serves nothing on any other port. Its firewall allows ssh, the tunnel port, and the multi-hop range; everything else is dropped, not rejected. |
+| Constant tunnel chatter | Clients get `PersistentKeepalive = 25`, so tunnel traffic does not idle in a pattern that mirrors what you are doing. Traffic-analysis resistance beyond that is a research problem and we do not claim it. |
+
+```bash
+sudo ./scripts/install.sh --mode node \
+     --control-url https://0trustvpn.com \
+     --region zur --role both --wg-port 443 \
+     --provision-token ztvp-...
+```
+
 ## Verifying a deployment
 
 ```bash

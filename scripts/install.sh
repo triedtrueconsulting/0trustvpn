@@ -190,8 +190,10 @@ if [[ "$MODE" == "node" ]]; then
     # ------------------------------------------------------------------
     log "Installing packages"
     # ------------------------------------------------------------------
-    NODE_PACKAGES=(wireguard wireguard-tools nftables dnsmasq python3 curl
-                   ca-certificates)
+    # stubby is the DNS-over-TLS stub dnsmasq forwards to; ca-certificates is
+    # what authenticates the resolver to it, so neither is optional.
+    NODE_PACKAGES=(wireguard wireguard-tools nftables dnsmasq stubby python3
+                   curl ca-certificates)
     [[ $DO_FIREWALL -eq 1 ]] && NODE_PACKAGES+=(ufw)
     if [[ $DRY_RUN -eq 0 ]]; then
         export DEBIAN_FRONTEND=noninteractive
@@ -887,7 +889,7 @@ log "Turning this box into the mesh as well (test mode)"
 note "one VPS, three node identities — see the warnings at the end"
 
 if [[ $DRY_RUN -eq 0 ]]; then
-    apt-get install -y -qq wireguard wireguard-tools nftables dnsmasq >/dev/null
+    apt-get install -y -qq wireguard wireguard-tools nftables dnsmasq stubby >/dev/null
 fi
 
 # --- kernel ---------------------------------------------------------------
@@ -956,14 +958,24 @@ MESH_DNS="${LOCAL_NODES[0]##*:}"
 # The v6 gateway is the v4 one embedded in the ULA prefix, the same derivation
 # the control plane and meshd use — so 10.64.0.1 becomes ...::a40:1.
 MESH_DNS6="$(ztv_mesh_ip6 "$MESH_DNS")"
+# dnsmasq's only upstream is the local DNS-over-TLS stub, so the stub has to
+# exist before dnsmasq is told to use it — the same order a real node uses.
 if [[ $DRY_RUN -eq 0 ]]; then
+    if [[ "${ZTV_DNS_ENCRYPTED:-1}" == "1" ]] && command -v stubby >/dev/null; then
+        mkdir -p /etc/stubby
+        ztv_stubby_conf > /etc/stubby/stubby.yml
+        systemctl enable stubby >/dev/null 2>&1 || true
+        systemctl restart stubby >/dev/null 2>&1 \
+            || note "stubby did not start — journalctl -u stubby"
+    fi
     mkdir -p /etc/dnsmasq.d
     ztv_dnsmasq_conf "$MESH_DNS" "$MESH_DNS6" > /etc/dnsmasq.d/0trust.conf
 fi
 if [[ -n "${ZTV_RENDER_TO:-}" ]]; then
     ztv_dnsmasq_conf "$MESH_DNS" "$MESH_DNS6" > "$ZTV_RENDER_TO/dnsmasq.conf"
+    ztv_stubby_conf > "$ZTV_RENDER_TO/stubby.yml"
 fi
-ok "dnsmasq will answer on $MESH_DNS and $MESH_DNS6"
+ok "dnsmasq will answer on $MESH_DNS and $MESH_DNS6, over DNS-over-TLS upstream"
 
 # --- firewall -------------------------------------------------------------
 if [[ $DO_FIREWALL -eq 1 && $DRY_RUN -eq 0 ]]; then
