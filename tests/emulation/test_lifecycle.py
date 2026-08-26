@@ -48,16 +48,52 @@ try:
     check("webhook accepted", code == 200, code)
     st, b5 = H.call("GET", "/api/v1/account/status", headers={"X-Account-Token": token})
     check("account active after payment", b5["status"] == "active", b5)
-    days = b5["days_remaining"]
-    check("~30 days credited", 29 <= days <= 30, days)
+    check("~30 days credited", 29 <= b5["days_remaining"] <= 30, b5["days_remaining"])
 
     # ---- webhook replay ----
+    # Assert on expires_at, never days_remaining. The latter is derived from
+    # the current clock, so it ticks down on its own between the two reads and
+    # reports a re-credit that never happened — that is exactly the
+    # intermittent "30d -> 29d" that took CI red on run #14. The property under
+    # test is that the stored expiry does not move, and that is an absolute
+    # timestamp. Same reasoning as test_payments.py.
+    expires = b5["expires_at"]
     for _ in range(3):
         H.settle(inv)
     st, b6 = H.call("GET", "/api/v1/account/status", headers={"X-Account-Token": token})
     check("REPLAYED webhook does not extend subscription",
-          b6["days_remaining"] == days,
-          f"{days}d -> {b6['days_remaining']}d after 3 replays (free time!)")
+          b6["expires_at"] == expires,
+          f"expiry moved {expires} -> {b6['expires_at']} after 3 replays (free time!)")
+
+    # ---- the clock a customer actually reads ----
+    # days_remaining is the only expiry figure the CLI, the GUI and the Android
+    # app put in front of a customer. It rounds UP: floor division showed
+    # "0 days remaining" next to status "active" for the whole final day, and
+    # 29 one second after someone paid for 30.
+    st, bc = H.call("POST", "/api/v1/account", {"months": 1})
+    H.settle(bc["invoice_id"])
+    cc = sqlite3.connect(DB)
+    clock_id = cc.execute("SELECT account_id FROM invoices WHERE id = ?",
+                          (bc["invoice_id"],)).fetchone()[0]
+    for left, want, why in ((60, 1, "a minute left"),
+                            (86399, 1, "the last full day"),
+                            (86400, 1, "exactly one day"),
+                            (86401, 2, "a day and a second")):
+        cc.execute("UPDATE accounts SET expires_at = ? WHERE id = ?",
+                   (int(time.time()) + left, clock_id))
+        cc.commit()
+        _, cs = H.call("GET", "/api/v1/account/status",
+                       headers={"X-Account-Token": bc["token"]})
+        check(f"{why}: still active, and never reads 0 days",
+              cs["status"] == "active" and cs["days_remaining"] == want,
+              f"{cs['status']} / {cs['days_remaining']}d, wanted {want}d")
+    cc.execute("UPDATE accounts SET expires_at = ? WHERE id = ?",
+               (int(time.time()) - 10, clock_id))
+    cc.commit()
+    _, cs = H.call("GET", "/api/v1/account/status",
+                   headers={"X-Account-Token": bc["token"]})
+    check("but an expired account does read 0", cs["days_remaining"] == 0, cs)
+    cc.close()
 
     # ================= 2. DEVICE REGISTRATION =================
     print("\n[2] device registration")

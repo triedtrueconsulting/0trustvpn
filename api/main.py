@@ -1065,7 +1065,12 @@ def account_status(account: dict = Depends(require_account)):
     return AccountStatusResponse(
         status=account["status"],
         expires_at=expires or None,
-        days_remaining=max(0, (expires - now) // 86400) if expires else None,
+        # Round UP, not down. Floor division showed "0 days remaining" beside
+        # status "active" for the whole final day of a subscription, and showed
+        # 29 one second after a customer paid for 30. Every consumer (CLI, GUI,
+        # Android) prints this straight to the customer, and expires_at is on
+        # the same response for anything needing the exact instant.
+        days_remaining=max(0, -((now - expires) // 86400)) if expires else None,
         device_count=device_count,
         plan=plan,
         max_devices=_device_cap(plan),
