@@ -460,6 +460,26 @@ code, actively check for them:
 9. **Platform-specific Go.** `wg_unix.go` / `wg_windows.go` are build-tagged.
    `checkRoot()` returns nil on Windows (UAC handles elevation), requires
    euid 0 on Unix. Always cross-compile all 6 targets after touching wg or gui.
+10. **Asserting on a clock-derived value across two reads.** `days_remaining`
+   is computed from `now` on every request, so it ticks down on its own. A test
+   that samples it, does some work, samples again and asserts equality passes
+   only when both reads land in the same second — green locally, red on a
+   loaded runner. It took CI red twice before anyone looked. Assert on
+   `expires_at`, which is the absolute stored timestamp and cannot tick.
+   `days_remaining` **rounds up**, so an active account never displays 0 days
+   while it still has time left.
+11. **Per-plan values hardcoded in a client.** The device cap is 8 paid, 2 on
+   trial, and `/api/v1/account/status` publishes it as `max_devices`. Printing
+   a constant told trial customers they had six slots spare until the next
+   register returned 409. This shipped three times — the Android card,
+   `0trust status`, `0trust devices` — so treat any literal `8` next to a
+   device count as a bug. `/api/v1/devices` returns a bare list and carries no
+   cap; it takes a second call.
+12. **Prices and copy drifting from `PRICING`.** The landing page quotes
+   $5/$13/$48 in `data-price` attributes and the API invoices from `PRICING` in
+   `api/main.py`. `test_site.py` ties them together — terms offered, each
+   price, and the hand-written "save $N" arithmetic, which is the figure most
+   likely to go stale. Change one and the other must move.
 
 ## Discipline for a privacy product
 
