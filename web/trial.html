@@ -69,7 +69,9 @@ a:focus-visible, button:focus-visible, input:focus-visible {
 <main id="content" tabindex="-1">
   <h1><span data-trial="label-cap">One week</span>, free</h1>
   <p class="sub">No email. No card. No name. The same anonymous token a paying
-  customer gets — it just expires in <span data-trial="days">7</span> days.</p>
+  customer gets, on <span data-trial="devs">2</span> devices instead of
+  <span data-paid="devs">8</span>, expiring in
+  <span data-trial="days">7</span> days.</p>
 
   <div class="card" id="startCard">
     <p>Your browser solves a small puzzle first. That's instead of a captcha or
@@ -131,7 +133,14 @@ const $ = s => document.querySelector(s);
     document.querySelectorAll('[data-trial="label"]').forEach(e => e.textContent = t.label);
     document.querySelectorAll('[data-trial="label-cap"]').forEach(e => e.textContent = cap);
     document.querySelectorAll('[data-trial="days"]').forEach(e => e.textContent = t.days);
-    if (t.max_devices) $('#devs').textContent = t.max_devices;
+    if (t.max_devices) {
+      $('#devs').textContent = t.max_devices;
+      document.querySelectorAll('[data-trial="devs"]')
+        .forEach(e => e.textContent = t.max_devices);
+    }
+    if (cfg.max_devices)
+      document.querySelectorAll('[data-paid="devs"]')
+        .forEach(e => e.textContent = cfg.max_devices);
     if (t.enabled === false) {
       $('#go').disabled = true;
       $('#err').textContent = 'Trials are paused right now.';
