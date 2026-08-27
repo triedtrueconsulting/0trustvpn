@@ -554,8 +554,8 @@ func cmdExport(args []string) error {
 	return nil
 }
 
-// cmdDevices lists what's registered. The account is capped at 8 devices, so
-// there has to be a way to see which slots are taken before freeing one.
+// cmdDevices lists what's registered. The account is capped, so there has to
+// be a way to see which slots are taken before freeing one.
 func cmdDevices() error {
 	st, err := config.Load()
 	if err != nil {
@@ -564,7 +564,8 @@ func cmdDevices() error {
 	if st.Token == "" {
 		return fmt.Errorf("not logged in — run: 0trust login")
 	}
-	devices, err := api.New(st.APIBase, st.Token).Devices()
+	c := api.New(st.APIBase, st.Token)
+	devices, err := c.Devices()
 	if err != nil {
 		return err
 	}
@@ -572,7 +573,15 @@ func cmdDevices() error {
 		fmt.Println("no devices registered")
 		return nil
 	}
-	fmt.Printf("%d of 8 device slots used\n\n", len(devices))
+	// The cap is per-plan and /api/v1/devices returns a bare list, so it takes
+	// a second call. Printing a constant 8 told a trial customer, whose cap is
+	// lower, that they had slots they did not have. If the call fails, say the
+	// count alone rather than invent a denominator.
+	if s, serr := c.Status(); serr == nil && s.MaxDevices > 0 {
+		fmt.Printf("%d of %d device slots used\n\n", len(devices), s.MaxDevices)
+	} else {
+		fmt.Printf("%d device(s) registered\n\n", len(devices))
+	}
 	for _, d := range devices {
 		marker := "  "
 		if d.Pubkey == st.PublicKey {

@@ -173,6 +173,37 @@ try:
     countries = re.findall(r'\b(\d{2,})\s*countries\b', idx, re.I)
     check("no inflated country count in the copy", not countries, countries)
 
+    # The prices on the page and the prices the API invoices. Nothing tied
+    # these together, so editing PRICING without editing index.html — or the
+    # reverse — would quote a customer one figure and charge another at
+    # checkout, with every test still green. The cards carry data-months and
+    # data-price, so both sides are machine-readable.
+    cards = re.findall(r'data-months="(\d+)"\s+data-price="(\d+)"', idx)
+    check("the pricing cards are machine-readable", len(cards) >= 1, idx[:200])
+    page_prices = {int(m): int(p) for m, p in cards}
+    check("the page offers exactly the terms the API prices",
+          set(page_prices) == set(api_main.PRICING),
+          f"page {sorted(page_prices)} vs API {sorted(api_main.PRICING)}")
+    for months, shown in sorted(page_prices.items()):
+        want = api_main.PRICING.get(months)
+        check(f"{months}-month price on the page matches the API",
+              want is not None and float(shown) == float(want),
+              f"page ${shown} vs API ${want}")
+    # And the discount arithmetic, which is the figure most likely to go stale
+    # when a price changes: it is derived from two others and written by hand.
+    monthly = api_main.PRICING.get(1)
+    # Scope each search to one card: a plain .*? runs straight past a card
+    # with no saving and pairs it with the next card's figure.
+    for months, body in re.findall(
+            r'data-months="(\d+)"((?:(?!data-months=).)*)', idx, re.S):
+        m = re.search(r'save \$(\d+)', body)
+        if not m:
+            continue
+        months, saving = int(months), int(m.group(1))
+        want = monthly * months - api_main.PRICING[months]
+        check(f"the {months}-month saving is the real difference",
+              float(saving) == float(want), f"page ${saving} vs actual ${want:g}")
+
     print("\n[5] the device cap the site advertises matches the API")
     st, s = H.call("GET", "/api/v1/status/public")
     check("status endpoint serves the site", st == 200, s)
