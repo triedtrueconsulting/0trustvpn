@@ -345,6 +345,25 @@ try:
     check("the app's offline region fallback matches the live mesh",
           fallback == live_codes, f"app {sorted(fallback)} vs API {sorted(live_codes)}")
 
+    print("\n[5b] the phone's way in matches what the product actually offers")
+    # The login screen told a new customer the only way to get a token was to
+    # pay with Bitcoin. There is a free trial that needs no email, card or
+    # name — every other surface offers it, and the phone sent people to a
+    # dead end.
+    login = SRC.get("MainActivity.kt", "")
+    check("the login screen points at the free trial",
+          "trial" in login.lower() and "0trustvpn.com/trial" in login,
+          [l.strip() for l in login.splitlines()
+           if "token yet" in l or "0trustvpn.com" in l][:3])
+    check("and still names the paid route too",
+          "Bitcoin" in login)
+    # No duration in app copy. The trial length is an operator setting served
+    # by /api/v1/config; a number compiled into an APK is one that cannot be
+    # corrected without shipping a new release to the Play Store.
+    stale = re.findall(r'"[^"]*\b(?:\d+[- ]day|one week|a week|7[- ]day|week free)[^"]*"',
+                       ALL_KT, re.I)
+    check("no trial duration is hardcoded in the Android copy", not stale, stale)
+
     print("\n[6] auth is the token header, never Bearer")
     check("the app sends X-Account-Token",
           SRC["ApiClient.kt"].count('"X-Account-Token"') >= 3)

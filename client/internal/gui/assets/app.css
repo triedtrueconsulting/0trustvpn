@@ -353,8 +353,16 @@ button:active:not(:disabled) { transform: translateY(1px); }
 /* TOAST */
 .toast {
   position: fixed;
-  bottom: 24px; left: 50%;
+  /* Anchored to the TOP, over the titlebar. It used to sit at bottom: 24px,
+     which is exactly where the account card's button row lands in a normal
+     window: it covered "Add mobile device" and "Sign out" and, carrying a
+     z-index they do not, swallowed their clicks too. The titlebar is the one
+     band in this layout with nothing interactive in it, so a transient
+     message can pass over it harmlessly. pointer-events stays off regardless
+     — the toast is never a click target. */
+  top: 16px; left: 50%;
   transform: translateX(-50%);
+  pointer-events: none;
   background: var(--bg-elev);
   border: 1px solid var(--amber);
   color: var(--ink);
@@ -368,7 +376,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 }
 .toast.error { border-color: var(--terra); }
 @keyframes toast-in {
-  from { opacity: 0; transform: translate(-50%, 20px); }
+  from { opacity: 0; transform: translate(-50%, -20px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
@@ -388,6 +396,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
   justify-content: center;
   padding: 24px;
   z-index: 200;
+  /* A 600px-tall window is ordinary — a 1366x768 laptop, or any half-tiled
+     window. The QR dialog is 608px, so it was clipped at BOTH edges with no
+     way to scroll to "Copy config text". */
+  overflow-y: auto;
 }
 .modal-inner {
   background: var(--bg-elev);
@@ -400,7 +412,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
   flex-direction: column;
   gap: 14px;
   position: relative;
-  overflow: hidden;
+  /* x hidden keeps the ::before gradient clipped to the corners; y auto lets
+     a dialog taller than the window scroll instead of losing its bottom. */
+  overflow: hidden auto;
+  max-height: calc(100vh - 48px);
 }
 .modal-inner::before {
   content: '';
@@ -511,3 +526,45 @@ button:active:not(:disabled) { transform: translateY(1px); }
   letter-spacing: .06em; color: var(--ink-dim); min-width: 22px;
 }
 #ks-hint { margin: .35rem 0 .75rem; min-height: 1em; }
+
+/* NARROW WINDOWS
+   The GUI is a browser window and people make them small. Measured: the
+   layout is clean down to 400px and breaks at 360, where .status-block's
+   rigid `auto 1fr auto` grid cannot shrink the 148px-min Connect button
+   below its content, so the button left the card and the document scrolled
+   sideways. Below 420px the status card becomes two rows and the region
+   pair stacks, which also stops the selects truncating to "ZUR Zu...". */
+@media (max-width: 420px) {
+  .status-block {
+    grid-template-columns: auto 1fr;
+    row-gap: 16px;
+  }
+  .status-block .btn-large {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+  }
+  .row { grid-template-columns: 1fr; }
+}
+
+/* The QR carried these as inline style attributes, which no stylesheet rule
+   can override — the short-window media query below was silently ignored
+   until they moved here. */
+#export-qr {
+  display: block;
+  margin: 0 auto;
+  background: #fff;
+  padding: 8px;
+  border-radius: 4px;
+  max-width: 340px;
+  width: 100%;
+}
+
+/* A short window is the common laptop case (1366x768 leaves ~650px of
+   viewport). The QR dialog is ~608px tall, so it lost its bottom — and the
+   bottom is the copy-config fallback. Shrinking the code keeps the whole
+   dialog, QR and fallback both, on screen without hunting for a scrollbar;
+   .modal-inner's overflow stays as the backstop below this. */
+@media (max-height: 700px) {
+  #export-qr { max-width: 220px; }
+}
