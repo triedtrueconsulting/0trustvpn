@@ -440,6 +440,24 @@ try:
           cfg["trial"]["days"] == api_main.TRIAL_DAYS, cfg)
     check("published trial label is phrased for copy",
           cfg["trial"]["label"] == api_main.duration_label(api_main.TRIAL_DAYS), cfg)
+    # The trial's pitch used to say the expiry was the only difference from a
+    # paid account. The device cap is lower too, and a customer only found
+    # that out after minting the token. Both numbers are now in the pitch, and
+    # both are rendered from /config — so the served fallbacks have to be the
+    # real ones for the moment before the fetch lands.
+    check("published trial device cap matches the control plane",
+          cfg["trial"]["max_devices"] == api_main.TRIAL_MAX_DEVICES, cfg)
+    check("published paid device cap matches the control plane",
+          cfg["max_devices"] == api_main.MAX_DEVICES_PER_ACCOUNT, cfg)
+    check("trial page's served fallback states the real trial device cap",
+          f'data-trial="devs">{api_main.TRIAL_MAX_DEVICES}<' in trial,
+          f"TRIAL_MAX_DEVICES={api_main.TRIAL_MAX_DEVICES}")
+    check("trial page's served fallback states the real paid device cap",
+          f'data-paid="devs">{api_main.MAX_DEVICES_PER_ACCOUNT}<' in trial,
+          f"MAX_DEVICES_PER_ACCOUNT={api_main.MAX_DEVICES_PER_ACCOUNT}")
+    check("the trial pitch no longer says the expiry is the only difference",
+          "it just expires in" not in trial,
+          [l.strip() for l in trial.splitlines() if "just expires" in l][:2])
     _, home = get("/")
     check("landing page's served fallback states the real duration",
           f'data-trial="days">{api_main.TRIAL_DAYS}<' in home,
