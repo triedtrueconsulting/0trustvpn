@@ -235,6 +235,51 @@ try:
             check("and shows a focus ring when it is",
                   ring not in ("none", "", None), ring)
 
+        print("\n[3d] the window survives being made small, and the toast "
+              "does not sit on the buttons")
+        # This is a browser window: people narrow it and half-tile it. Each
+        # of these was found by photographing the real GUI, not by reading it.
+
+        # 1. The toast is fixed to the viewport. At bottom:24px it landed
+        #    exactly on the account card's button row — it covered "Add mobile
+        #    device" and "Sign out", and carrying a z-index they do not, it
+        #    swallowed their clicks as well.
+        page.evaluate("""() => { const t = document.querySelector('#toast');
+            t.textContent = 'probe'; t.classList.remove('hidden'); }""")
+        page.wait_for_timeout(120)
+        pe = page.eval_on_selector("#toast", "e => getComputedStyle(e).pointerEvents")
+        check("the toast is never a click target", pe == "none", pe)
+        for sel in ("#export-btn", "#logout-btn", "#devices-btn"):
+            hit = page.evaluate("""(s) => {
+                const A = document.querySelector('#toast'), B = document.querySelector(s);
+                if (!A || !B) return null;
+                const a = A.getBoundingClientRect(), b = B.getBoundingClientRect();
+                return !(a.right <= b.left || a.left >= b.right ||
+                         a.bottom <= b.top || a.top >= b.bottom);
+            }""", sel)
+            check(f"the toast does not cover {sel}", hit is False, hit)
+        page.evaluate("() => document.querySelector('#toast').classList.add('hidden')")
+
+        # 2. Nothing may leave the window sideways. Measured before the fix:
+        #    clean to 400px, and at 360 the Connect button reached 392px in a
+        #    360px viewport because .status-block's grid could not shrink it.
+        for w in (1100, 760, 480, 400, 360, 320):
+            page.set_viewport_size({"width": w, "height": 820})
+            page.wait_for_timeout(250)
+            over = page.evaluate("""() => {
+                const d = document.documentElement;
+                const bad = [];
+                document.querySelectorAll('button,select,input,.card,.kv-row').forEach(e => {
+                    const b = e.getBoundingClientRect();
+                    if (b.width > 0 && (b.right > d.clientWidth + 0.5 || b.left < -0.5))
+                        bad.push((e.id || e.className) + '@' + Math.round(b.right));
+                });
+                return {scroll: d.scrollWidth > d.clientWidth, bad: bad.slice(0, 3)};
+            }""")
+            check(f"nothing overflows the window at {w}px",
+                  not over["scroll"] and not over["bad"], over)
+        page.set_viewport_size({"width": 1100, "height": 820})
+
         print("\n[4] device manager lists and removes")
         page.click("#devices-btn")
         page.wait_for_selector("#devices-modal:not(.hidden)", timeout=15000)
@@ -336,6 +381,68 @@ try:
         page.reload()
         page.wait_for_selector("#view-main:not(.hidden)", timeout=20000)
         check("the original instance is still serving", True)
+
+        print("\n[6b] every dialog is actually a dialog")
+        # The Devices dialog was marked up as .modal-box and the stylesheet
+        # only ever defined .modal-inner, so it rendered as bare text floating
+        # on the backdrop: no panel, no border, no width cap. Nothing caught
+        # it because the other checks only assert on content. A dialog has to
+        # LOOK like one, so assert on the painted result.
+        for mid, opener, closer in (("#devices-modal", "#devices-btn", "#devices-close"),
+                                    ("#export-modal", "#export-btn", "#export-close")):
+            page.click(opener)
+            page.wait_for_selector(f"{mid}:not(.hidden)", timeout=15000)
+            page.wait_for_timeout(350)
+            panel = page.evaluate("""(m) => {
+                const p = document.querySelector(m).firstElementChild;
+                const c = getComputedStyle(p);
+                const r = p.getBoundingClientRect();
+                const transparent = c.backgroundColor === 'transparent' ||
+                                    /rgba\(0,\s*0,\s*0,\s*0\)/.test(c.backgroundColor);
+                return {cls: p.className, bg: c.backgroundColor, transparent,
+                        border: c.borderTopWidth, width: r.width,
+                        capped: r.width <= 520};
+            }""", mid)
+            check(f"{mid} paints a panel behind its content",
+                  not panel["transparent"], panel)
+            check(f"{mid} has a border", panel["border"] != "0px", panel)
+            check(f"{mid} is a dialog, not the full window width",
+                  panel["capped"], panel)
+            page.click(closer)
+            page.wait_for_timeout(250)
+
+        print("\n[7] the QR dialog in a short window")
+        # Last, because creating an export consumes a device slot and the
+        # trial cap is 2 — run earlier it starves the device-manager tests.
+        page.set_viewport_size({"width": 1100, "height": 600})
+        page.click("#export-btn")
+        page.wait_for_selector("#export-modal:not(.hidden)", timeout=15000)
+        page.click("#export-go")
+        page.wait_for_selector("#export-step2:not(.hidden)", timeout=30000)
+        page.wait_for_timeout(600)
+        box = page.evaluate("""() => {
+            const m = document.querySelector('#export-modal .modal-inner');
+            const r = m.getBoundingClientRect();
+            return {top: r.top, bottom: r.bottom, vh: window.innerHeight,
+                    fits: r.top >= -0.5 && r.bottom <= window.innerHeight + 0.5};
+        }""")
+        check("the QR dialog fits a 600px-tall window", box["fits"], box)
+        # Fitting is not enough: the whole point of the dialog is the QR and
+        # the fallback copy button, and both have to be on screen without
+        # hunting for a scrollbar. This is the mobile-onboarding flow.
+        seen = page.evaluate("""() => {
+            const out = {};
+            for (const s of ['#export-qr', '#export-copy']) {
+                const b = document.querySelector(s).getBoundingClientRect();
+                out[s] = b.top >= -0.5 && b.bottom <= window.innerHeight + 0.5;
+            }
+            return out;
+        }""")
+        check("the QR itself is fully visible there", seen["#export-qr"], seen)
+        check("and so is the copy-config fallback", seen["#export-copy"], seen)
+        page.click("#export-close")
+        page.set_viewport_size({"width": 1100, "height": 820})
+        page.wait_for_timeout(300)
 
         check("no JS errors across the whole session", not errors, errors)
 finally:

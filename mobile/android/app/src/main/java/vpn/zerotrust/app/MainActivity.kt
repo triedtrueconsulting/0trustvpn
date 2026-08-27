@@ -243,9 +243,16 @@ fun LoginScreen(ui: UiState, onLogin: (String) -> Unit) {
         }
 
         Spacer(Modifier.height(8.dp))
+        // This used to say paying with Bitcoin was the only way in. There is a
+        // free trial that needs no email, card or name, and a new customer
+        // arriving here was told a dead end. No duration is named on purpose:
+        // the trial length is an operator setting published by
+        // /api/v1/config, and every other surface renders it from there —
+        // a number typed into app copy is one an APK release cannot correct.
         Text(
-            "Don't have a token yet? Visit 0trustvpn.com and pay with Bitcoin. " +
-            "You'll receive your token immediately on payment confirmation.",
+            "No token yet? Start a free trial at 0trustvpn.com/trial — no " +
+            "email, no card, no name. Or pay with Bitcoin at 0trustvpn.com " +
+            "and your token arrives on the first confirmation.",
             color = ZT_InkFnt,
             fontSize = 12.sp,
         )
