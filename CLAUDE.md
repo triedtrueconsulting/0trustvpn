@@ -40,7 +40,10 @@ client/         Go module github.com/0trust/cli (Go 1.22, dep: skip2/go-qrcode)
 mobile/android/                   Complete Kotlin/Compose app (wireguard-android).
                                   gradlew + wrapper jar committed; syntax-check.sh
                                   parses the Kotlin with no Android SDK present.
-mobile/ios/                       Skeleton — OUT OF SCOPE for v0.1 (QR-export covers iOS)
+mobile/ios/                       SwiftUI app + WireGuardKit packet-tunnel
+                                  extension. project.yml (XcodeGen) generates
+                                  the .xcodeproj; syntax-check.sh is a
+                                  STRUCTURAL check, not a compile.
 installer/windows/                WiX v4 MSI (0trust.wxs), build.ps1,
                                   resources/make-icon.py -> the committed .ico
 installer/linux/deb/              build.sh → .deb (amd64+arm64), TESTED working
@@ -111,7 +114,7 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   - `buc` = Bucharest, Romania
   (Norway was rejected earlier — it's in Nine Eyes. Romania replaced it.)
   **These region codes must be identical everywhere** — CLI, GUI, Android,
-  iOS skeleton, API defaults, docs, landing-page terminal demo.
+  iOS app, API defaults, docs, landing-page terminal demo.
 - **Currencies: BTC, XMR, ZEC, ETH** (LTC was dropped; ETH was dropped and
   then re-added). The codes live in `payments.CURRENCIES`, the BTCPay checkout
   config, and web/index.html's crypto tabs — keep them in step.
@@ -188,9 +191,17 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   tab. Separate service, separate port, so it can be killed without touching
   the control plane — and the UI must keep saying plainly what it is not.
   Overstating it would be claim-vs-reality drift on our most visible page.
-- **iOS:** dropped from v0.1 scope. QR-export into the official WireGuard app
-  covers iOS users. Do not build a branded iOS app without explicit go-ahead
-  (needs Apple Developer Program + Network Extension entitlement + review).
+- **iOS:** the branded app was built on explicit go-ahead (2026-09-04). The
+  source under `mobile/ios/` is complete — SwiftUI app plus a WireGuardKit
+  packet-tunnel extension, `project.yml` generates the Xcode project — but
+  **nothing has ever compiled it**: there is no Swift toolchain in the build
+  environment and SwiftUI/NetworkExtension have no Linux SDK. Treat the first
+  `xcodegen generate && xcodebuild` on a Mac as the real gate and expect to fix
+  compile errors there. Shipping it still needs the Apple Developer Program,
+  the `packet-tunnel-provider` entitlement (a request to Apple, weeks, can be
+  refused) and App Review. Until then QR-export into the official WireGuard app
+  remains the supported iOS path, and the download page must not promise an
+  iOS app that cannot be installed.
 - **Design system:** warm-dark palette
   `--bg #0c0c0a  --ink #f4ede0  --amber #d4a574  --terra #c44536  --moss #7d8f5a  --line #2a2820`.
   Fonts: Instrument Serif (headings), JetBrains Mono (technical/labels),
@@ -344,7 +355,9 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   intent filter — a second declaration silently makes Always-on VPN
   impossible to enable. `ZeroTrustVpnService` is a plain foreground service
   that owns the notification.
-- **The Android device keypair is generated once and persisted.** Registration
+- **The mobile device keypair is generated once and persisted — both apps.**
+  iOS keeps it in the keychain (`DeviceIdentity.loadOrCreate`), Android in
+  encrypted preferences. Registration
   is idempotent on the pubkey, so a stored key means a reconnect reuses the
   same device and mesh IP. Generating one per connect — which it did — burns
   the account's device cap in a handful of connects and then locks the
@@ -513,8 +526,10 @@ encrypted DB backup + DR runbook, abuse/DMCA runbook, legal pages
 5. Commission a third-party audit (Cure53 / Assured AB) — the audit pack is
    built to be their starting point.
 
-**Explicit v0.2 backlog:** system tray icon, native desktop window, branded
-iOS app, APT repo for auto-updates, a macOS kill switch (pf, not iptables).
+**Explicit v0.2 backlog:** system tray icon, native desktop window, APT repo
+for auto-updates, a macOS kill switch (pf, not iptables). The iOS app moved out
+of the backlog and into `mobile/ios/`; what remains for it is a Mac, a
+Developer account and Apple's entitlement approval, not engineering.
 
 ## Conventions
 

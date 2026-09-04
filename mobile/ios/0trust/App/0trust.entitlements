@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Requires Apple's approval on the Developer account before it will
+         provision. Requesting it is a form, and the wait is measured in
+         weeks — see mobile/ios/README.md. -->
+    <key>com.apple.developer.networking.networkextension</key>
+    <array>
+        <string>packet-tunnel-provider</string>
+    </array>
+    <!-- How the app hands the tunnel extension its configuration: they are
+         separate processes and the extension is started by iOS on its own. -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.vpn.zerotrust.app</string>
+    </array>
+    <!-- The account token and the device private key. Shared so the extension
+         can bring the tunnel up after a reboot without the app running. -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)group.vpn.zerotrust.app</string>
+    </array>
+</dict>
+</plist>

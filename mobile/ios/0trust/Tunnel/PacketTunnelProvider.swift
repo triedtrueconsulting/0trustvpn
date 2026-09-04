@@ -1,52 +1,120 @@
 //
 // PacketTunnelProvider.swift
-// The actual VPN extension that handles packets when the user taps Connect.
+// The network extension that actually carries packets.
 //
-// In production, replace the placeholder code with WireGuardKit's
-// WireGuardAdapter. The flow is:
+// This runs in its own process, started by iOS on demand — from the app, from
+// on-demand rules, or after a reboot under Always-on VPN with the app never
+// launched. It therefore reads everything it needs from the shared App Group
+// container and the shared keychain, and assumes the app is not running.
 //
-//   1. Load the wg-quick-style config from App Group UserDefaults
-//   2. Parse it with TunnelConfiguration.init(fromWgQuickConfig:)
-//   3. Call adapter.start(tunnelConfiguration:) inside startTunnel(...)
-//   4. Forward setNetworkSettings(...) so iOS configures routing
-//
-// See: https://git.zx2c4.com/wireguard-apple/tree/Sources/WireGuardKit
+// The previous version of this file called completionHandler(nil) without
+// starting anything. iOS would have shown "Connected" in Settings while no
+// packet was ever encrypted — a tunnel that reports success and carries
+// nothing is the one outcome a VPN must never produce. It now fails loudly
+// instead: if the adapter cannot start, the error propagates and the
+// connection goes down.
 //
 
 import NetworkExtension
+import WireGuardKit
 import os.log
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
-    private let log = OSLog(subsystem: "vpn.zerotrust.app", category: "tunnel")
+    private lazy var adapter: WireGuardAdapter = {
+        WireGuardAdapter(with: self) { logLevel, message in
+            os_log("%{public}@", log: Self.log,
+                   type: logLevel == .error ? .error : .info, message)
+        }
+    }()
+
+    private static let log = OSLog(subsystem: "vpn.zerotrust.app", category: "tunnel")
 
     override func startTunnel(options: [String: NSObject]?,
                               completionHandler: @escaping (Error?) -> Void) {
-        os_log("startTunnel", log: log, type: .info)
+        os_log("startTunnel", log: Self.log, type: .info)
 
-        guard let defaults = UserDefaults(suiteName: "group.vpn.zerotrust.app"),
-              let config = defaults.string(forKey: "wg.config") else {
-            completionHandler(NSError(domain: "0trust", code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "no wg.config in App Group"]))
+        let text: String
+        do {
+            text = try SharedStore.readConfig()
+        } catch {
+            os_log("no tunnel configuration: %{public}@", log: Self.log, type: .error,
+                   error.localizedDescription)
+            completionHandler(TunnelError.noConfiguration)
             return
         }
 
-        // TODO: replace with real WireGuardKit integration
-        //
-        //   let tunConfig = try TunnelConfiguration(fromWgQuickConfig: config)
-        //   let adapter = WireGuardAdapter(with: self) { _, message in
-        //     os_log("%{public}@", log: self.log, type: .info, message)
-        //   }
-        //   adapter.start(tunnelConfiguration: tunConfig) { error in
-        //     completionHandler(error)
-        //   }
-        _ = config
-        completionHandler(nil)
+        let tunnelConfiguration: TunnelConfiguration
+        do {
+            tunnelConfiguration = try TunnelConfiguration(fromWgQuickConfig: text,
+                                                          called: "0trust")
+        } catch {
+            os_log("unparseable configuration: %{public}@", log: Self.log, type: .error,
+                   String(describing: error))
+            completionHandler(TunnelError.badConfiguration)
+            return
+        }
+
+        adapter.start(tunnelConfiguration: tunnelConfiguration) { adapterError in
+            if let adapterError {
+                os_log("adapter failed to start: %{public}@", log: Self.log, type: .error,
+                       String(describing: adapterError))
+                completionHandler(TunnelError.adapter(String(describing: adapterError)))
+                return
+            }
+            os_log("tunnel up", log: Self.log, type: .info)
+            completionHandler(nil)
+        }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason,
                              completionHandler: @escaping () -> Void) {
-        os_log("stopTunnel: %d", log: log, type: .info, reason.rawValue)
-        // TODO: adapter.stop { _ in completionHandler() }
+        os_log("stopTunnel: %d", log: Self.log, type: .info, reason.rawValue)
+        adapter.stop { error in
+            if let error {
+                os_log("adapter stop error: %{public}@", log: Self.log, type: .error,
+                       String(describing: error))
+            }
+            completionHandler()
+        }
+    }
+
+    /// The app asks for the live handshake over this channel rather than
+    /// trusting NEVPNStatus. `wg-quick up` equivalents return success once the
+    /// interface exists, which says nothing about whether the far end ever
+    /// answered — the desktop client makes the same distinction before it
+    /// tells anyone they are protected.
+    override func handleAppMessage(_ messageData: Data,
+                                   completionHandler: ((Data?) -> Void)?) {
+        guard let message = String(data: messageData, encoding: .utf8),
+              message == "runtime-configuration" else {
+            completionHandler?(nil)
+            return
+        }
+        adapter.getRuntimeConfiguration { settings in
+            completionHandler?(settings?.data(using: .utf8))
+        }
+    }
+
+    override func sleep(completionHandler: @escaping () -> Void) {
         completionHandler()
+    }
+
+    override func wake() {}
+}
+
+enum TunnelError: Error, LocalizedError {
+    case noConfiguration
+    case badConfiguration
+    case adapter(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noConfiguration:
+            return "No tunnel configuration — open 0trustvpn and connect once."
+        case .badConfiguration:
+            return "The stored tunnel configuration could not be parsed."
+        case .adapter(let detail):
+            return "WireGuard could not start: \(detail)"
+        }
     }
 }

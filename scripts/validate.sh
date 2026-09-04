@@ -209,6 +209,26 @@ for f in open(os.environ["VALIDATE_FILES"]).read().splitlines():
 if bad:
     print("\n".join(bad)); sys.exit(1)'
 
+check plist-parse "iOS plists and entitlements parse" -- "$PY" -c '
+import os, plistlib, sys
+bad = []
+for f in open(os.environ["VALIDATE_FILES"]).read().splitlines():
+    if not f.endswith((".plist", ".entitlements")):
+        continue
+    try:
+        with open(f, "rb") as fh:
+            plistlib.load(fh)
+    except Exception as e:
+        bad.append(f"{f}: {e}")
+if bad:
+    print("\n".join(bad)); sys.exit(1)'
+
+# Not a compile: there is no swiftc here and SwiftUI/NetworkExtension have no
+# Linux SDK. It checks delimiters, leftover placeholders and missing imports.
+# The real gate is xcodegen + xcodebuild on a Mac; the script says so itself.
+check swift-structure "Swift sources are structurally sound" -- \
+    ./mobile/ios/syntax-check.sh
+
 check json-parse "every .json parses" -- "$PY" -c '
 import json, os, sys
 bad = []
@@ -251,9 +271,45 @@ check regions-current "only zur/rey/buc appear as regions" -- bash -c '
 check pipefail-head "no pipeline can die of SIGPIPE under pipefail" -- \
     "$PY" "$REPO_DIR/tests/lint/no-sigpipe-head.py"
 
-check auth-header "clients send X-Account-Token, never Bearer" -- bash -c '
-    hits=$(grep -rn "Authorization: Bearer" api client mobile || true)
-    [ -z "$hits" ] || { echo "$hits"; exit 1; }'
+# Our API clients authenticate with X-Account-Token; the token IS the
+# credential and there is no OAuth anywhere in this product. Scoped to
+# client/ and mobile/ on purpose: api/payments.py legitimately sends
+# `Authorization: Bearer` to Stripe and Square, which are somebody else's
+# APIs and do use bearer tokens. Comments are stripped first — the iOS client
+# and the Android client both explain this rule in prose at the top of the
+# file, and a check that cannot tell code from commentary fails on its own
+# documentation.
+check auth-header "clients send X-Account-Token, never Bearer" -- "$PY" -c '
+import os, re, sys
+bad = []
+for f in open(os.environ["VALIDATE_FILES"]).read().splitlines():
+    if not f.startswith(("client/", "mobile/")):
+        continue
+    if not f.endswith((".go", ".kt", ".swift", ".js", ".java")):
+        continue
+    try:
+        text = open(f, encoding="utf-8", errors="replace").read()
+    except OSError:
+        continue
+    in_block = False
+    for n, line in enumerate(text.splitlines(), 1):
+        code = line
+        if in_block:
+            if "*/" in code:
+                code, in_block = code.split("*/", 1)[1], False
+            else:
+                continue
+        if "/*" in code:
+            head, rest = code.split("/*", 1)
+            if "*/" in rest:
+                code = head + rest.split("*/", 1)[1]
+            else:
+                code, in_block = head, True
+        code = code.split("//")[0]
+        if re.search(r"\bBearer\b", code) or "Authorization" in code:
+            bad.append(f"{f}:{n}:{line.strip()}")
+if bad:
+    print("\n".join(bad)); sys.exit(1)'
 
 # ----------------------------------------------------------------------------
 if [[ $LIST_ONLY -eq 1 ]]; then exit 0; fi

@@ -1,0 +1,105 @@
+# XcodeGen spec for the 0trustvpn iOS app.
+#
+#   brew install xcodegen && xcodegen generate && open 0trust.xcodeproj
+#
+# The .xcodeproj is generated, not committed. A project.pbxproj is a large
+# machine-written file that conflicts on every branch and hides what actually
+# changed; this spec is the reviewable source of truth for the same
+# information, and regenerating takes a second.
+name: 0trust
+options:
+  bundleIdPrefix: vpn.zerotrust
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  # The Go data plane, wrapped for Apple platforms, straight from upstream.
+  # Pin a tag rather than a branch: this dependency carries the crypto.
+  WireGuardKit:
+    url: https://github.com/WireGuard/wireguard-apple
+    from: 1.0.15-26
+
+targets:
+  # ---------------------------------------------------------------- app ----
+  0trust:
+    type: application
+    platform: iOS
+    sources:
+      - path: 0trust/App
+      - path: 0trust/Shared
+      - path: 0trust/Resources
+        optional: true
+        buildPhase: resources
+    dependencies:
+      - package: WireGuardKit
+      - target: 0trustTunnel
+        embed: true
+    info:
+      path: 0trust/App/Info.plist
+      properties:
+        CFBundleDisplayName: 0trustvpn
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # Dark-only product: the palette is designed for one background and
+        # the light rendering of it does not exist.
+        UIUserInterfaceStyle: Dark
+        ITSAppUsesNonExemptEncryption: true
+        # WireGuard is standard, publicly available cryptography. This is the
+        # exemption that keeps every release out of a manual export-compliance
+        # review; if it is ever removed, expect App Store Connect to ask.
+        ITSEncryptionExportComplianceCode: ""
+        UIAppFonts:
+          - InstrumentSerif-Regular.ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-Bold.ttf
+          - IBMPlexSans-Regular.ttf
+    entitlements:
+      path: 0trust/App/0trust.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
+        com.apple.security.application-groups:
+          - group.vpn.zerotrust.app
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)group.vpn.zerotrust.app
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: vpn.zerotrust.app
+        MARKETING_VERSION: "0.1.0"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+  # ------------------------------------------------------------- tunnel ----
+  0trustTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: 0trust/Tunnel
+      - path: 0trust/Shared
+    dependencies:
+      - package: WireGuardKit
+    info:
+      path: 0trust/Tunnel/Info.plist
+    entitlements:
+      path: 0trust/Tunnel/Tunnel.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
+        com.apple.security.application-groups:
+          - group.vpn.zerotrust.app
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)group.vpn.zerotrust.app
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: vpn.zerotrust.app.tunnel
+        MARKETING_VERSION: "0.1.0"
+        SWIFT_VERSION: "5.9"
+        # The packet-tunnel process runs under a tight memory limit; keep it
+        # lean and let the app do the talking.
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
