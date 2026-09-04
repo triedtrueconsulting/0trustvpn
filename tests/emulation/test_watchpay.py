@@ -204,6 +204,85 @@ try:
     check("the right amount, deep enough, settles",
           status_of(macct["invoice_id"]) == "settled")
 
+    print("\n[6b] the checkout page is told the truth about the same money")
+    # /payment/{id}/status is what the customer watches while they wait. It
+    # had its own copy of the settlement arithmetic with 1e8 hardcoded and no
+    # coin passed, so an XMR invoice was compared against a figure 10,000x
+    # out and a non-BTC address was looked up on Bitcoin's explorer. It is
+    # read-only and never credited anything — it simply told the customer
+    # something false about their own payment.
+    # A settled invoice short-circuits (correctly), so this needs a live one.
+    st, pend = H.call("POST", "/api/v1/account", {"months": 1, "currency": "XMR"})
+    check("a second XMR signup for the live-status check", st == 200, pend)
+    prow = sql("SELECT * FROM invoices WHERE id = ?", pend["invoice_id"])[0]
+    p_atomic = int(round(float(prow["amount_crypto"]) * mw.ATOMIC))
+    p_idx = int(prow["derivation_index"])
+    # Pay it deep enough to be confirmed, but do NOT run the poller: the row
+    # stays 'pending', so the endpoint cannot short-circuit on stored state
+    # and has to do the arithmetic and the chain lookup itself.
+    fake_walletrpc.pay(p_idx, p_atomic, confirmations=11)
+
+    st, live = H.call("GET", f"/api/v1/payment/{pend['invoice_id']}/status")
+    check("status endpoint answers for a pending XMR invoice", st == 200, live)
+    check("and prices it in piconero, like the poller does",
+          live.get("expected_sats", 0) == p_atomic,
+          f"expected_sats={live.get('expected_sats')} atomic={p_atomic} "
+          f"(1e8 instead of 1e12 is 10,000x out)")
+    check("and reads the amount off the right chain",
+          live.get("confirmed_sats", 0) > 0,
+          f"confirmed={live.get('confirmed_sats')} — looking an XMR "
+          f"subaddress up on Bitcoin's explorer reports 0")
+
+    # And a pending BTC invoice must still be counted in satoshis.
+    st, bpend = H.call("POST", "/api/v1/account", {"months": 1, "currency": "BTC"})
+    brow = sql("SELECT * FROM invoices WHERE id = ?", bpend["invoice_id"])[0]
+    st, blive = H.call("GET", f"/api/v1/payment/{bpend['invoice_id']}/status")
+    check("a BTC invoice is still priced in satoshis",
+          blive.get("expected_sats", 0)
+          == int(round(float(brow["amount_crypto"]) * 100_000_000)),
+          f"{blive.get('expected_sats')} vs "
+          f"{int(round(float(brow['amount_crypto']) * 100_000_000))}")
+
+    print("\n[6c] an underpayment is reported, not swallowed")
+    # A customer short by a little — fee estimation, exchange rounding, a
+    # wallet that takes its fee out of the amount sent — has put real coin
+    # into an address the operator controls. Nothing credited them, and the
+    # checkout page showed no change at all until the invoice expired and
+    # told them to start over. The API computed the shortfall the whole time
+    # and no page read it.
+    st, u = H.call("POST", "/api/v1/account", {"months": 1, "currency": "BTC"})
+    urow = sql("SELECT * FROM invoices WHERE id = ?", u["invoice_id"])[0]
+    u_atomic = int(round(float(urow["amount_crypto"]) * 100_000_000))
+    fake_explorer.pay(urow["payment_address"], u_atomic - 500)
+
+    st, ust = H.call("GET", f"/api/v1/payment/{u['invoice_id']}/status")
+    check("status answers for an underpaid invoice", st == 200, ust)
+    check("it is flagged as underpaid", ust.get("underpaid") is True, ust)
+    check("and the shortfall is named exactly",
+          ust.get("short_by") == "0.000005", ust.get("short_by"))
+    check("with the amounts in the invoice's own currency",
+          ust.get("currency") == "BTC"
+          and ust.get("expected_amount") not in (None, "", "0"), ust)
+    check("and it is NOT settled", ust.get("status") != "settled", ust)
+
+    run_poller()
+    check("the poller does not credit an underpayment",
+          status_of(u["invoice_id"]) == "pending", status_of(u["invoice_id"]))
+
+    # Paying the rest to the SAME address finishes the job — the balance
+    # accumulates, exactly as a real address does.
+    fake_explorer.pay(urow["payment_address"], 500)
+    run_poller()
+    check("topping the same address up to the full amount settles it",
+          status_of(u["invoice_id"]) == "settled", status_of(u["invoice_id"]))
+
+    # And the page actually renders it.
+    page = open(os.path.join(H.REPO, "web", "index.html")).read()
+    check("the checkout page reads the underpaid flag", "data.underpaid" in page)
+    check("and names the remainder", "short_by" in page)
+    check("and tells a waiting customer not to pay twice",
+          "Do not send again" in page)
+
     print("\n[7] each coin's money stays its own")
     rows = sql("SELECT pay_currency, payment_address, derivation_index "
                "FROM invoices ORDER BY created_at")

@@ -142,6 +142,27 @@ func (c *Client) Rotate(req RotateReq) (*RegisterResp, error) {
 	return &r, c.do("POST", "/api/v1/wg/rotate", req, &r)
 }
 
+// Notice is a message waiting for this account. There is no email address on
+// file — that is the product — so this is the only channel the service has to
+// reach a customer, and the only warning they get before a subscription ends.
+type Notice struct {
+	ID        int64  `json:"id"`
+	Severity  string `json:"severity"`
+	Subject   string `json:"subject"`
+	Body      string `json:"body"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+func (c *Client) Notices() ([]Notice, error) {
+	var n []Notice
+	return n, c.do("GET", "/api/v1/notices", nil, &n)
+}
+
+// MarkNoticeRead stops a notice coming back on the next status check.
+func (c *Client) MarkNoticeRead(id int64) error {
+	return c.do("POST", fmt.Sprintf("/api/v1/notices/%d/read", id), nil, nil)
+}
+
 // Device is one registered device on the account.
 type Device struct {
 	Pubkey     string `json:"pubkey"`

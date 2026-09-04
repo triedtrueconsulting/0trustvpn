@@ -1242,18 +1242,49 @@ def payment_status(invoice_id: str):
     p = provider()
     if row["payment_address"] and hasattr(p, "check"):
         try:
-            sats = int(round(float(row["amount_crypto"] or 0) * 100_000_000))
-            live = p.check(row["payment_address"], sats)
+            # Per-coin atomic units, and the coin and derivation ref passed
+            # through. This hardcoded 1e8 and named no coin, which is the same
+            # defect already fixed in the poller: an XMR invoice was compared
+            # against a figure four orders of magnitude out, and a ZEC or XMR
+            # address was looked up on Bitcoin's explorer because check()
+            # defaults to BTC. Read-only, so it never credited anything — it
+            # just told the customer something untrue about their own money.
+            coin = (row["pay_currency"] or "BTC").upper()
+            units = payments.COIN_UNITS.get(coin)
+            if units is None:
+                return {"status": row["status"], "settled_at": None}
+            atomic = int(round(float(row["amount_crypto"] or 0) * units))
+            live = p.check(row["payment_address"], atomic, coin=coin,
+                           ref=row["derivation_index"])
         except (PaymentError, ValueError):
             return {"status": row["status"], "settled_at": None}
         # "Seen but not confirmed" is the state customers ask support about.
         # Saying it out loud stops the page looking broken while they wait for
         # a block, and stops them paying twice.
+        # Also as decimal strings in the invoice's own currency. The page must
+        # not have to know that BTC is 1e8 and XMR is 1e12 — that arithmetic
+        # has been got wrong twice already, once in the poller and once in
+        # this very handler, and duplicating it into JavaScript would be the
+        # third time.
+        def _amount(atomic: int) -> str:
+            return f"{atomic / units:.8f}".rstrip("0").rstrip(".") or "0"
+
+        confirmed = int(live.get("confirmed_sats", 0))
+        expected = int(live.get("expected_sats", 0))
         return {"status": row["status"],
                 "settled_at": None,
                 "seen": live.get("seen", False),
-                "confirmed_sats": live.get("confirmed_sats", 0),
-                "expected_sats": live.get("expected_sats", 0),
+                "currency": coin,
+                "confirmed_sats": confirmed,
+                "expected_sats": expected,
+                "confirmed_amount": _amount(confirmed),
+                "expected_amount": _amount(expected),
+                # Money arrived, but not enough. Without this the customer
+                # watches an unchanged page until the invoice expires and is
+                # told to "start over", having already sent real coin to an
+                # address we control.
+                "short_by": _amount(max(0, expected - confirmed)),
+                "underpaid": 0 < confirmed < expected,
                 "awaiting_confirmation": bool(
                     live.get("unconfirmed_sats")) and not live.get("seen_enough")}
     try:

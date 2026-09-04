@@ -17,6 +17,8 @@ final class AppState: ObservableObject {
     @Published private(set) var maskedToken = ""
     @Published private(set) var status: AccountStatus?
     @Published private(set) var devices: [DeviceInfo] = []
+    /// Messages from the service — the only channel this account has.
+    @Published private(set) var notices: [NoticeInfo] = []
     @Published private(set) var regions: [RegionInfo] = []
     @Published private(set) var config: PublicConfig?
     @Published private(set) var tunnelStatus: NEVPNStatus = .invalid
@@ -119,6 +121,7 @@ final class AppState: ObservableObject {
         loggedIn = false
         status = nil
         devices = []
+        notices = []
         lastHandshake = nil
         manager = nil
     }
@@ -142,13 +145,33 @@ final class AppState: ObservableObject {
         let tok = token
         async let s = try? await api.status(token: tok)
         async let d = try? await api.devices(token: tok)
+        async let n = try? await api.notices(token: tok)
         status = await s
         devices = (await d) ?? []
+        notices = (await n) ?? []
     }
 
     func refreshDevices() async {
         guard loggedIn else { return }
         devices = (try? await api.devices(token: token)) ?? []
+    }
+
+    func refreshNotices() async {
+        guard loggedIn else { return }
+        notices = (try? await api.notices(token: token)) ?? []
+    }
+
+    /// Dismiss one so it stops coming back. Removed locally on success only —
+    /// a failed call must leave it on screen rather than pretend it is gone.
+    func dismissNotice(_ id: Int) async {
+        guard loggedIn else { return }
+        do {
+            try await api.markNoticeRead(token: token, id: id)
+            notices.removeAll { $0.id == id }
+        } catch {
+            self.error = (error as? APIError)?.errorDescription
+                      ?? error.localizedDescription
+        }
     }
 
     func removeDevice(_ pubkey: String) async {

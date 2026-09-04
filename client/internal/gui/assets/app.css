@@ -568,3 +568,47 @@ button:active:not(:disabled) { transform: translateY(1px); }
 @media (max-height: 700px) {
   #export-qr { max-width: 220px; }
 }
+
+/* NOTICES
+   The service's only channel to a customer: no email address exists, so a
+   renewal warning that is not shown here is not shown anywhere. */
+.notices { display: flex; flex-direction: column; gap: 10px; }
+.notice {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-faint);
+  border-radius: 3px;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+}
+.notice.warning { border-left-color: var(--amber); }
+.notice.urgent  { border-left-color: var(--terra); }
+.notice h3 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: .04em;
+  color: var(--ink);
+  font-weight: 600;
+}
+.notice.urgent h3 { color: var(--terra); }
+.notice p {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  color: var(--ink-dim);
+  margin: 0;
+}
+.notice .dismiss {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-faint);
+  border-radius: 2px;
+  font-size: 11px;
+  padding: 4px 10px;
+  align-self: start;
+}
+.notice .dismiss:hover { color: var(--amber); border-color: var(--amber); }
+
+/* A hint that is correcting a claim, not making one. */
+.hint.warn { color: var(--terra); }

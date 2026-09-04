@@ -84,6 +84,36 @@ try:
     c.execute("UPDATE accounts SET plan = 'paid' WHERE plan = 'trial'")
     c.commit(); c.close()
 
+    # A notice is the ONLY channel this service has — there is no email
+    # address on the account. Before this the feature was write-only: the
+    # operator dashboard could broadcast and no client on any platform ever
+    # displayed one, so a renewal warning reached nobody.
+    print("\n[1b] messages from the service reach the customer")
+    nc = sqlite3.connect(DB)
+    acct_id = nc.execute("SELECT id FROM accounts ORDER BY id DESC LIMIT 1").fetchone()[0]
+    nc.execute("""INSERT INTO notices
+                  (account_id, severity, subject, body, created_at, expires_at, created_by)
+                  VALUES (?, 'warning', 'Your subscription ends in 3 days',
+                          'Top up with 0trust topup to keep this account.',
+                          ?, 0, 'sweeper:renewal:7')""",
+               (acct_id, int(__import__("time").time())))
+    nc.commit(); nc.close()
+
+    rc, out = cli("status")
+    check("status surfaces a waiting notice", "ends in 3 days" in out, out[-600:])
+    check("and its body, not just the subject",
+          "0trust topup" in out, out[-600:])
+
+    rc, out = cli("notices")
+    check("the notices command lists it", rc == 0 and "ends in 3 days" in out, out)
+    rc, out = cli("notices", "--read")
+    check("--read clears it", rc == 0 and "marked" in out.lower(), out)
+    rc, out = cli("notices")
+    check("and it stays cleared", "no unread messages" in out, out)
+    rc, out = cli("status")
+    check("status is quiet once nothing is waiting",
+          "ends in 3 days" not in out, out[-400:])
+
     print("\n[2] regions")
     rc, out = cli("regions")
     check("regions lists zur/rey/buc",

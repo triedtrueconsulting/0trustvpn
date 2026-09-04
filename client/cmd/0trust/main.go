@@ -74,6 +74,8 @@ func main() {
 		err = cmdRotate()
 	case "devices":
 		err = cmdDevices()
+	case "notices":
+		err = cmdNotices(args)
 	case "remove":
 		err = cmdRemoveDevice(args)
 	case "export":
@@ -127,6 +129,8 @@ COMMANDS
   rotate                         Rotate to a fresh entry/exit pair
                                    (only meaningful for multi-hop)
   devices                        List devices registered on this account
+  notices [--read]               Messages from the service (renewal warnings,
+                                   maintenance). --read clears them
   remove <pubkey|this>           Deregister a device and free its slot
                                    ("this" removes the device you're on)
   export [flags]                 Create a config + QR for a mobile device
@@ -268,7 +272,114 @@ func cmdStatus() error {
 `,
 		maskToken(st.Token), s.Status, expiryStr, plural(s.DaysRemaining, "day"),
 		s.DeviceCount, devCap, tunnelState(), mode, ipv6Str, killStr, rotateStr)
+
+	// There is no email address on this account — by design — so a notice is
+	// the only way the service can tell a customer anything, including that
+	// their subscription is about to run out. Printing the unread count and
+	// nothing else would be no better than silence.
+	printNotices(c)
 	return nil
+}
+
+// cmdNotices prints the messages waiting for this account, and with --read
+// clears them. `status` shows them too; this is the way to act on them.
+func cmdNotices(args []string) error {
+	markRead := false
+	for _, a := range args {
+		if a == "--read" || a == "-r" {
+			markRead = true
+		}
+	}
+	st, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if st.Token == "" {
+		return fmt.Errorf("not logged in — run: 0trust login")
+	}
+	c := api.New(st.APIBase, st.Token)
+	notices, err := c.Notices()
+	if err != nil {
+		return err
+	}
+	if len(notices) == 0 {
+		fmt.Println("no unread messages")
+		return nil
+	}
+	for _, n := range notices {
+		fmt.Printf("\n  [%s] %s\n", n.Severity, n.Subject)
+		fmt.Printf("  %s\n", time.Unix(n.CreatedAt, 0).Format("2006-01-02 15:04"))
+		for _, line := range wrap(n.Body, 68) {
+			fmt.Printf("  %s\n", line)
+		}
+	}
+	if !markRead {
+		fmt.Printf("\n%s. Clear them with: 0trust notices --read\n",
+			plural(len(notices), "unread message"))
+		return nil
+	}
+	// Mark each one read individually: one failure should not silently leave
+	// the rest looking cleared.
+	var failed int
+	for _, n := range notices {
+		if err := c.MarkNoticeRead(n.ID); err != nil {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d could not be marked read", failed, len(notices))
+	}
+	fmt.Printf("\n✓ marked %s read\n", plural(len(notices), "message"))
+	return nil
+}
+
+// printNotices shows anything waiting for the account. Failures are silent:
+// this is an extra on the end of `status`, and a control plane that cannot be
+// reached has already been reported by the call above it.
+func printNotices(c *api.Client) {
+	notices, err := c.Notices()
+	if err != nil || len(notices) == 0 {
+		return
+	}
+	fmt.Println()
+	for _, n := range notices {
+		marker := "  •"
+		switch n.Severity {
+		case "urgent":
+			marker = "  !!"
+		case "warning":
+			marker = "  !"
+		}
+		fmt.Printf("%s %s\n", marker, n.Subject)
+		for _, line := range wrap(n.Body, 68) {
+			fmt.Printf("     %s\n", line)
+		}
+	}
+	fmt.Printf("\n  %s\n", plural(len(notices), "unread message"))
+	fmt.Println("  mark them read: 0trust notices --read")
+}
+
+// wrap breaks text at a width without splitting words, so a long notice body
+// stays readable in a terminal.
+func wrap(text string, width int) []string {
+	var out []string
+	line := ""
+	for _, word := range strings.Fields(text) {
+		if line == "" {
+			line = word
+			continue
+		}
+		if len(line)+1+len(word) > width {
+			out = append(out, line)
+			line = word
+			continue
+		}
+		line += " " + word
+	}
+	if line != "" {
+		out = append(out, line)
+	}
+	return out
 }
 
 // How long to wait for a peer to answer before telling the user the tunnel is

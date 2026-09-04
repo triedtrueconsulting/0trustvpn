@@ -67,6 +67,21 @@ import java.util.concurrent.TimeUnit
     val notices: Int = 0,
 )
 
+/**
+ * A message waiting for this account. There is no email address on file — that
+ * is the product — so this is the only channel the service has to reach a
+ * customer, including the warning that their subscription is about to run out.
+ * The app used to decode only the unread COUNT and never fetch the messages,
+ * which made the whole feature write-only.
+ */
+@Serializable data class NoticeResponse(
+    val id: Long,
+    val severity: String = "info",
+    val subject: String = "",
+    val body: String = "",
+    @SerialName("created_at") val createdAt: Long = 0,
+)
+
 @Serializable data class DeviceInfoResponse(
     val pubkey: String,
     @SerialName("device_name") val deviceName: String = "",
@@ -139,6 +154,23 @@ class ApiClient(private val baseUrl: String, private val token: String) {
                     exitNode  = it.exitNode,
                 )
             }
+    }
+
+    /** GET /api/v1/notices — the messages waiting for this account. */
+    fun notices(): Result<List<NoticeResponse>> = runCatching {
+        json.decodeFromString<List<NoticeResponse>>(get("/api/v1/notices"))
+    }
+
+    /** POST /api/v1/notices/{id}/read — stop one coming back. */
+    fun markNoticeRead(id: Long): Result<Unit> = runCatching {
+        val req = Request.Builder()
+            .url(baseUrl + "/api/v1/notices/" + id + "/read")
+            .header("X-Account-Token", token)
+            .header("Accept", "application/json")
+            .post(ByteArray(0).toRequestBody(null, 0, 0))
+            .build()
+        execute(req)
+        Unit
     }
 
     /**
