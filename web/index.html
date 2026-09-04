@@ -2027,20 +2027,44 @@
   }
 
   // ============ POLLING ============
+  function escapeHtml(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c]);
+  }
+
   function startPaymentPolling() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
       try {
         const res = await fetch(`${API_BASE}/api/v1/payment/${currentInvoice}/status`);
         const data = await res.json();
+        const el = document.querySelector('.payment-status');
         if (data.status === 'Settled') {
           clearInterval(pollTimer); pollTimer = null;
-          document.querySelector('.payment-status').innerHTML =
+          el.innerHTML =
             '<span style="color: var(--moss)">✓ payment confirmed — account active</span>';
         } else if (data.status === 'Expired' || data.status === 'Invalid') {
           clearInterval(pollTimer); pollTimer = null;
-          document.querySelector('.payment-status').innerHTML =
+          el.innerHTML =
             '<span style="color: var(--terra)">invoice expired — start over</span>';
+        } else if (data.underpaid) {
+          // Real coin arrived at an address we control, but not enough. The
+          // page used to show nothing at all until the invoice expired and
+          // told them to start over, which is how a customer loses money
+          // quietly. Name the shortfall and the address stays the same.
+          el.innerHTML =
+            '<span style="color: var(--amber)">received ' +
+            escapeHtml(data.confirmed_amount) + ' of ' +
+            escapeHtml(data.expected_amount) + ' ' + escapeHtml(data.currency || '') +
+            ' — send the remaining ' + escapeHtml(data.short_by) +
+            ' to the same address to finish</span>';
+        } else if (data.awaiting_confirmation || data.seen) {
+          // Stops the page looking broken while a block is mined, and stops
+          // the customer paying a second time.
+          el.innerHTML =
+            '<span style="color: var(--amber)">payment seen — waiting for ' +
+            'confirmation. Do not send again.</span>';
         }
       } catch (err) {
         console.warn('poll failed:', err);
