@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Both halves of a packet-tunnel pair carry the entitlement; the
+         extension is the half that actually opens the utun interface. -->
+    <key>com.apple.developer.networking.networkextension</key>
+    <array>
+        <string>packet-tunnel-provider</string>
+    </array>
+    <!-- Must match the app exactly or the extension cannot read the config
+         the app wrote, and startTunnel fails with "no configuration". -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.vpn.zerotrust.app</string>
+    </array>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)group.vpn.zerotrust.app</string>
+    </array>
+</dict>
+</plist>

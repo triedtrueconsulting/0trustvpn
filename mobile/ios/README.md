@@ -1,75 +1,111 @@
-# 0trust — iOS app (skeleton, not built for v0.1)
+# 0trustvpn — iOS app
 
-> **This is intentionally not finished.** iOS is out of scope for the
-> initial 0trust release. The QR-export flow lets iOS users connect via
-> the official WireGuard app from the App Store, which is good enough
-> for v0.1. This directory remains as a starting point for a future
-> branded iOS app, but is **not on the launch path**.
->
-> Reasons iOS was deferred:
-> - Apple Developer Program: $99/yr recurring
-> - Network Extension entitlement requires explicit Apple approval
->   (takes weeks, can be denied)
-> - App Store review for VPN apps is strict and slow
-> - The QR-export path covers the iOS use case with zero of those
->   obstacles
->
-> Revisit after launch once you have revenue + customers asking for it.
+A branded SwiftUI client with its own WireGuard packet-tunnel extension. It
+does what the Android app does: sign in with an account token, pick entry and
+exit regions, connect, manage the devices on the account.
 
-- A SwiftUI app shell with the same visual language as the desktop GUI
-  (warm dark palette, Instrument Serif, JetBrains Mono).
-- A `NEPacketTunnelProvider` extension scaffold that loads a WireGuard
-  config and brings the tunnel up.
-- An API client that talks to the same `/api/v1/*` endpoints as the CLI.
+**The source is complete. Nobody has compiled it.** There is no Swift compiler
+in the environment this was written in, and SwiftUI, NetworkExtension and
+Security have no Linux implementation to compile against even if there were.
+Everything below about what is verified, and what is not, is meant literally.
 
-## What you (or a mobile developer you hire) still need to do
+## Building it
 
-1. **Open in Xcode 15+** and create a real project file (`0trust.xcodeproj`).
-   The files in this directory are pure source — there's no `project.pbxproj`
-   because that's a generated, IDE-coupled file that's easier to recreate
-   than to edit by hand.
-
-2. **Add the WireGuardKit Swift package**:
-   `https://git.zx2c4.com/wireguard-apple` — this is the official Apple
-   WireGuard library. It provides the kernel module bindings.
-
-3. **Enable two App capabilities** in Xcode:
-   - "Network Extensions" → "Packet Tunnel"
-   - "App Groups" (so the main app and the tunnel extension can share state)
-
-4. **Register two bundle IDs** in your Apple Developer account:
-   - `vpn.zerotrust.app`        (the main app)
-   - `vpn.zerotrust.app.tunnel` (the tunnel extension)
-
-5. **Provision** both with App Store / Ad Hoc / Developer profiles. The
-   Network Extension entitlement needs explicit Apple approval — file the
-   request at <https://developer.apple.com/contact/request/networking-extension/>.
-
-6. **Build / submit**. App Store review will ask about your privacy practices;
-   point them at your published no-logs audit (see `docs/AUDIT.md`).
-
-## Project layout
-
-```
-ios/
-├── 0trust/App/                Main app (SwiftUI)
-│   ├── App.swift              @main entry point
-│   ├── ContentView.swift      Login / connect / status screens
-│   ├── Theme.swift            Colors, fonts (matches desktop)
-│   ├── APIClient.swift        Wraps /api/v1/account, /wg/register
-│   └── State.swift            ObservableObject for app state
-└── 0trust/Tunnel/             Packet Tunnel extension
-    ├── PacketTunnelProvider.swift   Hooks into NetworkExtension
-    └── Info.plist             Extension manifest
+```bash
+brew install xcodegen
+cd mobile/ios
+xcodegen generate          # writes 0trust.xcodeproj from project.yml
+open 0trust.xcodeproj
 ```
 
-## Realistic timeline
+The `.xcodeproj` is generated and deliberately not committed: a `project.pbxproj`
+is a large machine-written file that conflicts on every branch and hides what
+actually changed. `project.yml` is the reviewable source of the same
+information.
 
-If you have a Swift developer:
-- **Week 1-2**: Get the skeleton building, App Group sharing working.
-- **Week 3-4**: Account login flow, multi-hop region picker, polish.
-- **Week 5-6**: TestFlight rollout, fixing platform quirks.
-- **Week 7+**: App Store review iterations (typically 1-3 cycles for a VPN app).
+Then, in Xcode:
 
-If you don't have a Swift developer, the QR-code path (`0trust export` →
-official WireGuard app) gets you to launch immediately.
+1. Set your team on both targets (`0trust` and `0trustTunnel`).
+2. Confirm the App Group `group.vpn.zerotrust.app` exists on the Developer
+   portal and is enabled on both targets. If the two disagree the app writes a
+   config the extension cannot read, and `startTunnel` fails with "no
+   configuration".
+3. Drop the five font files into `0trust/Resources/` (Instrument Serif,
+   JetBrains Mono Regular/Medium/Bold, IBM Plex Sans). They are listed in
+   `UIAppFonts`; without them the type falls back to system faces and the app
+   simply looks wrong rather than breaking.
+4. Build to a **device**. The Network Extension does not run in the Simulator.
+
+## What Apple requires before this can ship
+
+This is the part that is not engineering, and it is why iOS was deferred from
+v0.1 in the first place:
+
+- **Apple Developer Program** — $99/yr, and an organisation enrolment needs a
+  D-U-N-S number, which takes its own time.
+- **The Network Extension entitlement** (`packet-tunnel-provider`) is not
+  self-serve. You request it from Apple and wait; approval is measured in
+  weeks and can be refused.
+- **App Review for VPN apps is strict.** Expect questions about what is
+  logged, who operates the servers, and why an app collects no account
+  identity. Guideline 5.4 requires a VPN app to be published by an
+  organisation, not an individual, and to declare that it does not sell data.
+- **Export compliance.** `ITSAppUsesNonExemptEncryption` is set with the
+  exemption for standard published cryptography, which is what WireGuard is.
+
+Until all of that is done, the QR-export path in the desktop GUI remains the
+supported way onto iOS: it hands the official WireGuard app a config with no
+obstacles at all.
+
+## What is actually verified, and what is not
+
+Checked automatically on every push, by `tests/emulation/test_ios.py` against a
+**live control plane**:
+
+- every `CodingKeys` entry exists in the real JSON the API returns — the
+  camelCase/snake_case mismatch that once broke the Android client entirely
+  would fail this
+- auth is `X-Account-Token`, never `Authorization: Bearer`
+- region codes come from `/api/v1/regions` rather than a literal, and no stale
+  code from the earlier design is present
+- the device keypair is persisted, not regenerated per connect (the bug that
+  burned the account device cap on Android)
+- the device cap and the trial length are rendered from the server, never
+  compiled in
+- `startTunnel` actually starts the adapter and reports failure rather than
+  calling back with success
+- `::/0` is always claimed; a v6 address is only added when the exit provides
+  one
+- both targets carry the same App Group, keychain group and NE entitlement,
+  and the app loads the bundle id the extension is really built with
+
+Checked by `syntax-check.sh`: delimiters balance, no placeholder
+(`fatalError`/`TODO`) survives, every framework a file uses is imported.
+
+**Not checked by anything here: whether it compiles.** No Swift toolchain, no
+Apple SDKs. `xcodegen generate && xcodebuild` on a Mac is the real gate, and it
+has not been run. Expect to fix compile errors on the first build.
+
+## Layout
+
+```
+project.yml                     XcodeGen spec — the buildable definition
+0trust/App/                     the app target
+  App.swift                     @main entry
+  ContentView.swift             sign-in, status, routing, account, devices
+  AppState.swift                the only place tunnel lifecycle is driven
+  Theme.swift                   the shared warm-dark palette and button styles
+  Info.plist, 0trust.entitlements
+0trust/Shared/                  compiled into BOTH targets
+  APIClient.swift               the wire contract; mirrors client/internal/api
+  DeviceIdentity.swift          the keypair, generated once and kept
+  Keychain.swift                token + private key, shared with the extension
+  WgConfig.swift                wg-quick serializer + the App Group handoff
+0trust/Tunnel/                  the packet-tunnel extension
+  PacketTunnelProvider.swift    WireGuardKit adapter
+  Info.plist, Tunnel.entitlements
+```
+
+`Shared/` is in both targets on purpose: the extension is started by iOS on
+its own — on-demand, or after a reboot under Always-on VPN — with the app not
+running, so it has to be able to read the config and the keys by itself.

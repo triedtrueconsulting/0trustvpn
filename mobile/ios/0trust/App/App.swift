@@ -1,6 +1,6 @@
 //
 // App.swift
-// 0trust iOS app
+// 0trustvpn — iOS entry point.
 //
 
 import SwiftUI
