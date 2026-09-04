@@ -213,6 +213,9 @@ type StateView struct {
 	EntryRegion  string `json:"entry_region,omitempty"`
 	ExitRegion   string `json:"exit_region,omitempty"`
 	HopExpiresAt int64  `json:"hop_expires_at,omitempty"`
+	// Entry and exit are one machine. The routing is real; the privacy
+	// property multi-hop exists for is not, and the page must say so.
+	SameHost bool `json:"same_host"`
 	// No omitempty: the page renders a switch from this, and a missing field
 	// would draw it "off" whatever the real setting is.
 	KillSwitch          bool `json:"kill_switch"`
@@ -267,6 +270,7 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 		APIBase:      st.APIBase,
 		TunnelUp:     wg.IsUp(),
 		Multihop:     st.ExitRegion != "",
+		SameHost:     st.SameHost,
 		EntryRegion:  st.EntryRegion,
 		ExitRegion:   st.ExitRegion,
 		HopExpiresAt: st.ExpiresAt,
@@ -413,6 +417,10 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 	st.EntryRegion = body.Region
 	st.ExitRegion = body.ExitRegion
 	st.ExpiresAt = resp.ExpiresAt
+	// Every other client honours this; the window was the one surface that
+	// went on claiming the exit never sees your IP on a deployment where
+	// entry and exit are the same machine.
+	st.SameHost = resp.SameHost
 	if err := st.Save(); err != nil {
 		writeErr(w, 500, err.Error())
 		return

@@ -27,7 +27,12 @@ type State struct {
 	// Multi-hop session state — populated after connect/rotate
 	EntryRegion string `json:"entry_region,omitempty"`
 	ExitRegion  string `json:"exit_region,omitempty"`
-	ExpiresAt   int64  `json:"expires_at,omitempty"` // hop pair expiry (epoch s)
+	// The control plane resolved entry and exit to the same machine — a
+	// single-VPS test deployment. Persisted because the window renders the
+	// multi-hop privacy claim from it, and after a reload it would otherwise
+	// go back to making that claim on a deployment that cannot keep it.
+	SameHost  bool  `json:"same_host,omitempty"`
+	ExpiresAt int64 `json:"expires_at,omitempty"` // hop pair expiry (epoch s)
 
 	// KillSwitch: block traffic that is not going through the tunnel.
 	// Sticky, because a kill switch you have to remember to re-enable on

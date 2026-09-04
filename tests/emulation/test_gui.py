@@ -382,6 +382,33 @@ try:
         page.wait_for_selector("#view-main:not(.hidden)", timeout=20000)
         check("the original instance is still serving", True)
 
+        print("\n[5b] the window does not claim privacy the deployment lacks")
+        # On a single-VPS test deployment the control plane resolves entry and
+        # exit to the same machine and returns same_host. The CLI and both
+        # mobile apps already refused to print the multi-hop privacy claim
+        # there; the window was the one surface that went on making it.
+        honest = page.evaluate("""() => {
+            const before = document.querySelector('#route-hint').textContent;
+            const saved = state.same_host;
+            // Multi-hop selected, on a deployment that cannot deliver it.
+            document.querySelector('#exit-select').value = 'rey';
+            state.same_host = true;
+            updateRouteHint();
+            const withFlag = document.querySelector('#route-hint').textContent;
+            state.same_host = false;
+            updateRouteHint();
+            const withoutFlag = document.querySelector('#route-hint').textContent;
+            state.same_host = saved;
+            return {before, withFlag, withoutFlag};
+        }""")
+        check("a real mesh still gets the multi-hop claim",
+              "never sees your IP" in honest["withoutFlag"], honest)
+        check("a one-box deployment does NOT",
+              "never sees your IP" not in honest["withFlag"], honest)
+        check("and is told plainly that nothing is hidden",
+              "SAME machine" in honest["withFlag"]
+              and "nothing is hidden" in honest["withFlag"], honest)
+
         print("\n[6a] a message from the service reaches the window")
         # No email address exists for this account, so this banner is the only
         # delivery this product has. The feature was write-only before: an

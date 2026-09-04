@@ -134,9 +134,27 @@ function formatRotate(ts) {
 
 function updateRouteHint() {
   const exit = $('exit-select').value;
-  $('route-hint').textContent = exit
-    ? 'Multi-hop: entry decrypts nothing; exit never sees your IP. The pair rotates every 24h.'
-    : 'Single-hop: one node terminates your tunnel and routes to the internet.';
+  const el = $('route-hint');
+  if (!exit) {
+    el.textContent =
+      'Single-hop: one node terminates your tunnel and routes to the internet.';
+    el.classList.remove('warn');
+    return;
+  }
+  // On a single-VPS test deployment the control plane resolves entry and exit
+  // to the same machine. The routing is real and worth testing; the privacy
+  // property is not, and repeating the usual claim there would be a plain
+  // lie. The CLI and both mobile apps already said so — the window did not.
+  if (state && state.same_host) {
+    el.textContent =
+      'Entry and exit are the SAME machine on this deployment. The routing ' +
+      'is real; nothing is hidden. Multi-hop proves nothing here.';
+    el.classList.add('warn');
+    return;
+  }
+  el.textContent =
+    'Multi-hop: entry decrypts nothing; exit never sees your IP. The pair rotates every 24h.';
+  el.classList.remove('warn');
 }
 
 // ---------------------------------------------------------------------------

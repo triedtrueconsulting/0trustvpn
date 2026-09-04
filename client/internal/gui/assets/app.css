@@ -609,3 +609,6 @@ button:active:not(:disabled) { transform: translateY(1px); }
   align-self: start;
 }
 .notice .dismiss:hover { color: var(--amber); border-color: var(--amber); }
+
+/* A hint that is correcting a claim, not making one. */
+.hint.warn { color: var(--terra); }
