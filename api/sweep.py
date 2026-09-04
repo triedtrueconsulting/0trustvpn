@@ -19,6 +19,12 @@ Runs hourly via systemd timer. Two jobs:
   4. Prune spent trial stamps and used provisioning tokens once they can no
      longer be replayed.
 
+  5. Warn accounts whose subscription is about to run out, and tell them once
+     it has. There is no email address on file — by design, that is the
+     product — so an in-app notice is the ONLY channel this service has to
+     reach a customer. Without it a subscription ends in silence and the
+     customer finds out when their traffic stops.
+
 This file is the data-retention boundary. It defines what we keep, for how
 long. Audit-relevant.
 """
@@ -40,6 +46,24 @@ RETAIN_FAILED_INVOICES_SECS = 30 * 86400
 # An unpaid signup older than this is abandoned. Comfortably longer than any
 # invoice stays payable, so a slow payer is never caught by it.
 ABANDON_SIGNUP_SECS = int(os.environ.get("ZTV_ABANDON_SIGNUP_DAYS", "7")) * 86400
+
+# How far ahead to warn that a subscription is ending. Comma-separated so an
+# operator can have more than one nudge; each fires once per account per
+# threshold, tracked by the notice already sitting in the table.
+RENEWAL_WARN_DAYS = tuple(sorted(
+    (int(d) for d in os.environ.get("ZTV_RENEWAL_WARN_DAYS", "7,1").split(",") if d.strip()),
+    reverse=True,
+))
+# Marker prefix in notices.created_by, so a re-run recognises its own work.
+# The subject line is customer-facing prose and must never be load-bearing.
+RENEWAL_TAG = "sweeper:renewal"
+EXPIRED_TAG = "sweeper:expired"
+
+# How long a device survives its account expiring, before its mesh IP goes
+# back to the pool. The expiry notice quotes this number at the customer, so
+# it has exactly one definition — a hardcoded "7 days" in the copy would go
+# stale the moment an operator changed the retention.
+DEVICE_RETAIN_DAYS = int(os.environ.get("ZTV_DEVICE_RETAIN_DAYS", "7"))
 
 # Spent trial nonces only need to outlive the challenge they belong to; the
 # redemption path rejects an expired challenge regardless. A day of slack
@@ -67,7 +91,69 @@ def main():
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
 
-    # ---- 1. Expire accounts ----
+    # ---- 1a. Warn before expiry, while the account is still usable ----
+    # Deliberately ahead of the flip below: an account that expires during
+    # this same run should still have been warned on an earlier one, and
+    # warning it here after the flip would be pointless.
+    n_warned = 0
+    for days in RENEWAL_WARN_DAYS:
+        horizon = now + days * 86400
+        rows = conn.execute(
+            """SELECT a.id, a.expires_at, a.plan FROM accounts a
+                WHERE a.status = 'active'
+                  AND a.expires_at > ?
+                  AND a.expires_at <= ?
+                  AND NOT EXISTS (
+                        SELECT 1 FROM notices n
+                         WHERE n.account_id = a.id
+                           AND n.created_by = ?)""",
+            (now, horizon, f"{RENEWAL_TAG}:{days}"),
+        ).fetchall()
+        for r in rows:
+            left = max(0, r["expires_at"] - now)
+            # Round up: an account with 23h left has "1 day", not "0 days".
+            days_left = -(-left // 86400)
+            unit = "day" if days_left == 1 else "days"
+            trial = (r["plan"] or "") == "trial"
+            conn.execute(
+                """INSERT INTO notices
+                   (account_id, severity, subject, body, created_at,
+                    expires_at, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    r["id"],
+                    "warning" if days_left <= 1 else "info",
+                    (f"Your trial ends in {days_left} {unit}"
+                     if trial else
+                     f"Your subscription ends in {days_left} {unit}"),
+                    ("Top up with `0trust topup` or at 0trustvpn.com to keep "
+                     "this account. Paid time stacks on whatever is left, so "
+                     "topping up early costs you nothing. Your token stays the "
+                     "same — there is no new account to create and nothing to "
+                     "re-install."),
+                    now,
+                    # Pointless once the account has expired; the expiry
+                    # notice takes over from there.
+                    r["expires_at"],
+                    f"{RENEWAL_TAG}:{days}",
+                ),
+            )
+            n_warned += 1
+    if n_warned:
+        log.info("posted %d renewal warnings", n_warned)
+
+    # ---- 1b. Expire accounts ----
+    # Captured before the UPDATE: afterwards they are indistinguishable from
+    # accounts expired on an earlier run, and each should be told exactly once.
+    just_expired = [
+        r["id"] for r in conn.execute(
+            """SELECT id FROM accounts
+                WHERE status = 'active'
+                  AND expires_at > 0
+                  AND expires_at < ?""",
+            (now,),
+        ).fetchall()
+    ]
     cur = conn.execute(
         """UPDATE accounts
            SET status = 'expired'
@@ -79,6 +165,25 @@ def main():
     n_expired = cur.rowcount
     if n_expired:
         log.info("expired %d accounts", n_expired)
+
+    for account_id in just_expired:
+        conn.execute(
+            """INSERT INTO notices
+               (account_id, severity, subject, body, created_at,
+                expires_at, created_by)
+               VALUES (?, 'urgent', ?, ?, ?, 0, ?)""",
+            (
+                account_id,
+                "Your subscription has ended",
+                ("Devices on this account are no longer routed. Top up at "
+                 "0trustvpn.com or with `0trust topup` and the same token "
+                 "works again — your devices stay registered for "
+                 f"{DEVICE_RETAIN_DAYS} days, after which they are released "
+                 "and will need registering again."),
+                now,
+                EXPIRED_TAG,
+            ),
+        )
 
     # ---- 2. GC stale invoices ----
     cutoff = now - RETAIN_FAILED_INVOICES_SECS
@@ -196,9 +301,10 @@ def main():
         log.info("garbage-collected %d dead ephemeral nodes", n_gc_nodes)
 
     # ---- 5. Drop devices belonging to long-dead accounts ----
-    # If an account has been expired for >7 days, drop its devices so they
-    # release their mesh IPs back to the pool.
-    week_ago = now - 7 * 86400
+    # Once an account has been expired for DEVICE_RETAIN_DAYS, drop its
+    # devices so they release their mesh IPs back to the pool. The expiry
+    # notice promises this window, and reads the same constant.
+    retain_cutoff = now - DEVICE_RETAIN_DAYS * 86400
     cur = conn.execute(
         """DELETE FROM devices
            WHERE account_id IN (
@@ -206,7 +312,7 @@ def main():
                WHERE status = 'expired'
                  AND expires_at < ?
            )""",
-        (week_ago,),
+        (retain_cutoff,),
     )
     n_devices = cur.rowcount
     if n_devices:

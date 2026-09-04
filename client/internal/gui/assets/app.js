@@ -168,6 +168,61 @@ async function refresh() {
 function startPolling() {
   if (pollHandle) clearInterval(pollHandle);
   pollHandle = setInterval(refresh, 3000);
+  refreshNotices();
+  // Far slower than the state poll: a notice is posted by an hourly sweeper,
+  // so checking every three seconds would be pure noise on the control plane.
+  if (noticeHandle) clearInterval(noticeHandle);
+  noticeHandle = setInterval(refreshNotices, 120000);
+}
+
+// ---------------------------------------------------------------------------
+// Notices
+//
+// The service has no email address for this account — that is the product —
+// so this banner is the only way a renewal warning reaches anyone. If it is
+// not rendered here, it is not delivered at all.
+// ---------------------------------------------------------------------------
+
+let noticeHandle = null;
+
+async function refreshNotices() {
+  const box = $('notices');
+  if (!box) return;
+  let list;
+  try {
+    list = await api('/api/notices');
+  } catch (e) {
+    return;   // not signed in, or the control plane is unreachable
+  }
+  if (!Array.isArray(list) || list.length === 0) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.innerHTML = '';
+  for (const n of list) {
+    const el = document.createElement('div');
+    el.className = 'notice ' + (n.severity || 'info');
+    const h = document.createElement('h3');
+    h.textContent = n.subject || '';
+    const btn = document.createElement('button');
+    btn.className = 'dismiss';
+    btn.textContent = 'Dismiss';
+    btn.addEventListener('click', async () => {
+      try {
+        await api('/api/notices/read', {
+          method: 'POST',
+          body: JSON.stringify({ id: n.id }),
+        });
+      } catch (e) { /* it comes back on the next poll if this failed */ }
+      refreshNotices();
+    });
+    const p = document.createElement('p');
+    p.textContent = n.body || '';
+    el.append(h, btn, p);
+    box.appendChild(el);
+  }
+  box.classList.remove('hidden');
 }
 
 // ---------------------------------------------------------------------------

@@ -102,6 +102,7 @@ class MainActivity : ComponentActivity() {
                             viewModel.refreshAccount()
                             viewModel.refreshRegions()
                             viewModel.refreshDevices()
+                            viewModel.refreshNotices()
                             if (autoConnect && ui.tunnel == ConnState.Disconnected) {
                                 requestConnect()
                             }
@@ -122,6 +123,7 @@ class MainActivity : ComponentActivity() {
                             onRemoveDevice = { viewModel.removeDevice(it) },
                             onSetApiBase = { viewModel.setApiBase(it) },
                             onDismissError = { viewModel.setError(null) },
+                            onDismissNotice = { viewModel.dismissNotice(it) },
                         )
                     }
                 }
@@ -277,6 +279,7 @@ fun MainScreen(
     onRemoveDevice: (String) -> Unit,
     onSetApiBase: (String) -> Unit,
     onDismissError: () -> Unit,
+    onDismissNotice: (Long) -> Unit,
 ) {
     var settingsOpen by remember { mutableStateOf(false) }
 
@@ -303,6 +306,12 @@ fun MainScreen(
         // went wrong after sign-in — a failed register, a device removal that
         // did not take — happened in silence.
         if (ui.error != null) ErrorBanner(ui.error, onDismissError)
+
+        // Messages from the service. There is no email address on this
+        // account, so this is the only place a renewal warning can appear.
+        ui.notices.forEach { n ->
+            NoticeBanner(notice = n, onDismiss = { onDismissNotice(n.id) })
+        }
 
         ConnectionCard(ui = ui, onConnect = onConnect, onDisconnect = onDisconnect)
         RoutingCard(
@@ -676,6 +685,52 @@ private fun DevicesCard(
                 }
             },
         )
+    }
+}
+
+/**
+ * One message from the service. Severity picks the accent: info is quiet,
+ * warning is amber, urgent is terracotta — the same three the control plane
+ * stores and the desktop GUI renders.
+ */
+@Composable
+private fun NoticeBanner(notice: NoticeResponse, onDismiss: () -> Unit) {
+    val accent = when (notice.severity) {
+        "urgent"  -> ZT_Terra
+        "warning" -> ZT_Amber
+        else      -> ZT_InkFnt
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(ZT_BgElev, RoundedCornerShape(3.dp))
+            .border(1.dp, ZT_Line, RoundedCornerShape(3.dp))
+            .padding(start = 3.dp)
+            .padding(14.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            Modifier
+                .width(3.dp)
+                .height(36.dp)
+                .background(accent, RoundedCornerShape(2.dp))
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                notice.subject,
+                color = if (notice.severity == "urgent") ZT_Terra else ZT_Ink,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (notice.body.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(notice.body, color = ZT_InkDim, fontSize = 12.sp)
+            }
+        }
+        TextButton(onClick = onDismiss) {
+            Text("Dismiss", color = ZT_InkDim, fontSize = 11.sp)
+        }
     }
 }
 

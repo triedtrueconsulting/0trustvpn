@@ -364,6 +364,18 @@ try:
                        ALL_KT, re.I)
     check("no trial duration is hardcoded in the Android copy", not stale, stale)
 
+    print("\n[5c] messages from the service actually reach the phone")
+    # The app decoded the unread COUNT from /account/status and never fetched
+    # the messages behind it, so a renewal warning reached nobody. There is no
+    # email address on the account — this is the only channel that exists.
+    check("the app fetches notices", "/api/v1/notices" in ALL_KT)
+    check("and can mark one read", "markNoticeRead" in ALL_KT)
+    check("a notice model exists that matches the wire",
+          "NoticeResponse" in ALL_KT and 'SerialName("created_at")' in ALL_KT)
+    check("the UI renders them", "NoticeBanner" in ALL_KT)
+    check("and they are fetched on sign-in",
+          "refreshNotices()" in ALL_KT)
+
     print("\n[6] auth is the token header, never Bearer")
     check("the app sends X-Account-Token",
           SRC["ApiClient.kt"].count('"X-Account-Token"') >= 3)

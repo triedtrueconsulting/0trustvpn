@@ -132,6 +132,22 @@ struct DeviceInfo: Decodable, Identifiable {
     }
 }
 
+/// A message waiting for this account. There is no email address on file —
+/// that is the product — so this is the only channel the service has, and the
+/// only warning a customer gets before a subscription ends.
+struct NoticeInfo: Decodable, Identifiable {
+    let id: Int
+    let severity: String
+    let subject: String
+    let body: String
+    let createdAt: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case id, severity, subject, body
+        case createdAt = "created_at"
+    }
+}
+
 struct RegionInfo: Decodable, Identifiable {
     let code: String
     let name: String?
@@ -200,6 +216,15 @@ actor APIClient {
 
     func config() async throws -> PublicConfig {
         try await send("GET", "/api/v1/config", token: nil)
+    }
+
+    func notices(token: String) async throws -> [NoticeInfo] {
+        try await send("GET", "/api/v1/notices", token: token)
+    }
+
+    func markNoticeRead(token: String, id: Int) async throws {
+        _ = try await sendNoContent("POST", "/api/v1/notices/\(id)/read",
+                                    token: token)
     }
 
     func devices(token: String) async throws -> [DeviceInfo] {

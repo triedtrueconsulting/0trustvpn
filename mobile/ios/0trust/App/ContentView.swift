@@ -119,6 +119,12 @@ struct MainView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Brand()
+                // Messages from the service, above everything else: a renewal
+                // warning is the first thing that should be read. There is no
+                // email address on this account, so nothing else delivers it.
+                ForEach(state.notices) { n in
+                    NoticeBanner(notice: n)
+                }
                 StatusCard()
                 RoutingCard()
                 AccountCard(showDevices: $showDevices,
@@ -408,6 +414,52 @@ private struct DeviceRow: View {
                    + "the tunnel immediately."
                  : "It stops being routed at the next node sync.")
         }
+    }
+}
+
+private struct NoticeBanner: View {
+    @EnvironmentObject var state: AppState
+    let notice: NoticeInfo
+
+    /// The same three severities the control plane stores and the desktop GUI
+    /// renders, with the same accents.
+    private var accent: Color {
+        switch notice.severity {
+        case "urgent":  return .ztTerra
+        case "warning": return .ztAmber
+        default:        return .ztInkFaint
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(accent)
+                .frame(width: 3)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(notice.subject)
+                    .font(.ztMonoBold)
+                    .foregroundColor(notice.severity == "urgent" ? .ztTerra : .ztInk)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !notice.body.isEmpty {
+                    Text(notice.body)
+                        .font(.ztBody)
+                        .foregroundColor(.ztInkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Dismiss") {
+                Task { await state.dismissNotice(notice.id) }
+            }
+            .buttonStyle(GhostButtonStyle())
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.ztBgElev)
+        .cornerRadius(4)
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.ztLine))
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

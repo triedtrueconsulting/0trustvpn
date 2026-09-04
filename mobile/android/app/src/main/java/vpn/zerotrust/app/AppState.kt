@@ -62,6 +62,14 @@ data class UiState(
 
     val devices: List<Device> = emptyList(),
     val devicesLoading: Boolean = false,
+
+    /**
+     * Messages from the service. There is no email address on this account, so
+     * this is the only way a renewal warning ever reaches the customer — the
+     * app previously decoded the unread count and never fetched the messages
+     * behind it, which delivered nothing.
+     */
+    val notices: List<NoticeResponse> = emptyList(),
     /** This device's own public key, so the list can mark which row is "this
      *  phone" and refuse to let you delete the tunnel out from under yourself. */
     val thisDevicePubkey: String = "",
@@ -202,6 +210,32 @@ class AppState(app: Application) : AndroidViewModel(app) {
             onFailure = { _ui.value.copy(devicesLoading = false,
                                          error = it.message ?: "Could not list devices") },
         )
+    }
+
+    /**
+     * Pull the messages waiting for this account.
+     *
+     * There is no email address on file — that is the product — so this is the
+     * only channel the service has to reach a customer, including the warning
+     * that a subscription is about to run out. The app used to decode the
+     * unread COUNT from /account/status and never fetch the messages behind
+     * it, so nothing was ever delivered.
+     *
+     * Failure is silent on purpose: this runs alongside the status refresh and
+     * a control plane that cannot be reached has already surfaced an error.
+     */
+    fun refreshNotices() = viewModelScope.launch {
+        val result = withContext(Dispatchers.IO) { api.notices() }
+        result.onSuccess { list -> _ui.value = _ui.value.copy(notices = list) }
+    }
+
+    /** Dismiss one, so it stops coming back on the next refresh. */
+    fun dismissNotice(id: Long) = viewModelScope.launch {
+        val result = withContext(Dispatchers.IO) { api.markNoticeRead(id) }
+        result.onSuccess {
+            _ui.value = _ui.value.copy(
+                notices = _ui.value.notices.filterNot { it.id == id })
+        }
     }
 
     /**

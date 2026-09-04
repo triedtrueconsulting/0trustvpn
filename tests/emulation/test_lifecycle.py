@@ -265,6 +265,92 @@ try:
           not has("SELECT 1 FROM provision_tokens WHERE token_hash='spent'"))
     c.close()
 
+    print("\n[6b] the customer is told before the money runs out")
+    # There is no email address on file — that IS the product — so an in-app
+    # notice is the only channel this service has. Before this, a subscription
+    # ended in silence and the customer found out when traffic stopped, and
+    # nothing anywhere created a notice: the feature was write-only, with an
+    # operator broadcast at one end and no reader at the other.
+    st, warn_acct = H.call("POST", "/api/v1/account", {"months": 1})
+    H.settle(warn_acct["invoice_id"])
+    wc = sqlite3.connect(DB)
+    wc.row_factory = sqlite3.Row   # the checks below read columns by name
+    warn_id = wc.execute("SELECT account_id FROM invoices WHERE id = ?",
+                         (warn_acct["invoice_id"],)).fetchone()["account_id"]
+
+    def sweep_now(**extra):
+        e = H.env_for_api(DB)
+        e.update({k: str(v) for k, v in extra.items()})
+        r = subprocess.run([sys.executable, os.path.join(H.REPO, "api", "sweep.py")],
+                           env=e, capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, (r.stderr or r.stdout)[-800:]
+        return r
+
+    def notices_for(acct):
+        return wc.execute(
+            "SELECT severity, subject, created_by FROM notices WHERE account_id = ?"
+            " ORDER BY id", (acct,)).fetchall()
+
+    # Still a month out: nothing to say yet.
+    sweep_now()
+    check("no warning while the subscription is comfortably alive",
+          not notices_for(warn_id), notices_for(warn_id))
+
+    # Six days left crosses the 7-day threshold but not the 1-day one.
+    wc.execute("UPDATE accounts SET expires_at = ? WHERE id = ?",
+               (int(time.time()) + 6 * 86400, warn_id))
+    wc.commit()
+    sweep_now()
+    rows = notices_for(warn_id)
+    check("a warning is posted as expiry approaches", len(rows) == 1, rows)
+    check("and it names the days left, not a hardcoded number",
+          rows and "6 days" in rows[0]["subject"], rows and rows[0]["subject"])
+    check("the 1-day threshold has not fired yet",
+          all("renewal:1" not in (r["created_by"] or "") for r in rows), rows)
+
+    # The sweeper runs hourly. It must not re-post the same warning 24x a day.
+    sweep_now(); sweep_now()
+    check("re-running the sweeper does not repeat the warning",
+          len(notices_for(warn_id)) == 1, notices_for(warn_id))
+
+    # Inside a day: the second, louder threshold.
+    wc.execute("UPDATE accounts SET expires_at = ? WHERE id = ?",
+               (int(time.time()) + 3600, warn_id))
+    wc.commit()
+    sweep_now()
+    rows = notices_for(warn_id)
+    check("a closer threshold posts its own warning", len(rows) == 2, rows)
+    check("and escalates the severity",
+          rows[-1]["severity"] == "warning", rows[-1]["severity"])
+
+    # And when it actually lapses, say so once.
+    wc.execute("UPDATE accounts SET expires_at = ? WHERE id = ?",
+               (int(time.time()) - 60, warn_id))
+    wc.commit()
+    sweep_now()
+    rows = notices_for(warn_id)
+    check("expiry itself is announced",
+          any(r["created_by"] == "sweeper:expired" for r in rows), rows)
+    check("as urgent",
+          any(r["severity"] == "urgent" for r in rows), rows)
+    n_before = len(rows)
+    sweep_now()
+    check("and only once, however often the sweeper runs",
+          len(notices_for(warn_id)) == n_before, notices_for(warn_id))
+    check("the account really is expired now",
+          wc.execute("SELECT status FROM accounts WHERE id = ?",
+                     (warn_id,)).fetchone()["status"] == "expired")
+
+    # The notices must reach the customer through the API, not just sit in SQL.
+    st, served = H.call("GET", "/api/v1/notices",
+                        headers={"X-Account-Token": warn_acct["token"]})
+    check("the account can fetch its notices", st == 200, f"{st} {served}")
+    check("and they are the ones the sweeper wrote",
+          len(served) >= 2 and any("subscription has ended" in n["subject"]
+                                   for n in served),
+          [n.get("subject") for n in served])
+    wc.close()
+
     # Idempotent: a second run must be a clean no-op, not a crash.
     sw2 = subprocess.run([sys.executable, os.path.join(H.REPO, "api", "sweep.py")],
                          env=env, capture_output=True, text=True, timeout=60)

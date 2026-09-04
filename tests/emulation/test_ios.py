@@ -302,6 +302,36 @@ try:
     for hexv, name in (("0.831", "amber"), ("0.769", "terra"), ("0.490", "moss")):
         check(f"the {name} accent matches the design system", hexv in theme)
 
+    print("\n[9b] messages from the service actually reach the phone")
+    # The feature was write-only across the whole product: the operator
+    # dashboard could broadcast, and no client anywhere rendered one.
+    notice_keys = set(coding_keys("NoticeInfo").values())
+    check("NoticeInfo declares CodingKeys", bool(notice_keys), notice_keys)
+    st, live_notices = H.call("GET", "/api/v1/notices",
+                              headers={"X-Account-Token": token})
+    check("notices 200", st == 200, live_notices)
+    # Post one through the DB so there is a real payload to compare against.
+    import sqlite3 as _sq
+    nc = _sq.connect(DB)
+    acct = nc.execute("SELECT account_id FROM devices LIMIT 1").fetchone()[0]
+    nc.execute("""INSERT INTO notices
+                  (account_id, severity, subject, body, created_at,
+                   expires_at, created_by)
+                  VALUES (?, 'warning', 'subj', 'body', ?, 0, 'test')""",
+               (acct, 1))
+    nc.commit(); nc.close()
+    st, live_notices = H.call("GET", "/api/v1/notices",
+                              headers={"X-Account-Token": token})
+    live = (live_notices or [{}])[0]
+    missing = [w for w in notice_keys if w not in live]
+    check("every NoticeInfo key exists in the live payload",
+          not missing, f"absent: {missing}; live: {sorted(live)}")
+    check("the app fetches them, not just the unread count",
+          "func notices(" in ALL_SWIFT and "/api/v1/notices" in ALL_SWIFT)
+    check("and renders them", "NoticeBanner" in ALL_SWIFT)
+    check("with a way to dismiss", "markNoticeRead" in ALL_SWIFT
+          and "dismissNotice" in ALL_SWIFT)
+
     print("\n[10] the site does not promise an app nobody can install yet")
     # The source is complete, but shipping needs Apple's packet-tunnel
     # entitlement and App Review. Until an artifact exists, the download page

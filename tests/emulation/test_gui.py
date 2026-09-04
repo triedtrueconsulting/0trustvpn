@@ -382,6 +382,41 @@ try:
         page.wait_for_selector("#view-main:not(.hidden)", timeout=20000)
         check("the original instance is still serving", True)
 
+        print("\n[6a] a message from the service reaches the window")
+        # No email address exists for this account, so this banner is the only
+        # delivery this product has. The feature was write-only before: an
+        # operator could broadcast and nothing anywhere rendered it.
+        import sqlite3 as _sq
+        nc = _sq.connect(DB)
+        acct = nc.execute(
+            "SELECT id FROM accounts ORDER BY id DESC LIMIT 1").fetchone()[0]
+        nc.execute("""INSERT INTO notices
+                      (account_id, severity, subject, body, created_at,
+                       expires_at, created_by)
+                      VALUES (?, 'urgent', 'Your subscription has ended',
+                              'Top up and the same token works again.',
+                              ?, 0, 'sweeper:expired')""",
+                   (acct, int(time.time())))
+        nc.commit(); nc.close()
+
+        page.evaluate("() => refreshNotices()")
+        page.wait_for_selector("#notices .notice", timeout=15000)
+        text = page.inner_text("#notices")
+        check("the notice is rendered", "subscription has ended" in text, text)
+        check("with its body", "same token works again" in text, text)
+        sev = page.eval_on_selector("#notices .notice", "e => e.className")
+        check("and carries its severity", "urgent" in sev, sev)
+        check("the banner is visible, not just present",
+              page.is_visible("#notices"))
+
+        page.click("#notices .dismiss")
+        page.wait_for_timeout(1200)
+        check("dismissing clears it",
+              page.eval_on_selector_all("#notices .notice", "e => e.length") == 0,
+              page.inner_text("#notices"))
+        check("and the banner hides itself again",
+              not page.is_visible("#notices"))
+
         print("\n[6b] every dialog is actually a dialog")
         # The Devices dialog was marked up as .modal-box and the stylesheet
         # only ever defined .modal-inner, so it rendered as bare text floating

@@ -72,6 +72,8 @@ func Serve(openBrowser bool) error {
 	mux.HandleFunc("/api/regions", handleRegions)
 	mux.HandleFunc("/api/export", handleExport)
 	mux.HandleFunc("/api/devices", handleDevices)
+	mux.HandleFunc("/api/notices", handleNotices)
+	mux.HandleFunc("/api/notices/read", handleNoticeRead)
 	mux.HandleFunc("/api/devices/remove", handleRemoveDevice)
 	mux.HandleFunc("/api/trial", handleTrial)
 	mux.HandleFunc("/api/config", handleConfig)
@@ -590,6 +592,63 @@ func handleDevices(w http.ResponseWriter, r *http.Request) {
 		out = append(out, row{Device: d, This: d.Pubkey != "" && d.Pubkey == st.PublicKey})
 	}
 	writeJSON(w, 200, out)
+}
+
+// --- /api/notices — messages waiting for this account ---
+//
+// There is no email address on file, so this is the only way the service can
+// tell a customer anything — including that their subscription is about to
+// run out. The window shows them as a banner.
+
+func handleNotices(w http.ResponseWriter, r *http.Request) {
+	st, err := config.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if st.Token == "" {
+		writeErr(w, 401, "not signed in")
+		return
+	}
+	notices, err := api.New(st.APIBase, st.Token).Notices()
+	if err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	if notices == nil {
+		notices = []api.Notice{}
+	}
+	writeJSON(w, 200, notices)
+}
+
+type noticeReadReq struct {
+	ID int64 `json:"id"`
+}
+
+func handleNoticeRead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var req noticeReadReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == 0 {
+		writeErr(w, 400, "which notice?")
+		return
+	}
+	st, err := config.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if st.Token == "" {
+		writeErr(w, 401, "not signed in")
+		return
+	}
+	if err := api.New(st.APIBase, st.Token).MarkNoticeRead(req.ID); err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 // --- /api/devices/remove ---
