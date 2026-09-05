@@ -107,6 +107,31 @@ try:
     check("a pasted, unencoded pubkey still finds the account",
           bysloppy.get("total") == 1, bysloppy)
 
+    # The two placements of '+' that behave differently, pinned rather than
+    # left to chance. A random key hits the leading case about once in
+    # sixty-four runs: it passed twenty-three CI runs and failed the
+    # twenty-fourth, where .strip() removed the leading space before anything
+    # could turn it back into a '+'.
+    for label, want in (('a leading', "+"), ('an embedded', None)):
+        import base64 as _b64, os as _os
+        while True:
+            k = _b64.b64encode(_os.urandom(32)).decode()
+            if want == "+" and k.startswith("+"):
+                break
+            if want is None and "+" in k[1:]:
+                break
+        t2, _ = H.paid_account()
+        st, _ = H.call("POST", "/api/v1/wg/register",
+                       {"pubkey": k, "device_name": "d", "region": "zur"},
+                       headers={"X-Account-Token": t2})
+        st, enc = adm("GET", f"/accounts?q={_up.quote(k, safe='')}")
+        check(f"{label}-'+' key is findable when encoded",
+              enc.get("total") == 1, f"{k} -> {enc}")
+        st, sloppy = adm("GET", f"/accounts?q={k}")
+        check(f"{label}-'+' key is findable when pasted raw",
+              sloppy.get("total") == 1,
+              f"{k} arrives as {k.replace('+', ' ')!r} -> {sloppy}")
+
     st, detail = adm("GET", f"/accounts/{acct_id}")
     check("account detail loads", st == 200 and detail["devices"], detail)
     check("detail omits the token hash", "token_hash" not in json.dumps(detail))

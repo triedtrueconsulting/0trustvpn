@@ -386,16 +386,30 @@ off; the canary has more value the longer it runs unbroken.
       ```bash
       export CANARY_SIGNER_NAME="Your Name"
       export CANARY_SIGNER_KEY=<fingerprint>
-      sudo -E /opt/0trust-src/canary/scripts/generate.sh
+      sudo -E /opt/0trust/canary/scripts/generate.sh
       ```
+      It asks for four current headlines and shows you the rendered document
+      before it signs anything. Read it — that is the point of the step.
 - [ ] Verify it serves correctly: `curl https://0trustvpn.com/canary.txt`
 - [ ] Verify the signature: `gpg --verify canary.txt.sig canary.txt`
 - [ ] Enable the freshness alarm:
       ```bash
       sudo cp /opt/0trust-src/canary/systemd/*.{service,timer} /etc/systemd/system/
       sudo systemctl enable --now 0trust-canary-check.timer
+      sudo systemctl start 0trust-canary-check.service   # prove it runs
+      systemctl status 0trust-canary-check.service
       ```
-- [ ] Configure ALERT_WEBHOOK if you have a notification channel (Matrix, Signal-CLI, ntfy.sh)
+      `install.sh` stages the canary scripts under `/opt/0trust/canary/`, which
+      is where the unit looks. Run it once by hand anyway: a timer that fails
+      every night still reports `active` on the timer itself.
+- [ ] Configure ALERT_WEBHOOK if you have a notification channel (Matrix, Signal-CLI, ntfy.sh):
+      ```bash
+      sudo install -m 0600 /opt/0trust-src/systemd/canary.env.example \
+           /etc/0trust/canary.env
+      sudo $EDITOR /etc/0trust/canary.env
+      ```
+      Without it the only notice of a lapsed canary is a `wall` message and a
+      failed unit on a box nobody is logged into.
 
 ---
 

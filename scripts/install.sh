@@ -492,6 +492,20 @@ if [[ $DRY_RUN -eq 0 ]]; then
     install -o 0trust -g 0trust -m 0755 \
         "$REPO_DIR/scripts/backup.sh" "$PREFIX/scripts/backup.sh"
 
+    # Same reasoning, and it had the same hole: 0trust-canary-check.service
+    # runs $PREFIX/canary/scripts/check.sh, and nothing put a canary script
+    # under $PREFIX at all. Enabling the timer per docs/LAUNCH.md gave a green
+    # `systemctl enable` and then 203/EXEC every night — the alarm guarding
+    # the one document customers are told to read as a duress signal, dead on
+    # arrival and silent about it. Root-owned: the unit runs as root.
+    mkdir -p "$PREFIX/canary/scripts" "$PREFIX/canary/templates"
+    install -m 0755 "$REPO_DIR/canary/scripts/check.sh" \
+        "$PREFIX/canary/scripts/check.sh"
+    install -m 0755 "$REPO_DIR/canary/scripts/generate.sh" \
+        "$PREFIX/canary/scripts/generate.sh"
+    install -m 0644 "$REPO_DIR/canary/templates/canary.txt" \
+        "$PREFIX/canary/templates/canary.txt"
+
     [[ -d "$VENV" ]] || sudo -u 0trust python3 -m venv "$VENV"
     sudo -u 0trust "$VENV/bin/pip" install --quiet --disable-pip-version-check \
         -r "$PREFIX/api/requirements.txt"
