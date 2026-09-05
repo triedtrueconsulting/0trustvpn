@@ -18,6 +18,20 @@ mattered:
     reinstalling the host or restoring a backup all touch the file without
     re-signing it, so a canary months stale in content read as fresh.
 
+And three more that only showed up by running the whole weekly ritual on a day
+that was not a Monday:
+
+  - `date -d "monday this week"` is not the Monday of this week. GNU date
+    resolves it to the NEXT Monday on every day except Monday, so a canary
+    signed on a Saturday claimed a period beginning two days in the future,
+    labelled with a week number that contradicted it.
+  - check.sh raised CRITICAL at a flat 7 days from signing, while the document
+    published a deadline 7 to 13 days out. A correctly operated canary set the
+    alarm off every week.
+  - 0trust-canary-check.service runs $PREFIX/canary/scripts/check.sh and
+    nothing ever put a canary script under $PREFIX. The timer reported active
+    and the check failed 203/EXEC nightly.
+
 Skips (77) without gpg.
 """
 import atexit, os, re, shutil, subprocess, sys, tempfile, time
@@ -128,6 +142,33 @@ try:
         check("it carries a parseable issue date", m is not None,
               "check.sh ages the canary by this line")
 
+        # The period, the week label and the deadline are computed separately
+        # and have to agree. They did not: signed on any day but a Monday, the
+        # document swore statements "as of the issue time" over a week that
+        # had not started, under a week number belonging to a different week.
+        per = re.search(r'^Period:\s+(\S+) \((\d{4}-\d\d-\d\d) to '
+                        r'(\d{4}-\d\d-\d\d)\)', text, re.M)
+        nxt = re.search(r'^Next signing:\s+(\d{4}-\d\d-\d\d)', text, re.M)
+        check("it states a period and a deadline", per and nxt)
+        if per and nxt and m:
+            import datetime as _dt
+            label, a, b = per.group(1), *(
+                _dt.date.fromisoformat(x) for x in per.group(2, 3))
+            deadline = _dt.date.fromisoformat(nxt.group(1))
+            issued = _dt.datetime.strptime(
+                m.group(1), "%Y-%m-%dT%H:%M:%SZ").date()
+            check("the period is the week it is labelled with",
+                  label == a.strftime("%G-W%V"),
+                  f"{label} labels a period starting in {a.strftime('%G-W%V')}")
+            check("the period runs Monday to Sunday",
+                  a.isoweekday() == 1 and (b - a).days == 6, f"{a}..{b}")
+            check("the issue date falls inside the period it swears to",
+                  a <= issued <= b,
+                  f"issued {issued}, period {a}..{b} — statements sworn "
+                  f"'as of the issue time' over days that had not happened")
+            check("the deadline is after the period ends", deadline > b,
+                  f"deadline {deadline}, period ends {b}")
+
         print("\n[4] the signature verifies")
         sig = out + ".sig"
         check("a detached signature exists", os.path.exists(sig))
@@ -147,36 +188,106 @@ try:
             check(f"nginx serves {path}", f"location = {path}" in conf,
                   "the generator deploys a file nothing serves")
 
-        print("\n[6] check.sh: fresh passes, stale fires")
+        print("\n[6] check.sh judges the canary by the deadline it published")
+        import datetime as _d
         live = os.path.join(WEB_ROOT, "canary.txt")
-        c = run(["./scripts/check.sh"], cwd=CANARY,
-                env=None) if False else subprocess.run(
-            [os.path.join(CANARY, "scripts", "check.sh")],
-            env={**ENV, "CANARY_PATH": live}, capture_output=True, text=True,
-            timeout=120)
+        original = open(live).read()
+
+        def run_check(path):
+            return subprocess.run(
+                [os.path.join(CANARY, "scripts", "check.sh")],
+                env={**ENV, "CANARY_PATH": path},
+                capture_output=True, text=True, timeout=120)
+
+        def staged(name, issued_days_ago, deadline_in_days):
+            """Write a copy of the live canary with both dates moved."""
+            t = original
+            t = re.sub(r'^Issued at:.*',
+                       "Issued at:        " + (
+                           _d.datetime.now(_d.timezone.utc)
+                           - _d.timedelta(days=issued_days_ago)
+                       ).strftime("%Y-%m-%dT%H:%M:%SZ"), t, flags=re.M)
+            t = re.sub(r'^Next signing:.*',
+                       "Next signing:     " + (
+                           _d.date.today() + _d.timedelta(days=deadline_in_days)
+                       ).isoformat(), t, flags=re.M)
+            q = os.path.join(TMP, f"canary-{name}.txt")
+            open(q, "w").write(t)
+            os.utime(q, None)          # mtime always fresh
+            return q
+
+        c = run_check(live)
         check("a fresh canary passes", c.returncode == 0,
               (c.stdout + c.stderr)[-300:])
 
-        # Age the CONTENT, leaving the mtime new — which is what a redeploy,
-        # a reinstall or a restore does.
-        stale = open(live).read().replace(
-            m.group(1), time.strftime("%Y-%m-%dT%H:%M:%SZ",
-                                      time.gmtime(time.time() - 30 * 86400)))
-        open(live, "w").write(stale)
-        os.utime(live, None)          # mtime = now, content 30 days old
-        c = subprocess.run([os.path.join(CANARY, "scripts", "check.sh")],
-                           env={**ENV, "CANARY_PATH": live},
-                           capture_output=True, text=True, timeout=120)
-        check("a canary stale in content fires, even with a fresh mtime",
-              c.returncode == 2,
-              "check.sh is reading mtime; redeploying an old canary would "
-              "silence the alarm that exists to catch exactly that")
-        check("and says how old it is", "days old" in c.stderr, c.stderr[-200:])
+        # The false alarm this replaced. A canary signed eight days ago whose
+        # published deadline is still five days away is being operated exactly
+        # as designed; the old flat 7-day age limit called it CRITICAL. An
+        # alarm that fires weekly on correct operation is one the operator
+        # learns to ignore, and it guards the document customers are told to
+        # read as a duress signal.
+        c = run_check(staged("midcycle", issued_days_ago=8, deadline_in_days=5))
+        check("a canary inside its own deadline is silent", c.returncode == 0,
+              f"exit {c.returncode}: {(c.stdout + c.stderr)[-200:]}")
 
-        c = subprocess.run([os.path.join(CANARY, "scripts", "check.sh")],
-                           env={**ENV, "CANARY_PATH": live + ".missing"},
-                           capture_output=True, text=True, timeout=120)
+        # Due soon is information, not an incident: a non-zero exit here puts
+        # the systemd unit into failed state over a canary that is still valid.
+        c = run_check(staged("soon", issued_days_ago=6, deadline_in_days=1))
+        check("an approaching deadline warns without failing",
+              c.returncode == 0 and "NOTICE" in c.stderr,
+              f"exit {c.returncode}: {(c.stdout + c.stderr)[-200:]}")
+
+        # Genuinely late — and the mtime is fresh, which is what a redeploy,
+        # a reinstall or a restore does.
+        q = staged("overdue", issued_days_ago=30, deadline_in_days=-16)
+        c = run_check(q)
+        check("a canary past its deadline fires, even with a fresh mtime",
+              c.returncode == 2,
+              "redeploying an old canary would otherwise silence the alarm "
+              "that exists to catch exactly that")
+        check("and says it is past the published deadline",
+              "past its published signing deadline" in c.stderr,
+              c.stderr[-200:])
+
+        # No deadline line at all: fall back to the issue age, and say so
+        # rather than quietly passing.
+        q = os.path.join(TMP, "canary-nodeadline.txt")
+        aged = re.sub(r'^Issued at:.*',
+                      "Issued at:        " + time.strftime(
+                          "%Y-%m-%dT%H:%M:%SZ",
+                          time.gmtime(time.time() - 30 * 86400)),
+                      original, flags=re.M)
+        open(q, "w").write(re.sub(r'^Next signing:.*\n', "", aged, flags=re.M))
+        c = run_check(q)
+        check("an unreadable deadline falls back to the issue age loudly",
+              c.returncode == 2 and "could not read 'Next signing:'" in c.stderr,
+              f"exit {c.returncode}: {c.stderr[-300:]}")
+
+        c = run_check(live + ".missing")
         check("a missing canary is critical", c.returncode == 1, c.stderr[-200:])
+
+        print("\n[6b] the alarm's unit runs a path the deploy produces")
+        # `systemctl enable --now` on a timer succeeds whether or not the
+        # service it triggers can exec anything. This one pointed at
+        # $PREFIX/canary/scripts/check.sh while every canary script lived only
+        # in the source checkout: active timer, 203/EXEC every night.
+        unit = open(os.path.join(H.REPO, "canary", "systemd",
+                                 "0trust-canary-check.service")).read()
+        exec_start = re.search(r'^ExecStart=(\S+)', unit, re.M)
+        check("the unit declares an ExecStart", exec_start is not None)
+        if exec_start:
+            target = exec_start.group(1)
+            installer = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
+            rel = target.replace("/opt/0trust/", "")
+            check(f"install.sh stages {rel}",
+                  f'"$PREFIX/{rel}"' in installer,
+                  f"{target} is never created — the timer would fail 203/EXEC "
+                  f"nightly while reporting active")
+            launch = open(os.path.join(H.REPO, "docs", "LAUNCH.md")).read()
+            check("LAUNCH.md points the operator at the installed generator",
+                  "/opt/0trust/canary/scripts/generate.sh" in launch,
+                  "the runbook and the unit disagree about where the canary "
+                  "scripts live")
 
     print("\n[7] the block reference can be supplied instead of fetched")
     # An operator scripting the weekly signing, or one who would rather read

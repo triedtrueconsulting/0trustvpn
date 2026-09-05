@@ -430,26 +430,35 @@ def list_accounts(q: str = "", status: str = "", plan: str = "",
     if plan:
         where.append("a.plan = ?"); args.append(plan)
 
-    q = (q or "").strip()
+    raw = q or ""
+    q = raw.strip()
     if q:
         # A WireGuard public key is base64 and routinely contains '+', which
         # decodes to a space in a query string. An operator pasting a key into
         # the search box (or a URL) would otherwise get no result and no clue
-        # why, so try the space-restored form as well. Both are exact-match
-        # lookups against indexed columns, so the extra candidate cannot
-        # broaden the result set into someone else's account.
-        q_plus = q.replace(" ", "+")
+        # why, so try the space-restored forms as well. Every one of these is
+        # an exact-match lookup against an indexed column, so an extra
+        # candidate cannot broaden the result into someone else's account.
+        #
+        # Restoring from the UNSTRIPPED value matters: a key whose base64
+        # begins with '+' arrives as a leading space, and .strip() removes it
+        # before there is anything left to put back. That is roughly one key
+        # in sixty-four — rare enough to pass twenty-three CI runs and fail
+        # the twenty-fourth, and rare enough in production to look like the
+        # operator mistyping rather than the search being broken, on the one
+        # key an abuse report actually named.
+        candidates = {q, q.replace(" ", "+"), raw.replace(" ", "+").strip()}
+        candidates.discard("")
         clauses = ["a.id = ?"]
         args_q = [q if q.isdigit() else -1]
         # A full token: match the hash, never store or log the token itself.
         clauses.append("a.token_hash = ?"); args_q.append(main.hash_token(q))
         clauses.append("a.id IN (SELECT account_id FROM devices WHERE mesh_ip = ?)")
         args_q.append(q)
-        clauses.append("a.id IN (SELECT account_id FROM devices WHERE pubkey = ?)")
-        args_q.append(q)
-        if q_plus != q:
-            clauses.append("a.id IN (SELECT account_id FROM devices WHERE pubkey = ?)")
-            args_q.append(q_plus)
+        for cand in sorted(candidates):
+            clauses.append(
+                "a.id IN (SELECT account_id FROM devices WHERE pubkey = ?)")
+            args_q.append(cand)
         clauses.append("a.note LIKE ?"); args_q.append(f"%{q}%")
         where.append("(" + " OR ".join(clauses) + ")")
         args.extend(args_q)

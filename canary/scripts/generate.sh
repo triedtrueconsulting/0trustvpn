@@ -36,12 +36,32 @@ log "Computing dates"
 # ----------------------------------------------------------------------------
 NOW_UTC=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 WEEK_NUMBER=$(date -u +"%G-W%V")
-WEEK_START=$(date -u -d "monday this week" +"%Y-%m-%d" 2>/dev/null \
-             || date -u +"%Y-%m-%d")   # macOS date doesn't take -d "monday"
+
+# The Monday of the ISO week we are signing IN, counted back from today's
+# weekday. It was `date -d "monday this week"`, which does not mean that:
+# GNU date resolves it to the NEXT Monday on every day except Monday itself.
+# Signed on a Saturday, the canary claimed a period starting two days in the
+# future while labelling it with the current week number — a document whose
+# statements are sworn "as of the issue time" covering days that had not
+# happened yet, and disagreeing with its own header about which week it was.
+# Running it on the intended Monday hid this completely.
+DOW=$(date -u +"%u")   # 1 = Monday .. 7 = Sunday
+WEEK_START=$(date -u -d "-$((DOW - 1)) days" +"%Y-%m-%d" 2>/dev/null \
+             || date -u -v-$((DOW - 1))d +"%Y-%m-%d")
 WEEK_END=$(date -u -d "$WEEK_START +6 days" +"%Y-%m-%d" 2>/dev/null \
              || date -u -v+6d -j -f "%Y-%m-%d" "$WEEK_START" +"%Y-%m-%d")
 NEXT_DEADLINE=$(date -u -d "$WEEK_END +7 days" +"%Y-%m-%d" 2>/dev/null \
              || date -u -v+13d -j -f "%Y-%m-%d" "$WEEK_START" +"%Y-%m-%d")
+
+# The period and the week number are derived separately, so make them prove
+# they agree rather than trusting that they do.
+start_week=$(date -u -d "$WEEK_START" +"%G-W%V" 2>/dev/null \
+             || date -u -j -f "%Y-%m-%d" "$WEEK_START" +"%G-W%V")
+if [[ "$start_week" != "$WEEK_NUMBER" ]]; then
+    warn "period $WEEK_START..$WEEK_END is week $start_week, not $WEEK_NUMBER"
+    warn "refusing to sign a canary that contradicts its own header"
+    exit 1
+fi
 
 # ----------------------------------------------------------------------------
 log "Fetching proof-of-freshness data"

@@ -369,7 +369,14 @@ try:
     # script and its env file went missing this way.
     import glob as _glob
     installer = open(INSTALL).read()
-    units = sorted(_glob.glob(os.path.join(H.REPO, "systemd", "*.service")))
+    # canary/systemd/ too. Globbing systemd/ alone is how this check missed
+    # 0trust-canary-check.service, whose ExecStart pointed at
+    # $PREFIX/canary/scripts/check.sh while every canary script lived only in
+    # the source checkout — 203/EXEC nightly, under an active timer, guarding
+    # the warrant canary.
+    units = sorted(_glob.glob(os.path.join(H.REPO, "systemd", "*.service"))
+                   + _glob.glob(os.path.join(H.REPO, "canary", "systemd",
+                                             "*.service")))
     check("systemd units found", bool(units))
     for unit_path in units:
         unit = os.path.basename(unit_path)
@@ -399,11 +406,16 @@ try:
     # class has to include the hyphen: it did not, so every multi-word unit
     # name — 0trust-node-enroll.service among them — was silently exempt from
     # this check, which is exactly where a typo'd filename would hide.
+    # Units live in systemd/ except the canary's, which ship beside the canary
+    # scripts they run.
+    UNIT_DIRS = ("systemd", os.path.join("canary", "systemd"))
     for unit in sorted(set(
             re.findall(r"(0trust-[a-z-]+@?\.(?:service|timer))", installer))):
         check(f"installer references a real unit: {unit}",
-              os.path.exists(os.path.join(H.REPO, "systemd", unit)),
-              f"systemd/{unit} missing")
+              any(os.path.exists(os.path.join(H.REPO, d, unit))
+                  for d in UNIT_DIRS),
+              f"{unit} is named in install.sh but exists in none of "
+              + ", ".join(UNIT_DIRS))
 
 finally:
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
