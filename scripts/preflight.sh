@@ -282,7 +282,26 @@ $(v="$(grep -om1 -E '/releases/([0-9.]+)/' web/download.html | tr -d '/' | sed '
   d="releases/$v"
   if [[ ! -d "$d" ]]; then echo "no $d/ yet — nothing has been released"
   elif [[ ! -f "$d/SHA256SUMS.asc" ]]; then echo "$d is unsigned"
-  else echo ok; fi)
+  else
+    # Existing + signed is not enough. release.sh refuses to sign a release
+    # the download page over-promises, but ALLOW_PARTIAL=1 walks past that —
+    # and this gate, the last thing between a partial release and customers,
+    # used to bless it anyway. The page would then offer an MSI and an APK
+    # that SHA256SUMS never covered, telling people to verify files that
+    # cannot be verified. Same rule as release.sh, same source of truth.
+    missing=()
+    while read -r want; do
+        [[ -n "$want" ]] || continue
+        case "$want" in SHA256SUMS|SHA256SUMS.asc|pubkey.asc|build-info.txt) continue ;; esac
+        [[ -e "$d/$want" ]] || missing+=("$want")
+    done < <(grep -oE "/releases/$v/[A-Za-z0-9._+-]+" web/download.html \
+             | sed "s|/releases/$v/||" | sort -u)
+    if (( ${#missing[@]} )); then
+        echo "$d is missing files the download page offers: ${missing[*]}"
+    elif ! grep -q . "$d/SHA256SUMS" 2>/dev/null; then
+        echo "$d/SHA256SUMS is empty"
+    else echo ok; fi
+  fi)
 EOF
 
 # ---------------------------------------------------------------------------

@@ -133,6 +133,63 @@ print(f"      {len(blocked)} blocker(s) on this checkout, each with a fix")
 for expect in ("release-key-pinned", "web-no-placeholder-fpr"):
     check(f"it catches {expect}", expect in r.stdout, r.stdout[-400:])
 
+print("\n[5b] a release the download page over-promises is not launch-ready")
+# release.sh refuses to sign a release missing files the page offers, but
+# ALLOW_PARTIAL=1 walks past that guard — and preflight, the last thing
+# between a partial release and customers, used to bless it: it checked only
+# that releases/<v>/ existed and carried a SHA256SUMS.asc. So a release
+# without the MSI and APK passed, while download.html went on telling people
+# to verify two files SHA256SUMS never covered. On a product whose pitch is
+# that you do not have to trust us, that is the hole release.sh's own comment
+# calls the worst possible one.
+import shutil as _sh, tempfile as _tf
+
+page = open(os.path.join(H.REPO, "web", "download.html"), encoding="utf-8").read()
+ver = re.search(r'/releases/([\d.]+)/', page).group(1)
+offered = sorted(set(re.findall(r'/releases/[\d.]+/([A-Za-z0-9._+-]+)', page))
+                 - {"SHA256SUMS", "SHA256SUMS.asc", "pubkey.asc", "build-info.txt"})
+check("the download page offers artifacts to verify", len(offered) >= 2, offered)
+
+sandbox = _tf.mkdtemp(prefix="0trust-partial-")
+try:
+    # A tree carrying a signed release that is missing exactly the two
+    # artifacts no Linux box can build.
+    for sub in ("scripts", "web"):
+        _sh.copytree(os.path.join(H.REPO, sub), os.path.join(sandbox, sub))
+    rel = os.path.join(sandbox, "releases", ver)
+    os.makedirs(rel)
+    withheld = [a for a in offered if a.endswith((".msi", ".apk"))] or offered[:1]
+    for art in offered:
+        if art in withheld:
+            continue
+        open(os.path.join(rel, art), "w").write("x")
+    for meta in ("SHA256SUMS", "SHA256SUMS.asc", "pubkey.asc", "build-info.txt"):
+        open(os.path.join(rel, meta), "w").write("x\n")
+
+    r2 = subprocess.run([os.path.join(sandbox, "scripts", "preflight.sh"), "--repo"],
+                        capture_output=True, text=True, timeout=900, cwd=sandbox,
+                        env={**os.environ, "ZTV_SKIP_VALIDATE": "1"})
+    line = next((l for l in r2.stdout.splitlines() if "installers-signed" in l), "")
+    check("a signed but incomplete release is BLOCKED, not READY",
+          "BLOCKED" in line,
+          f"withheld {withheld} and preflight still said: {line.strip()!r}")
+    for art in withheld:
+        check(f"and it names the missing {art}", art in r2.stdout,
+              "a gate that will not say what is missing is a complaint, not a gate")
+
+    # And the same tree with everything present must pass, or the gate is
+    # simply always-red and nobody can ever ship.
+    for art in withheld:
+        open(os.path.join(rel, art), "w").write("x")
+    r3 = subprocess.run([os.path.join(sandbox, "scripts", "preflight.sh"), "--repo"],
+                        capture_output=True, text=True, timeout=900, cwd=sandbox,
+                        env={**os.environ, "ZTV_SKIP_VALIDATE": "1"})
+    line3 = next((l for l in r3.stdout.splitlines() if "installers-signed" in l), "")
+    check("a complete signed release passes the gate", "READY" in line3,
+          f"gate is unsatisfiable: {line3.strip()!r}")
+finally:
+    _sh.rmtree(sandbox, ignore_errors=True)
+
 print("\n[6] the wallet check refuses what it must refuse")
 # A wrong extended key is the one failure here with no symptom: addresses are
 # issued, invoices never settle, every health check stays green. The check
