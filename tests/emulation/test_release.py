@@ -182,6 +182,124 @@ if r.returncode == 0:
           "it neither pins a fingerprint nor warns that it does not — a "
           "customer would think the key had been checked")
 
+print("\n[9] pinning the real fingerprints, without inventing one")
+# Four placeholders across three files plus the verifier, and they are NOT the
+# same key: the release key signs downloads, the canary key signs the canary,
+# and security-policy.html publishes the key people ENCRYPT vulnerability
+# reports to. Replacing every DEADBEEF with the release fingerprint — which is
+# what the generator's own instructions used to imply — tells reporters to
+# encrypt to a signing key that has no encryption subkey.
+#
+# The applier is exercised against a COPY of the tree. Nothing here writes a
+# fingerprint into the real repo: a realistic-looking fake would pass preflight
+# and send customers to verify against a key that does not exist.
+import shutil as _sh
+
+SETFPR = os.path.join(H.REPO, "scripts", "set-fingerprints.sh")
+check("the applier exists", os.path.exists(SETFPR))
+
+COPY = os.path.join(TMP, "tree")
+os.makedirs(COPY, exist_ok=True)
+for sub in ("scripts", "web"):
+    _sh.copytree(os.path.join(H.REPO, sub), os.path.join(COPY, sub),
+                 dirs_exist_ok=True)
+
+def applier(*args, cwd=COPY):
+    return subprocess.run([os.path.join(COPY, "scripts", "set-fingerprints.sh"), *args],
+                          cwd=cwd, env=ENV, capture_output=True, text=True, timeout=120)
+
+def read(rel):
+    return open(os.path.join(COPY, rel), encoding="utf-8").read()
+
+# --- it refuses what it cannot stand behind ---
+r = applier("--release", "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF")
+check("a DEADBEEF fingerprint is refused",
+      r.returncode != 0 and "placeholder" in (r.stderr + r.stdout).lower(),
+      (r.stderr or r.stdout)[-300:])
+r = applier("--release", "NOTHEX" * 7)
+check("a non-hex fingerprint is refused", r.returncode != 0,
+      (r.stderr or r.stdout)[-200:])
+r = applier("--release", "ABCD1234")
+check("a short fingerprint is refused",
+      r.returncode != 0 and "40" in (r.stderr + r.stdout),
+      (r.stderr or r.stdout)[-200:])
+# 40 valid hex characters for a key nobody holds.
+absent = "A" * 40
+r = applier("--release", absent)
+check("a fingerprint this machine does not hold is refused",
+      r.returncode != 0 and "does not hold" in (r.stderr + r.stdout),
+      "pinning a key you cannot sign with makes every release unverifiable")
+check("and nothing was written on the way to refusing",
+      "DEADBEEF" in read("scripts/verify-release.sh"),
+      "a rejected argument must leave the tree untouched")
+
+# --- it applies the real thing, each key where it belongs ---
+# Three distinct throwaway keys, so a swap between them is visible.
+fprs = {"release": fpr}
+for role in ("canary", "support"):
+    spec = os.path.join(TMP, f"keyspec-{role}")
+    open(spec, "w").write(
+        "%no-protection\nKey-Type: eddsa\nKey-Curve: ed25519\n"
+        f"Name-Real: 0trust {role} test\nName-Email: {role}@example.invalid\n"
+        "Expire-Date: 0\n%commit\n")
+    run(["gpg", "--batch", "--generate-key", spec])
+lk = run(["gpg", "--list-secret-keys", "--with-colons"])
+all_fprs, uid = {}, None
+for line in lk.stdout.splitlines():
+    if line.startswith("fpr:"):
+        last = line.split(":")[9]
+    elif line.startswith("uid:"):
+        for role in ("release", "canary", "support"):
+            if f"0trust {role} test" in line:
+                all_fprs[role] = last
+check("three distinct throwaway keys exist", len(set(all_fprs.values())) == 3, all_fprs)
+
+r = applier("--release", all_fprs["release"],
+            "--canary", all_fprs["canary"],
+            "--support", all_fprs["support"],
+            "--jurisdiction", "Testland")
+check("the applier succeeds with real keys", r.returncode == 0,
+      (r.stderr or r.stdout)[-500:])
+
+def spaced(f):
+    return " ".join(f[i:i+4] for i in range(0, 40, 4))
+
+verifier = read("scripts/verify-release.sh")
+check("EXPECTED_KEY is the release fingerprint",
+      f'EXPECTED_KEY="{all_fprs["release"]}"' in verifier,
+      [l for l in verifier.splitlines() if "EXPECTED_KEY=" in l][:2])
+
+dl = read("web/download.html").replace("  ", " ")
+check("download.html publishes the RELEASE key",
+      spaced(all_fprs["release"]) in dl)
+check("and not the support key", spaced(all_fprs["support"]) not in dl)
+check("and no placeholder survives on it", "DEADBEEF" not in read("web/download.html"))
+
+pol = read("web/security-policy.html").replace("  ", " ")
+check("security-policy.html publishes the SUPPORT key — the one reports are "
+      "encrypted to", spaced(all_fprs["support"]) in pol)
+check("and NOT the release signing key",
+      spaced(all_fprs["release"]) not in pol,
+      "a signing key has no encryption subkey; reporters would be stuck")
+
+sec = read("web/.well-known/security.txt")
+flat = sec.replace("  ", " ")
+check("security.txt records the release key under Release signing key",
+      spaced(all_fprs["release"]) in flat.split("Warrant canary")[0])
+check("and the canary key under Warrant canary signing key",
+      spaced(all_fprs["canary"]) in flat.split("Warrant canary")[1])
+check("the jurisdiction is set", "Jurisdiction: Testland" in sec)
+check("no placeholder survives in security.txt",
+      "DEADBEEF" not in sec.split("BEFORE LAUNCH")[-1].split("---")[-1]
+      or sec.count("DEADBEEF") == 0,
+      [l for l in sec.splitlines() if "DEADBEEF" in l])
+
+# --- and it is idempotent ---
+before = read("web/download.html")
+r = applier("--release", all_fprs["release"])
+check("re-running changes nothing", r.returncode == 0
+      and read("web/download.html") == before)
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("  failures: " + ", ".join(FAIL))

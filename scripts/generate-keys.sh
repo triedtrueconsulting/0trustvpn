@@ -102,6 +102,7 @@ done
 # --- What to do with them ---------------------------------------------------
 rel="$(cat "$OUT/release.fpr" 2>/dev/null || echo '<release-fpr>')"
 can="$(cat "$OUT/canary.fpr"  2>/dev/null || echo '<canary-fpr>')"
+sup="$(cat "$OUT/support.fpr" 2>/dev/null || echo '<support-fpr>')"
 agp="$(cat "$OUT/backup-age.pub" 2>/dev/null || echo '<age1...>')"
 
 cat <<EOF
@@ -114,11 +115,21 @@ ${BLD}1. Pin the release key in the verifier${NC}
    scripts/verify-release.sh
      EXPECTED_KEY="$rel"
 
-${BLD}2. Replace the placeholder fingerprints on the site${NC}
-   web/download.html, web/security-policy.html, web/.well-known/security.txt
-     release key: $rel
-     canary key:  $can
-   ${DIM}(there is a DEADBEEF line in each; preflight names the files)${NC}
+${BLD}2. Publish the fingerprints — one command, each key in its own place${NC}
+   ./scripts/set-fingerprints.sh \\
+       --release $rel \\
+       --canary  $can \\
+       --support $sup
+
+   ${DIM}Do not hand-edit these. The three keys are NOT interchangeable:${NC}
+   ${DIM}  release  → verify-release.sh, download.html, security.txt${NC}
+   ${DIM}  canary   → security.txt${NC}
+   ${DIM}  support  → security-policy.html, which is the key people ENCRYPT${NC}
+   ${DIM}             vulnerability reports to. Publishing the release key${NC}
+   ${DIM}             there tells reporters to encrypt to a signing key that${NC}
+   ${DIM}             has no encryption subkey, and they simply cannot.${NC}
+   ${DIM}The script refuses a malformed fingerprint, refuses the DEADBEEF${NC}
+   ${DIM}placeholder, and refuses any key this machine does not actually hold.${NC}
 
 ${BLD}3. Give the server the age PUBLIC key — never the private one${NC}
    on the server:
