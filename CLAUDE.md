@@ -81,10 +81,17 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 - **Contact email:** `0trustvpn@proton.me` — SINGLE inbox. All role addresses
   (security@, support@, abuse@, legal@) are optional aliases that route here.
   Every web page uses the proton.me address directly.
-- **Operating entity:** `0trust INC.` Recorded in
-  `web/.well-known/security.txt`, which terms.html §9 makes the governing law
-  of the contract. Its jurisdiction is still outstanding, and that is a
-  different question from where the servers are — see docs/AUDIT.md §2.6.
+- **Operating entity: `0trust GmbH`, jurisdiction Switzerland** (chosen
+  2026-09-05). Recorded in `web/.well-known/security.txt`, which terms.html §9
+  makes the governing law of the contract. It was `0trust INC.` while the
+  jurisdiction was undecided; INC. is not a company form that exists under
+  Swiss law, so the two lines together were a self-contradiction in a binding
+  clause. `test_audit.py` now checks the entity's form against its own
+  jurisdiction and that the name does not drift between security.txt,
+  AUDIT.md and LAUNCH.md. **This must match the Handelsregister entry exactly
+  once registered, canton included** — the strings are set, the company is
+  not. Jurisdiction remains a different question from where the servers are;
+  see docs/AUDIT.md §2.6.
 - **The Bitcoin xpub is NOT recorded here, deliberately.** It used to be. An
   extended public key reveals the wallet's entire balance and transaction
   history to anyone holding it, forever — you cannot rotate one without moving
@@ -516,9 +523,14 @@ encrypted DB backup + DR runbook, abuse/DMCA runbook, legal pages
 **Remaining — operator action, not engineering:**
 1. Provision 5 VPSes (control plane, BTCPay, 3 mesh nodes), run the bootstraps
    (docs/LAUNCH.md is the day-by-day playbook).
-2. Generate keys: release-signing PGP, support PGP, age backup key. Replace the
-   `DEADBEEF` placeholders in web/download.html, web/security-policy.html, and
-   scripts/verify-release.sh with real fingerprints.
+2. Generate keys on your own machine: `./scripts/generate-keys.sh`. Then
+   publish them with `./scripts/set-fingerprints.sh --release … --canary …
+   --support …`, which puts each key where it belongs and refuses a malformed
+   fingerprint, the DEADBEEF placeholder, or any key the machine does not
+   hold. **The three are not interchangeable**: security-policy.html publishes
+   the SUPPORT key, the one people encrypt vulnerability reports to — a
+   signing key there has no encryption subkey and reporters cannot use it.
+   `./scripts/set-fingerprints.sh --check` reports what is still outstanding.
 3. Compile signed installers on real toolchains: MSI (Windows host —
    `installer/windows/build.ps1 -Version X -SignWith "<cert>"`), APK
    (Android Studio), .deb/AppImage (Linux host — scripts ready).

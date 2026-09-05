@@ -29,7 +29,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NAME="${KEY_OWNER_NAME:-0trust INC.}"
+NAME="${KEY_OWNER_NAME:-0trust GmbH}"
 EMAIL="${KEY_OWNER_EMAIL:-0trustvpn@proton.me}"
 OUT="${KEY_OUT_DIR:-$HOME/.0trust-keys}"
 

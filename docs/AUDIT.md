@@ -86,7 +86,7 @@ will ask; better that the pack answers first.
 
 | | |
 |---|---|
-| Operating entity | 0trust INC. |
+| Operating entity | 0trust GmbH |
 | Jurisdiction of incorporation | **to be confirmed** — see `/.well-known/security.txt` |
 
 What follows from that, stated plainly:

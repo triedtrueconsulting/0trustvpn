@@ -242,6 +242,61 @@ check("it warns against generating keys on the server",
       "/etc/0trust" in src and "NOT ON THE SERVER" in src,
       "a signing key on an internet-facing box signs whatever an intruder wants")
 
+print("\n[8] the operating entity agrees with its own jurisdiction")
+# terms.html §9 makes the Jurisdiction line in security.txt the governing law
+# of every customer contract, and the Entity line names who the contract is
+# with. The two were written at different times and contradicted each other:
+# "0trust INC." under "Jurisdiction: Switzerland" is a company form that does
+# not exist under Swiss law. That is not pedantry — it is a self-contradiction
+# in a binding clause, on a product whose entire value is being checkable.
+SECTXT = os.path.join(H.REPO, "web", ".well-known", "security.txt")
+sec = open(SECTXT, encoding="utf-8").read()
+
+def line(field):
+    m = re.search(rf'^#?\s*{field}:\s*(.+?)\s*$', sec, re.M)
+    return m.group(1) if m else ""
+
+entity = line("Entity")
+juris = line("Jurisdiction")
+check("an operating entity is named", bool(entity), entity)
+check("a jurisdiction is stated", bool(juris), juris)
+
+# Company-form suffixes that actually exist in each jurisdiction. Only the
+# ones this project has plausibly considered; an unlisted jurisdiction is not
+# failed, because inventing law is worse than not checking.
+FORMS = {
+    "switzerland": ({"gmbh", "ag", "sa", "sàrl", "sarl"},
+                    "Swiss company forms are GmbH, AG, SA or Sàrl"),
+    "iceland":     ({"ehf.", "ehf", "hf.", "hf"},
+                    "Icelandic company forms are ehf. and hf."),
+    "panama":      ({"s.a.", "sa"}, "Panamanian companies are S.A."),
+}
+# Forms that belong to somewhere else entirely, and are the realistic mistake.
+FOREIGN = {"inc.", "inc", "llc", "ltd.", "ltd", "corp.", "corp", "plc", "gmbh",
+           "ag", "sa", "sàrl", "sarl", "ehf.", "ehf", "hf.", "hf"}
+
+if entity and juris:
+    suffix = entity.split()[-1].lower()
+    key = juris.split(",")[0].strip().lower()
+    if key in FORMS:
+        allowed, why = FORMS[key]
+        check(f"the entity form is one that exists in {juris}",
+              suffix in allowed,
+              f"{entity!r} under {juris!r} — {why}. terms.html §9 makes this "
+              f"the governing law of the customer contract.")
+    else:
+        check(f"jurisdiction {juris!r} is stated (form not checked here)", True)
+    check("the entity carries a company form at all",
+          suffix in FOREIGN,
+          f"{entity!r} ends in {suffix!r}, which is not a company form")
+
+# And the name must not drift between the places that publish it.
+for doc in ("docs/AUDIT.md", "docs/LAUNCH.md"):
+    text = open(os.path.join(H.REPO, doc), encoding="utf-8").read()
+    check(f"{doc} names the same entity as security.txt",
+          not entity or entity in text,
+          f"security.txt says {entity!r}; {doc} does not contain it")
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("  failures: " + ", ".join(FAIL))

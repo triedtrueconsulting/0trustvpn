@@ -94,7 +94,9 @@ pretty() {
 report() {
     printf '%s0trust published identity%s\n\n' "$YLW" "$NC"
     local pinned
-    pinned=$(sed -n 's/^EXPECTED_KEY="\(.*\)"/\1/p' "$VERIFIER" | head -1)
+    # awk, not `sed | head -1`: under `set -o pipefail` a producer that
+    # outlives head dies of SIGPIPE and takes the whole command with it.
+    pinned=$(awk -F'"' '/^EXPECTED_KEY=/ { print $2; exit }' "$VERIFIER")
     if [[ "$pinned" == DEADBEEF* ]]; then
         printf '  %srelease%s      not pinned (%s)\n' "$RED" "$NC" "$VERIFIER"
     else
@@ -110,7 +112,8 @@ report() {
         fi
     done
     local j
-    j=$(sed -n 's/^#\s*Jurisdiction:\s*\(.*\)$/\1/p' "$SECTXT" | head -1)
+    j=$(awk '/^#[[:space:]]*Jurisdiction:/ {
+              sub(/^#[[:space:]]*Jurisdiction:[[:space:]]*/, ""); print; exit }' "$SECTXT")
     if [[ -z "$j" || "$j" == "TO BE CONFIRMED" ]]; then
         printf '  %sjurisdiction%s TO BE CONFIRMED — terms.html §9 makes this the governing law\n' "$RED" "$NC"
     else

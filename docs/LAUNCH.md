@@ -97,7 +97,7 @@ anything that looks like the server, and prints the exact edits afterwards:
 ### Legal &amp; commercial setup
 
 - [ ] **Review the privacy policy** (`web/privacy.html`) and **terms** (`web/terms.html`) line by line. They are written to match the audit-pack claims exactly; if you change the audit-pack claims, change these too.
-- [ ] **Operating entity: `0trust INC.`** Recorded in
+- [ ] **Operating entity: `0trust GmbH`** Recorded in
       `web/.well-known/security.txt`, which `terms.html` §9 makes the governing
       law of the contract.
       - [ ] **Add the jurisdiction** — country, and the state if incorporated in
