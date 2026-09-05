@@ -179,6 +179,23 @@ s = re.sub(r'(# Release signing key[^\n]*\n#\s+)DEADBEEF(?: DEADBEEF)*',
 open(p, "w").write(s)
 PY
     ok "release fingerprint recorded in $SECTXT"
+
+    # The header carries a BEFORE LAUNCH instruction naming DEADBEEF. Left
+    # alone it outlives its own completion: the operator does exactly what it
+    # says, and web-no-placeholder-fpr still fails forever because the gate
+    # greps this file for the word. Retire the instruction once it has been
+    # carried out, keeping the half that is still true — the file wants
+    # signing after the fingerprints go in.
+    python3 - "$SECTXT" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+s = re.sub(
+    r"# BEFORE LAUNCH, replace both DEADBEEF fingerprints and the entity line, then\n# sign this file:\n",
+    "# The fingerprints and the entity line below are set. Sign this file so\n"
+    "# they cannot be edited in transit:\n",
+    s, count=1)
+open(p, "w", encoding="utf-8").write(s)
+PY
 fi
 
 if [[ -n "$CANARY" ]]; then

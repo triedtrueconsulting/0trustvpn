@@ -63,7 +63,15 @@ printf 'a key your customers have never seen, and they are told to reject those.
 # gpg wants an interactive agent for the passphrase. That is deliberate: an
 # unprotected release key is a file anyone who reaches your disk can sign with.
 gen_pgp() {   # gen_pgp <slot> <comment>
-    local slot="$1" comment="$2" uid="$NAME ($comment) <$EMAIL>"
+    # Separate statements on purpose. `local a="$1" b="$a"` looks like it
+    # works and does not: bash expands every word on a declaration line before
+    # any of the assignments take effect, so $comment is still unset when uid
+    # is built — and under `set -u` that aborts the script. This crashed on
+    # the first key, every time, which meant the very first step of the launch
+    # runbook could never have worked.
+    local slot="$1"
+    local comment="$2"
+    local uid="$NAME ($comment) <$EMAIL>"
     if gpg --list-secret-keys "$uid" >/dev/null 2>&1; then
         ok "$slot key already exists — leaving it alone"
     else
