@@ -42,13 +42,18 @@ Encryption: https://0trustvpn.com/pubkey.asc
 # terms.html §9 says the governing law is that of the jurisdiction where the
 # operating entity is established, and points here for the name.
 #
-#   Entity: 0trust INC.
-#   Jurisdiction: TO BE CONFIRMED
+#   Entity: 0trust GmbH
+#   Jurisdiction: Switzerland
 #
-# The jurisdiction line still needs the country and, if incorporated in the
-# United States, the state. It is not a formality: terms.html §9 makes it the
-# governing law of the contract, and it is a different question from where the
-# servers are. See docs/AUDIT.md §2.6.
+# Swiss law governs the customer contract. GmbH is the Swiss private limited
+# form — the entity was written "0trust INC." while the jurisdiction was
+# undecided, and INC. is not a company form that exists under Swiss law, so
+# the two together would have been a contradiction in a binding clause.
+#
+# This must match the Handelsregister entry exactly once the company is
+# registered, including the canton. terms.html §9 makes this line the
+# governing law of the contract, and it is a different question from where
+# the servers are. See docs/AUDIT.md §2.6.
 
 # We do not run a paid bug bounty. We do credit reporters who ask to be
 # credited, and we will not pursue anyone who reports in good faith within
