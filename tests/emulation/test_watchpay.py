@@ -18,7 +18,7 @@ it is testing a fiction:
             recipient nor amount. A view-only monero-wallet-rpc allocates a
             subaddress and answers for it.
 """
-import os, shutil, sqlite3, subprocess, sys, threading, time
+import os, re, shutil, sqlite3, subprocess, sys, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
@@ -377,6 +377,42 @@ try:
           "--rpc-bind-ip 127.0.0.1" in src,
           "a wallet-rpc on a public interface with --disable-rpc-login is an "
           "open door to the wallet")
+
+    print("\n[11b] nothing in the default path downloads a blockchain")
+    # A standing operator constraint, not a preference: this box has no room
+    # for a chain, and every coin must settle against a PUBLIC node somebody
+    # else runs. It is easy to lose by accident — one `apt-get install
+    # bitcoind` in the installer, or one default URL pointed at localhost.
+    inst = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
+    # The packages the control plane and the mesh nodes install.
+    pkg_blocks = re.findall(r'PACKAGES=\(([^)]*)\)', inst)
+    packages = " ".join(pkg_blocks)
+    for daemon in ("bitcoind", "bitcoin-core", "monerod", "zcashd", "geth",
+                   "electrum"):
+        check(f"the installer never installs {daemon}",
+              daemon not in packages,
+              f"{daemon} in install.sh PACKAGES — that is a chain on this disk")
+
+    import payments as pay_mod
+    for coin, url in pay_mod.WatchOnlyProvider.DEFAULT_API.items():
+        check(f"the default {coin} explorer is a remote public endpoint",
+              url.startswith("https://")
+              and "127.0.0.1" not in url and "localhost" not in url, url)
+    check("the default price feed is a remote public endpoint",
+          pay_mod.PRICE_API.startswith("https://")
+          and "127.0.0.1" not in pay_mod.PRICE_API, pay_mod.PRICE_API)
+
+    # Monero is the one that needs a local process, and it must be a WALLET
+    # pointed at somebody else's node — never a node of our own.
+    setup = open(os.path.join(H.REPO, "scripts", "setup-monero-watch.sh")).read()
+    check("the Monero setup runs monero-wallet-rpc, not monerod",
+          "monero-wallet-rpc" in setup and not re.search(r'^\s*monerod\b',
+                                                        setup, re.M),
+          "a monerod here is 150GB of chain on the control plane")
+    check("and points it at a remote daemon by default",
+          re.search(r'DAEMON="\$\{MONERO_DAEMON:-https?://(?!127\.0\.0\.1|localhost)',
+                    setup) is not None,
+          "the default --daemon-address must be a public node")
 
     print("\n[12] confirmation depth is enforced, not merely configured")
     # Everything above runs at one confirmation, which is the one setting for
