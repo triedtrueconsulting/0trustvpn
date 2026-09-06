@@ -87,6 +87,15 @@ def env_for_api(db):
     e = dict(os.environ)
     e.update(
         ZTV_DB_PATH=db,
+        # Say which provider this stack is, rather than inheriting whatever
+        # the code falls back to. Most modules here drive the fake BTCPay, and
+        # they got it only because "btcpay" happened to be the code's default;
+        # when that default moved to `watch` — which is what install.sh has
+        # always written — fifteen modules failed at once on a 502. A test
+        # stack that depends on an unstated default is testing the default.
+        # Modules that want another provider still override through
+        # env_extra, which is applied after this.
+        ZTV_PAYMENT_PROVIDER="btcpay",
         BTCPAY_URL=f"http://127.0.0.1:{BTCPAY_PORT}",
         BTCPAY_STORE_ID="store1",
         BTCPAY_API_KEY="key1",

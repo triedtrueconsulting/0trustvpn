@@ -73,7 +73,7 @@ def credit(conn, inv, now: int) -> bool:
 
 
 def main() -> int:
-    if os.environ.get("ZTV_PAYMENT_PROVIDER", "btcpay").lower() != "watch":
+    if payments.provider_name() != "watch":
         return 0
     if not os.path.exists(DB_PATH):
         log.warning("no database at %s", DB_PATH)

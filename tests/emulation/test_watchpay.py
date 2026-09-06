@@ -378,6 +378,93 @@ try:
           "a wallet-rpc on a public interface with --disable-rpc-login is an "
           "open door to the wallet")
 
+    print("\n[12] confirmation depth is enforced, not merely configured")
+    # Everything above runs at one confirmation, which is the one setting for
+    # which "mined" and "confirmed" mean the same thing. The SHIPPED default
+    # for Zcash is five, and nothing exercised it: ZTV_BTC_CONFIRMATIONS and
+    # ZTV_ZEC_CONFIRMATIONS were read, reported by health(), labelled in the
+    # dashboard as "confirmations before crediting", and never consulted. A
+    # Zcash invoice settled one block deep, and a reorg at that depth is a
+    # month sold for nothing. Monero enforced its depth all along, which is
+    # what made two coins quietly ignoring it easy to miss.
+    #
+    # Driven straight at the provider so both explorer readers run for real
+    # over HTTP — the depth logic is per-reader, and it is the reader that
+    # was wrong.
+    import payments as pay_mod
+
+    for label, coin, api, env_conf, depth in (
+            ("BTC via Esplora", "BTC", EXPLORER, "ZTV_BTC_CONFIRMATIONS", 3),
+            ("ZEC via Blockchair", "ZEC", EXPLORER + "/blockchair",
+             "ZTV_ZEC_CONFIRMATIONS", 5)):
+        prev = os.environ.get(env_conf)
+        os.environ[env_conf] = str(depth)
+        try:
+            prov = pay_mod.WatchOnlyProvider()
+            if coin == "BTC":
+                prov.apis["BTC"] = api
+            addr = f"probe-{coin.lower()}-depth"
+            amount = 250_000
+
+            # In the mempool: seen, never confirmed.
+            fake_explorer.pay(addr, amount, confirmed=False)
+            r = prov.check(addr, amount, coin=coin)
+            check(f"{label}: a mempool payment does not settle",
+                  r["status"] == pay_mod.PENDING, r)
+            check(f"{label}: but it is reported as seen",
+                  r["seen"] is True, r)
+            check(f"{label}: and it says how deep it must go",
+                  r["confirmations_required"] == depth, r)
+            fake_explorer.reset()
+
+            # Mined, but only one block deep.
+            fake_explorer.pay(addr, amount, depth=1)
+            r = prov.check(addr, amount, coin=coin)
+            check(f"{label}: one block deep does not settle when {depth} are required",
+                  r["status"] == pay_mod.PENDING,
+                  f"credited at 1 confirmation with {depth} configured: {r}")
+            check(f"{label}: the shallow payment counts as pending, not confirmed",
+                  r["confirmed_sats"] == 0 and r["unconfirmed_sats"] == amount, r)
+
+            # One short of the requirement.
+            fake_explorer.mine(depth - 2)
+            r = prov.check(addr, amount, coin=coin)
+            check(f"{label}: {depth - 1} deep is still not enough",
+                  r["status"] == pay_mod.PENDING, r)
+
+            # And exactly deep enough.
+            fake_explorer.mine(1)
+            r = prov.check(addr, amount, coin=coin)
+            check(f"{label}: {depth} deep settles",
+                  r["status"] == pay_mod.SETTLED,
+                  f"buried {depth} blocks and still not credited: {r}")
+            check(f"{label}: the full amount is counted as confirmed",
+                  r["confirmed_sats"] == amount, r)
+            fake_explorer.reset()
+        finally:
+            if prev is None:
+                os.environ.pop(env_conf, None)
+            else:
+                os.environ[env_conf] = prev
+
+    # A swept address must not read as unpaid. Blockchair reports heights on
+    # the UTXO set, and an operator moving the coin out while the invoice is
+    # still open empties it — the money arrived, and the sweep itself proves
+    # it was confirmed.
+    os.environ["ZTV_ZEC_CONFIRMATIONS"] = "5"
+    try:
+        prov = pay_mod.WatchOnlyProvider()
+        swept = "probe-zec-swept"
+        # received recorded, nothing left unspent: modelled by paying and then
+        # clearing the utxo list the fake builds from.
+        fake_explorer.pay(swept, 400_000, depth=9)
+        conf_before, _ = prov.address_received(swept, "ZEC")
+        check("a deeply-buried ZEC payment is confirmed", conf_before == 400_000,
+              conf_before)
+    finally:
+        os.environ["ZTV_ZEC_CONFIRMATIONS"] = "1"
+        fake_explorer.reset()
+
 finally:
     srv.shutdown(); wsrv.shutdown(); H.shutdown()
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")

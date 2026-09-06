@@ -45,6 +45,25 @@ def run_installer(*args, render_to=None):
     return r.returncode, r.stdout + r.stderr
 
 
+def staged_api_files():
+    """
+    The api/*.py basenames install.sh places in $PREFIX/api/.
+
+    Derived from the script rather than restated, so this cannot drift from
+    it — and so a regression from enumerating the directory back to a
+    hand-kept list is caught by the import probe instead of by a grep for a
+    filename that happens still to be mentioned somewhere.
+    """
+    import glob as _g
+    installer = open(INSTALL).read()
+    on_disk = {os.path.basename(f)
+               for f in _g.glob(os.path.join(H.REPO, "api", "*.py"))}
+    if '"$REPO_DIR"/api/*.py' in installer:
+        excluded = set(re.findall(r'basename "\$f"\) == "([^"]+)"', installer))
+        return on_disk - excluded
+    return set(re.findall(r'\$REPO_DIR/api/([A-Za-z0-9_.-]+\.py)', installer))
+
+
 def nginx_check(site_path, zones_path, label, port_map):
     """Wrap a rendered site config in a minimal nginx.conf and run nginx -t."""
     site = open(site_path).read()
@@ -341,12 +360,22 @@ try:
     installer_src = open(INSTALL).read()
     for want, why in (
         ("0trust-poll.timer", "the settlement poller is installed"),
-        ("chainwatch.py", "address derivation is installed"),
-        ("poll_invoices.py", "the poller script is installed"),
+        # chainwatch.py / poll_invoices.py used to be grepped for by name
+        # here. They moved into the staged-set check just below, because a
+        # name appearing in the script is not the same claim as the file
+        # reaching the box — and the difference is what hid monerowatch.py.
         ("ZTV_PAYMENT_PROVIDER=watch", "watch-only is the default provider"),
         ("WALLET_BTC", "the wallet key is in the generated env file"),
     ):
         check(why, want in installer_src, f"{want} missing from install.sh")
+
+    staged = staged_api_files()
+    for name, why in (("chainwatch.py", "address derivation reaches the box"),
+                      ("poll_invoices.py", "the settlement poller reaches the box"),
+                      ("monerowatch.py", "the Monero watcher reaches the box"),
+                      ("payments.py", "the provider layer reaches the box")):
+        check(why, name in staged,
+              f"install.sh never places api/{name} in $PREFIX/api/")
 
     print("\n[8] the summary tells the truth about a one-box deployment")
     rc, out = run_installer("--mode", "test")
@@ -362,6 +391,61 @@ try:
     check("--no-vpn admits the tunnels are fake",
           "placeholder" in out and "cannot" in out, out[-700:])
     check("--no-vpn does not claim the VPN works", "The VPN works" not in out)
+
+    print("\n[6b] the api tree the installer places can actually import")
+    # The suite runs the control plane out of the source checkout, where every
+    # module is present by definition. The installer copied a hand-kept list,
+    # and the list was short by two:
+    #
+    #   api/monerowatch.py       imported unconditionally at the top of
+    #                            payments.py, so the INSTALLED tree could not
+    #                            import payments at all. The API did not start
+    #                            — on every provider, whether or not the
+    #                            operator wanted Monero — and no test noticed
+    #                            because no test ever imported what was
+    #                            installed rather than what was committed.
+    #   api/mint-provision-token.py   named by this script's own closing
+    #                            instructions at a path it never created.
+    #
+    # So: work out what the installer places, stage exactly that, and import
+    # it with nothing else on the path.
+    api_src = os.path.join(H.REPO, "api")
+    staged = staged_api_files()
+    check("the installer places api modules", bool(staged), sorted(staged))
+
+    stage = os.path.join(TMP, "prefix-api")
+    os.makedirs(stage, exist_ok=True)
+    for name in staged:
+        src = os.path.join(api_src, name)
+        if os.path.exists(src):
+            shutil.copy(src, stage)
+    missing = sorted(n for n in staged if not os.path.exists(os.path.join(api_src, n)))
+    check("every file the installer names exists in the repo", not missing,
+          f"install would abort on: {missing}")
+
+    # Import in a subprocess with ONLY the staged directory on the path, so a
+    # module that happens to be importable from the checkout cannot mask a
+    # file the installer forgot.
+    # Run FROM the staged directory with PYTHONPATH cleared, which is the
+    # path the service itself gets: the staged modules, the stdlib and the
+    # venv, and nothing from the source checkout.
+    probe = ("import payments, main, admin, poll_invoices, sweep, chainwatch\n"
+             "print('ok')")
+    probe_env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    probe_env["ZTV_DB_PATH"] = os.path.join(TMP, "probe.db")
+    r = subprocess.run([sys.executable, "-c", probe], capture_output=True,
+                       text=True, timeout=180, cwd=stage, env=probe_env)
+    check("the installed tree imports the whole control plane",
+          r.returncode == 0 and "ok" in r.stdout,
+          (r.stdout + r.stderr)[-500:])
+
+    # And the operator tools the script tells you to run must be there too.
+    closing = re.findall(r'\$PREFIX/api/([A-Za-z0-9_.-]+\.py)',
+                         open(INSTALL).read())
+    for name in sorted(set(closing)):
+        check(f"install.sh's own instructions can run {name}",
+              name in staged,
+              f"the summary points at $PREFIX/api/{name}, which nothing installs")
 
     print("\n[7] every systemd unit's dependencies are actually installed")
     # A unit that references a script or env file nothing places is a timer

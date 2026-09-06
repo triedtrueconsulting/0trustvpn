@@ -23,7 +23,7 @@ are anonymous 16-char tokens; there's no email/password/identity.
 
 ```
 api/            FastAPI + SQLite control plane (main.py is the core)
-                payments.py (BTCPay / hosted gateway), btcpay.py (legacy client),
+                payments.py (watch / BTCPay / hosted / card providers),
                 sweep.py (expiry sweeper), mint-provision-token.py,
                 smoke_test.py
 client/         Go module github.com/0trust/cli (Go 1.22, dep: skip2/go-qrcode)
@@ -151,6 +151,24 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 - **Atomic units are per coin: 1e8 for BTC and ZEC, 1e12 for XMR**
   (`payments.COIN_UNITS`). The poller hardcoded 1e8, which made a dust
   payment settle a whole XMR invoice. Never compare amounts as floats.
+- **Confirmation depth is enforced, per coin, and it is not the same as
+  "in a block".** `ZTV_BTC_CONFIRMATIONS` (1), `ZTV_ZEC_CONFIRMATIONS` (5) and
+  `XMR_CONFIRMATIONS` (10) decide when an invoice credits. Only Monero honoured
+  its setting; BTC and ZEC read an explorer's `chain_stats`, which counts a
+  transaction from the moment it is mined, so Zcash credited one block deep
+  while the dashboard label said five. Depth costs an extra explorer call
+  (`/blocks/tip/height` plus the address's txs for Esplora, `utxo[].block_id`
+  against `context.state` for Blockchair) and is taken only when the operator
+  asked for more than one. `/api/v1/config` publishes `confirmations` so no
+  page restates the numbers — the site used to say "activates on the first
+  confirmation", which was false for two of the three coins.
+- **The default provider is `watch`, defined once in
+  `payments.DEFAULT_PROVIDER` and read through `payments.provider_name()`.**
+  The literal `"btcpay"` was the fallback at six call sites and in
+  `systemd/api.env.example`, so an operator who copied the example, or who
+  lost the line, got a provider they had not configured — and
+  `poll_invoices.py` returns immediately unless the provider is `watch`, so
+  that deployment took real payments and credited none of them.
 - **`currencies_for("watch")` asks the provider, and the provider asks the
   configuration.** A coin with no wallet behind it is not offered — otherwise
   the checkout sends a customer to an address that does not exist. Adding a
@@ -162,7 +180,8 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 - **No self-hosted blockchain node.** `ZTV_PAYMENT_PROVIDER` picks between
   `watch` (default: derive a receive address per invoice from the operator's
   own xpub and confirm via a public explorer — non-custodial, no account
-  anywhere, no chain data, BTC only), `btcpay` (your own or somebody else's
+  anywhere, no chain data; BTC and ZEC by explorer, XMR by view-only wallet,
+  whichever have a wallet configured), `btcpay` (your own or somebody else's
   BTCPay instance — non-custodial, more coins, but something has to run
   BTCPay), `hosted` (a commercial gateway, no infrastructure at all, but
   custodial and usually KYC'd), and `stripe`/`square` (cards, which mean a
