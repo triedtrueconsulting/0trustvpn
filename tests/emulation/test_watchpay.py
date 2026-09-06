@@ -325,6 +325,51 @@ try:
           len(sql("SELECT id FROM accounts")) == n_before,
           "a pending_payment row with no invoice is unreachable forever")
 
+    print("\n[9b] one coin's backend failing is not hidden by another working")
+    # The alert fired only when the WHOLE batch failed, so a healthy Bitcoin
+    # explorer masked a broken Monero wallet indefinitely: XMR invoices stopped
+    # crediting and the dashboard said nothing, which reads exactly like
+    # "nobody pays in Monero".
+    sql("DELETE FROM ops_events")
+    st, btc_pending = H.call("POST", "/api/v1/account", {"months": 1})
+    st, xmr_pending = H.call("POST", "/api/v1/account",
+                             {"months": 1, "currency": "XMR"})
+    check("both invoices are open", btc_pending.get("invoice_id")
+          and xmr_pending.get("invoice_id"), (btc_pending, xmr_pending))
+
+    fake_walletrpc.DOWN[0] = True          # Monero down, explorer still up
+    r = run_poller()
+    fake_walletrpc.DOWN[0] = False
+    check("the poller survives one backend being down", r.returncode == 0,
+          (r.stderr or r.stdout)[-300:])
+
+    events = sql("SELECT kind, subject, detail FROM ops_events "
+                 "WHERE kind LIKE 'payments.%'")
+    downs = {e["subject"] for e in events if e["kind"] == "payments.explorer_down"}
+    check("the failing coin raises an alert naming itself", "XMR" in downs,
+          f"events: {[dict(e) for e in events]}")
+    check("and the working coin does not", "BTC" not in downs,
+          f"events: {[dict(e) for e in events]}")
+
+    # Recovery is its own edge, or a fixed outage stays red forever.
+    run_poller()
+    events = sql("SELECT kind, subject FROM ops_events WHERE kind LIKE 'payments.%'")
+    check("recovery is recorded once the backend answers again",
+          any(e["kind"] == "payments.explorer_ok" and e["subject"] == "XMR"
+              for e in events),
+          f"events: {[dict(e) for e in events]}")
+
+    # And it does not re-alert every minute while the outage continues.
+    fake_walletrpc.DOWN[0] = True
+    run_poller(); run_poller()
+    fake_walletrpc.DOWN[0] = False
+    n_down = len([e for e in sql(
+        "SELECT kind, subject FROM ops_events WHERE kind = 'payments.explorer_down'")
+        if e["subject"] == "XMR"])
+    check("a continuing outage alerts on the transition, not every poll",
+          n_down == 2, f"{n_down} down events for XMR across two outages")
+    run_poller()
+
     print("\n[10] health reports every configured coin")
     st, health = H.call("GET", "/api/v1/admin/payments/health")
     # Unauthenticated; just confirm the provider's own health string covers
