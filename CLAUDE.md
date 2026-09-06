@@ -500,6 +500,26 @@ code, actively check for them:
    `api/main.py`. `test_site.py` ties them together — terms offered, each
    price, and the hand-written "save $N" arithmetic, which is the figure most
    likely to go stale. Change one and the other must move.
+13. **A test whose input is randomly generated tests a random subset.**
+   `H.genkey()` returns a random base64 pubkey, and only about one in
+   sixty-four begins with `+` — the one case where the admin search's
+   space-restoration failed, because `.strip()` ate the leading space before
+   anything could put it back. It passed twenty-three CI runs and failed the
+   twenty-fourth, with nothing in the output explaining why. When a code path
+   turns on a property of the input, construct an input that has it (and one
+   that doesn't) instead of hoping the draw covers it. Same family as #10:
+   green locally, red on a runner, for a reason the test never states.
+14. **Ops tooling nothing has ever executed.** Everything under `scripts/`,
+   `canary/` and `btcpay/` runs once, on the day it matters, on a box the
+   operator is standing at. Rehearsing the launch path end to end found
+   `generate-keys.sh` dying on an unbound variable; rehearsing the weekly
+   canary on a day that was not a Monday found the period computed for the
+   *next* week, an alarm firing a week before the deadline it guarded, and a
+   systemd unit whose `ExecStart` no deploy step ever created. A green
+   `systemctl enable` is not evidence: the timer reports active whether or not
+   the service it triggers can exec anything. `test_canary.py`,
+   `test_backup.py`, `test_install.py` and `test_release.py` exist to run
+   these for real — extend them rather than trusting a script that parses.
 
 ## Discipline for a privacy product
 
@@ -534,7 +554,11 @@ encrypted DB backup + DR runbook, abuse/DMCA runbook, legal pages
 3. Compile signed installers on real toolchains: MSI (Windows host —
    `installer/windows/build.ps1 -Version X -SignWith "<cert>"`), APK
    (Android Studio), .deb/AppImage (Linux host — scripts ready).
-4. Legal review of privacy.html + terms.html; set the operating entity name.
+4. Legal review of privacy.html + terms.html **and
+   `canary/templates/canary.txt`** — the canary swears to specific
+   instruments (BÜPF/VÜPF, NDG, NSL, FISA) and is the one document
+   written to be relied on when it stops appearing. The entity name is
+   set (`0trust GmbH`); it must match the Handelsregister entry.
 5. Commission a third-party audit (Cure53 / Assured AB) — the audit pack is
    built to be their starting point.
 

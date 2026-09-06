@@ -354,6 +354,43 @@ for doc in ("docs/AUDIT.md", "docs/LAUNCH.md"):
           not entity or entity in text,
           f"security.txt says {entity!r}; {doc} does not contain it")
 
+print("\n[8b] the canary swears against the law that can actually compel us")
+# A warrant canary that enumerates only US instruments, signed by a company
+# established somewhere else, is boilerplate: the realistic secret demand
+# arrives under the law of the jurisdiction the operator is established in,
+# and that is the one a reader checks for. The entity moved to Switzerland
+# after this template was written and the statements did not follow.
+canary_tpl = open(os.path.join(H.REPO, "canary", "templates", "canary.txt"),
+                  encoding="utf-8").read()
+# Instruments that carry secret legal demands, per jurisdiction. Only the ones
+# this project has actually considered — an unlisted jurisdiction is not
+# failed, because inventing law is worse than not checking.
+INSTRUMENTS = {
+    "switzerland": (("BÜPF", "NDG"),
+                    "Swiss secret demands arrive under the BÜPF/VÜPF "
+                    "surveillance regime or the NDG intelligence act"),
+    "iceland":     (("Iceland",), "name the Icelandic route"),
+    "panama":      (("Panama",), "name the Panamanian route"),
+}
+if juris:
+    key = juris.split(",")[0].strip().lower()
+    if key in INSTRUMENTS:
+        needles, why = INSTRUMENTS[key]
+        missing = [n for n in needles if n not in canary_tpl]
+        check(f"the canary names the instruments of {juris}",
+              not missing,
+              f"the operating entity is established in {juris} and the canary "
+              f"does not mention {missing} — {why}")
+    else:
+        check(f"canary jurisdiction {juris!r} not checked here", True)
+
+# Every mesh jurisdiction the product claims should be answerable for too:
+# a node can be compelled where it sits, regardless of where the company is.
+for country in ("Switzerland", "Iceland", "Romania"):
+    check(f"the canary accounts for the {country} node jurisdiction",
+          country in canary_tpl,
+          f"three nodes run in {country} and the canary never says so")
+
 print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("  failures: " + ", ".join(FAIL))
