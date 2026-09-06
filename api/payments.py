@@ -3,14 +3,25 @@ Payment providers.
 
 0trust takes BTC, XMR and ZEC. The operator picks how, via ZTV_PAYMENT_PROVIDER:
 
+  watch    THE DEFAULT. Derive a fresh receive address per invoice from the
+           operator's extended PUBLIC key and ask a PUBLIC block explorer
+           whether it was paid; for Monero, a view-only wallet against a
+           public remote node. Non-custodial, no account signed up for
+           anywhere, and no chain data on the control plane. The only
+           provider that works on a VPS built this morning.
   btcpay   BTCPay Server — self-hosted, or somebody else's instance.
            Non-custodial: funds land in your wallet, the server only watches.
   hosted   A commercial crypto payment gateway with a REST API. No blockchain
            infrastructure at all, at the cost of the trade-offs below.
+  stripe   Cards. A different product, not a different coin — see
+  square   CARD_PROVIDERS below for why they are kept apart.
 
-Neither option requires this operator to run a Bitcoin, Monero or Zcash node:
-point `btcpay` at a hosted BTCPay and the chain infrastructure is somebody
-else's problem either way.
+NONE of these requires this operator to run a Bitcoin, Monero or Zcash node,
+and that is a hard constraint rather than a preference: `watch` reads public
+explorers and a public Monero node, and pointing `btcpay` at a hosted BTCPay
+puts the chain on somebody else's disk. Nothing in this file ever syncs,
+stores or serves a blockchain. If you are about to add something that does,
+it does not belong here.
 
 WHAT YOU GIVE UP BY NOT RUNNING A NODE
 --------------------------------------
@@ -69,6 +80,24 @@ CURRENCIES = ("BTC", "ETH", "XMR", "ZEC")
 # "no name, no identity" property the rest of this system is built around.
 # Offering them is a business decision; web/privacy.html has to say so.
 CARD_PROVIDERS = ("stripe", "square")
+
+# The provider assumed when nothing says otherwise.
+#
+# This was the literal "btcpay", written out at six call sites, and it was
+# wrong in all of them: scripts/install.sh writes watch, watch is the only
+# provider that works on a VPS with nothing signed up for anywhere, and
+# btcpay means running a BTCPay Server with a chain behind it. An operator
+# who copied systemd/api.env.example, or whose env file lost a line, silently
+# got a provider they had not configured — and poll_invoices.py returns
+# immediately unless the provider is watch, so that deployment would take
+# payments to real addresses and credit none of them.
+DEFAULT_PROVIDER = "watch"
+
+
+def provider_name() -> str:
+    """The configured provider's name, lowercased, with the default applied."""
+    return (os.environ.get("ZTV_PAYMENT_PROVIDER")
+            or DEFAULT_PROVIDER).strip().lower()
 
 # Normalized invoice lifecycle, so main.py never sees provider vocabulary.
 SETTLED = "settled"
@@ -886,33 +915,119 @@ class WatchOnlyProvider:
         }
 
     # -- chain lookups ------------------------------------------------------
-    def _esplora_received(self, api: str, address: str) -> tuple[int, int]:
-        raw = _http("GET", f"{api}/address/{address}", {}, None,
-                    self.timeout) or {}
-        chain = raw.get("chain_stats") or {}
-        mem = raw.get("mempool_stats") or {}
-        return int(chain.get("funded_txo_sum") or 0), int(
-            mem.get("funded_txo_sum") or 0)
+    #
+    # "Confirmed" below means AT LEAST self.confirmations blocks deep, not
+    # "in a block". Those are the same thing only when the requirement is one.
+    #
+    # They were treated as the same thing for BTC and ZEC. ZTV_BTC_CONFIRMATIONS
+    # and ZTV_ZEC_CONFIRMATIONS were read into self.confirmations, printed by
+    # health(), and labelled in the dashboard as "confirmations before
+    # crediting" — and then never consulted. An explorer's chain_stats counts
+    # a transaction from the moment it is mined, so a Zcash invoice settled
+    # one block deep while the operator had asked for five, and a reorg at
+    # that depth is a month sold for nothing. Monero enforced its depth all
+    # along (monerowatch.received), which is what made the gap easy to miss:
+    # two of the three coins quietly ignored the setting.
+    #
+    # The one-confirmation case keeps the single cheap call it always used.
+    # Depth costs an extra request, and only an operator who asked for depth
+    # pays for it.
 
-    def _blockchair_received(self, api: str, address: str) -> tuple[int, int]:
+    def _esplora_received(self, api: str, address: str,
+                          min_conf: int = 1) -> tuple[int, int]:
+        if min_conf <= 1:
+            raw = _http("GET", f"{api}/address/{address}", {}, None,
+                        self.timeout) or {}
+            chain = raw.get("chain_stats") or {}
+            mem = raw.get("mempool_stats") or {}
+            return int(chain.get("funded_txo_sum") or 0), int(
+                mem.get("funded_txo_sum") or 0)
+
+        # Depth needs per-transaction block heights and the current tip.
+        # /blocks/tip/height answers with a bare integer.
+        tip = int(_http("GET", f"{api}/blocks/tip/height", {}, None,
+                        self.timeout) or 0)
+        if tip <= 0:
+            raise PaymentError(
+                f"{api} did not report a chain tip — cannot tell how deep a "
+                f"payment is, so it will not be credited")
+        # Mempool transactions plus the most recent confirmed ones. These are
+        # single-use invoice addresses, so the payment we are looking for is
+        # always in the first page.
+        txs = _http("GET", f"{api}/address/{address}/txs", {}, None,
+                    self.timeout) or []
+        deep = shallow = 0
+        for tx in txs:
+            paid = sum(int(v.get("value") or 0)
+                       for v in (tx.get("vout") or [])
+                       if v.get("scriptpubkey_address") == address)
+            if not paid:
+                continue
+            status = tx.get("status") or {}
+            height = status.get("block_height")
+            if status.get("confirmed") and height is not None:
+                depth = tip - int(height) + 1
+            else:
+                depth = 0
+            if depth >= min_conf:
+                deep += paid
+            else:
+                shallow += paid
+        return deep, shallow
+
+    def _blockchair_received(self, api: str, address: str,
+                             min_conf: int = 1) -> tuple[int, int]:
         raw = _http("GET", f"{api}/dashboards/address/{address}", {}, None,
                     self.timeout) or {}
         data = (raw.get("data") or {}).get(address) or {}
         addr = data.get("address") or {}
         received = int(addr.get("received") or 0)
         unconfirmed = int(addr.get("unconfirmed_received") or 0)
-        return received, unconfirmed
+        if min_conf <= 1:
+            return received, unconfirmed
 
-    def address_received(self, address: str, coin: str = "BTC") -> tuple[int, int]:
-        """(confirmed, unconfirmed) atomic units ever received at an address."""
+        tip = int((raw.get("context") or {}).get("state") or 0)
+        utxo = data.get("utxo")
+        if tip <= 0 or utxo is None:
+            # Refuse rather than fall back to the shallow figure. Falling back
+            # would silently reinstate exactly the bug this exists to close,
+            # and the poller treats a raise as "ask again next minute" — a
+            # late credit, not a wrong one.
+            raise PaymentError(
+                f"{api} did not report block heights for {address} — cannot "
+                f"confirm {min_conf} blocks of depth, so it will not be credited")
+        deep = unspent = 0
+        for u in utxo:
+            value = int(u.get("value") or 0)
+            block = int(u.get("block_id") or -1)
+            unspent += value
+            if block > 0 and (tip - block + 1) >= min_conf:
+                deep += value
+        # Anything already spent out of this address was necessarily mined,
+        # and the operator could only have swept it from a confirmed output.
+        # Without this an address swept while its invoice was still open would
+        # read as never paid — the utxo set is what Blockchair reports heights
+        # for, and a swept output has left it.
+        deep += max(0, received - unspent)
+        return deep, max(unconfirmed, received - deep)
+
+    def address_received(self, address: str, coin: str = "BTC",
+                         min_conf: int | None = None) -> tuple[int, int]:
+        """
+        (confirmed, unconfirmed) atomic units received at an address, where
+        confirmed means at least `min_conf` blocks deep.
+        """
         coin = coin.upper()
         api = self.apis.get(coin, self.api)
+        if min_conf is None:
+            min_conf = self.confirmations.get(coin, 1)
+        min_conf = max(1, int(min_conf))
         # Two explorer shapes, chosen by what the URL is rather than by coin,
         # so an operator who runs their own Esplora for Zcash gets the
         # Esplora path without a second setting to remember.
         if "blockchair" in api:
-            return self._blockchair_received(api, address)
-        return self._esplora_received(api, address)
+            return self._blockchair_received(api, address, min_conf)
+        return self._esplora_received(api, address, min_conf)
 
     def check(self, address: str, expected_atomic: int, coin: str = "BTC",
               ref: int | None = None) -> dict:
@@ -936,8 +1051,10 @@ class WatchOnlyProvider:
                 confirmed, pending = xmr.received(int(ref))
             except monerowatch.MoneroError as e:
                 raise PaymentError(str(e)) from None
+            required = xmr.confirmations
         else:
             confirmed, pending = self.address_received(address, coin)
+            required = max(1, int(self.confirmations.get(coin, 1)))
 
         paid = confirmed >= expected_atomic
         return {
@@ -946,6 +1063,10 @@ class WatchOnlyProvider:
             "confirmed_sats": confirmed,
             "unconfirmed_sats": pending,
             "expected_sats": expected_atomic,
+            # How deep this deployment wants a payment before it counts. The
+            # customer's money can be on the chain and this still be PENDING,
+            # which looks like nothing happening unless somebody says why.
+            "confirmations_required": required,
             # Seen but not yet confirmed: worth showing the customer so the
             # page stops looking broken while they wait for a block.
             "seen": confirmed > 0 or pending > 0,
@@ -1010,7 +1131,7 @@ def provider():
     """Lazy singleton, so missing config doesn't break module import."""
     global _instance
     if _instance is None:
-        name = os.environ.get("ZTV_PAYMENT_PROVIDER", "btcpay").lower()
+        name = provider_name()
         cls = _PROVIDERS.get(name)
         if cls is None:
             raise PaymentError(
@@ -1081,6 +1202,35 @@ def currencies_for(name: str) -> tuple[str, ...]:
         except Exception:
             return ()
     return CURRENCIES
+
+
+def confirmations_for(name: str) -> dict:
+    """
+    Blocks of depth each offered coin needs before an invoice is credited.
+
+    Published by /api/v1/config so no page has to hardcode it. The site said
+    "activates on the first confirmation", which is true for Bitcoin at the
+    default and false for Zcash (five) and Monero (ten) — a specific,
+    checkable claim about a customer's money that two of the three coins did
+    not honour. The numbers are settings, so the only way copy stays true is
+    to read them rather than restate them.
+    """
+    name = (name or "").lower()
+    if name != "watch":
+        return {}
+    try:
+        prov = provider()
+    except Exception:
+        return {}
+    out = {}
+    for coin in prov.supported():
+        if coin == "XMR":
+            xmr = prov.monero()
+            if xmr is not None:
+                out[coin] = int(xmr.confirmations)
+        else:
+            out[coin] = max(1, int(prov.confirmations.get(coin, 1)))
+    return out
 
 
 def is_card_provider(name: str) -> bool:

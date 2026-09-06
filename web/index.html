@@ -1372,7 +1372,7 @@
       if (cur.length > 1) {
         document.querySelectorAll('[data-pay="send"]').forEach(
           e => e.textContent = 'Send ' + list + ' to the address shown. '
-             + 'It activates on the first confirmation.');
+             + 'It activates once the payment is confirmed on-chain.');
         document.querySelectorAll('[data-pay="prose"]').forEach((e) => {
           const extra = document.createElement('span');
           const rest = cur.filter(c => c !== 'BTC');
@@ -1473,7 +1473,8 @@
         <div>
           <h4>Pay in crypto</h4>
           <p data-pay="send">Send Bitcoin to the address shown. It activates
-          on the first confirmation — typically ten to twenty minutes.</p>
+          once the payment is confirmed on-chain — typically ten to twenty
+          minutes.</p>
         </div>
       </div>
       <div class="step">
@@ -1824,7 +1825,7 @@
       <!-- STAGE 3: Crypto payment -->
       <div class="stage" id="stage3">
         <div class="label">→ STEP 3 OF 3 · PAY IN CRYPTO</div>
-        <p style="color: var(--ink-dim); margin-bottom: 8px;">Send the exact amount to the address below. Account activates on first confirmation.</p>
+        <p style="color: var(--ink-dim); margin-bottom: 8px;">Send the exact amount to the address below. The account activates once the payment is confirmed on-chain — the status line below says how many confirmations this coin needs.</p>
 
         <div class="crypto-tabs">
           <button class="crypto-tab active" onclick="selectCrypto(this, 'BTC')">BTC</button>
@@ -2061,10 +2062,14 @@
             ' to the same address to finish</span>';
         } else if (data.awaiting_confirmation || data.seen) {
           // Stops the page looking broken while a block is mined, and stops
-          // the customer paying a second time.
+          // the customer paying a second time. Name the depth: Zcash settles
+          // at five confirmations here, and "waiting for confirmation" with
+          // no number attached is indistinguishable from "stuck".
+          const n = data.confirmations_required || 1;
           el.innerHTML =
             '<span style="color: var(--amber)">payment seen — waiting for ' +
-            'confirmation. Do not send again.</span>';
+            escapeHtml(String(n)) + ' confirmation' + (n === 1 ? '' : 's') +
+            '. Do not send again.</span>';
         }
       } catch (err) {
         console.warn('poll failed:', err);

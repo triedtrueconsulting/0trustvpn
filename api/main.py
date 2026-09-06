@@ -521,7 +521,7 @@ def create_invoice(account_id: int, months: int, amount_usd: float,
     and amount_crypto where the provider derives them itself.
     """
     kwargs = {}
-    if os.environ.get("ZTV_PAYMENT_PROVIDER", "btcpay").lower() == "watch":
+    if payments.provider_name() == "watch":
         offered = payments.currencies_for("watch")
         if not offered:
             raise HTTPException(502, "Payment processor unavailable")
@@ -788,7 +788,7 @@ def public_config() -> dict:
     used to spell the trial length out in their own words. Read from here they
     cannot disagree with the control plane, or with each other.
     """
-    prov = os.environ.get("ZTV_PAYMENT_PROVIDER", "btcpay").lower()
+    prov = payments.provider_name()
     return {
         "trial": {
             "enabled": TRIAL_ENABLED,
@@ -798,6 +798,10 @@ def public_config() -> dict:
         },
         "max_devices": MAX_DEVICES_PER_ACCOUNT,
         "currencies": list(payments.currencies_for(prov)),
+        # Per-coin confirmation depth, so no page has to restate it. Empty
+        # for providers that settle on their own webhook rather than on a
+        # depth this deployment chooses.
+        "confirmations": payments.confirmations_for(prov),
         "takes_cards": payments.is_card_provider(prov),
         "mesh_network": MESH_NETWORK,
     }
@@ -1285,8 +1289,17 @@ def payment_status(invoice_id: str):
                 # address we control.
                 "short_by": _amount(max(0, expected - confirmed)),
                 "underpaid": 0 < confirmed < expected,
-                "awaiting_confirmation": bool(
-                    live.get("unconfirmed_sats")) and not live.get("seen_enough")}
+                # How deep this deployment buries a payment before crediting
+                # it. Zcash ships at five, so a customer whose coin is already
+                # on the chain can sit on "waiting" for six minutes; a page
+                # that will not say how long is a page that looks stuck, and a
+                # customer who thinks it is stuck pays twice.
+                "confirmations_required": int(
+                    live.get("confirmations_required") or 1),
+                # `seen_enough` was never a key check() returns, so the second
+                # half of this condition was always true and the name promised
+                # a distinction the code did not make.
+                "awaiting_confirmation": bool(live.get("unconfirmed_sats"))}
     try:
         live = p.get_invoice(invoice_id)
         return {"status": live.get("status", row["status"]), "settled_at": None}

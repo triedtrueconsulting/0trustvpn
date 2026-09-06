@@ -238,11 +238,14 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   <div class="q">
     <h3>I paid but my account is still inactive.</h3>
     <p>
-      Your account activates on the first on-chain confirmation, which is
-      typically 10&ndash;20 minutes after you send. We check the chain once a
-      minute, so activation follows the confirmation within about that long.
-      Leave the signup page open and it will update on its own; the account
-      token is on it either way.
+      Your account activates once the payment is buried deep enough on-chain.
+      How deep depends on which coin you paid in: the checkout shows the
+      number of confirmations it is waiting for, and counts them off. For
+      Bitcoin that is usually 10&ndash;20 minutes; coins that ask for more
+      blocks take proportionally longer. We check the chain once a minute, so
+      activation follows within about that long of the last block. Leave the
+      signup page open and it will update on its own; the account token is on
+      it either way.
     </p>
     <p>
       If 60+ minutes have passed and the invoice shows <em>Settled</em>

@@ -473,14 +473,27 @@ ok "user 0trust, $PREFIX, $VARLIB, $ETC"
 log "Installing application code"
 # ----------------------------------------------------------------------------
 if [[ $DRY_RUN -eq 0 ]]; then
+    # Every .py the control plane imports, plus the operator tools that this
+    # script's own closing instructions tell you to run out of $PREFIX.
+    #
+    # It was a hand-kept list and it was short by two. api/monerowatch.py is
+    # imported unconditionally at the top of payments.py, so the installed
+    # tree could not import payments at all — the API did not start, on every
+    # provider, whether or not the operator wanted Monero. Nothing caught it
+    # because the test suite runs the API from the source checkout, where the
+    # file is always there. api/mint-provision-token.py was the other: the
+    # instructions printed at the end of this script name
+    # $PREFIX/api/mint-provision-token.py, a path nothing created.
+    #
+    # Enumerating the directory rather than the filenames means a new module
+    # cannot be forgotten. smoke_test.py is the one deliberate exclusion: it
+    # is a test, and it writes a scratch database.
+    for f in "$REPO_DIR"/api/*.py; do
+        [[ "$(basename "$f")" == "smoke_test.py" ]] && continue
+        install -o 0trust -g 0trust -m 0644 "$f" "$PREFIX/api/"
+    done
     install -o 0trust -g 0trust -m 0644 \
-        "$REPO_DIR/api/main.py" "$REPO_DIR/api/payments.py" \
-        "$REPO_DIR/api/admin.py" "$REPO_DIR/api/settings_store.py" \
-        "$REPO_DIR/api/ops_alerts.py" "$REPO_DIR/api/chainwatch.py" \
-        "$REPO_DIR/api/poll_invoices.py" \
-        "$REPO_DIR/api/btcpay.py" "$REPO_DIR/api/sweep.py" \
-        "$REPO_DIR/api/requirements.txt" \
-        "$PREFIX/api/"
+        "$REPO_DIR/api/requirements.txt" "$PREFIX/api/"
     install -o 0trust -g 0trust -m 0644 \
         "$REPO_DIR/proxy/server.py" "$REPO_DIR/proxy/guards.py" \
         "$REPO_DIR/proxy/rewrite.py" \

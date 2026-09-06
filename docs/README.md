@@ -55,7 +55,6 @@ USER ──▶│ 0trust.  │ ───────────▶   │  Contr
 │   └── index.html            Calls /api/v1/account on signup
 ├── api/                      FastAPI control plane
 │   ├── main.py               Routes, schemas, DB
-│   ├── btcpay.py             BTCPay Server client
 │   ├── sweep.py              Hourly expiry sweeper
 │   └── requirements.txt
 ├── client/                   Go CLI + embedded GUI (cross-platform)

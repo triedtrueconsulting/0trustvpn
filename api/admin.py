@@ -42,6 +42,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 import ops_alerts
+import payments
 import settings_store as st
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -394,7 +395,7 @@ def overview(admin: dict = Depends(current_admin)):
         devices = one("SELECT COUNT(*) FROM devices")
         recent = [dict(r) for r in conn.execute(
             "SELECT username, action, target, at FROM admin_audit ORDER BY at DESC LIMIT 10")]
-        provider = st.get(conn, "ZTV_PAYMENT_PROVIDER", "btcpay")
+        provider = st.get(conn, "ZTV_PAYMENT_PROVIDER", payments.DEFAULT_PROVIDER)
 
     stale = now - 300
     for n in nodes:
@@ -934,7 +935,7 @@ def payment_health(admin: dict = Depends(current_admin)):
     """
     import payments
     with _db() as conn:
-        name = st.get(conn, "ZTV_PAYMENT_PROVIDER", "btcpay")
+        name = st.get(conn, "ZTV_PAYMENT_PROVIDER", payments.DEFAULT_PROVIDER)
         missing = [k for k in payments.required_settings(name)
                    if not st.get(conn, k)]
     result = {"provider": name, "missing_settings": missing,
