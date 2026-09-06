@@ -513,15 +513,23 @@ check vendor-sri-pinned "All vendored scripts have SRI integrity attributes" -- 
     [[ -z \"\$missing\" ]] || { echo \"vendor script without integrity attr: \$missing\"; exit 1; }
 "
 
-check canary-fresh "Warrant canary is < 14 days old" -- bash -c "
-    canary=/var/www/0trust/canary.txt
-    [[ -f \$canary ]] || { echo 'no canary at \$canary'; exit 77; }
-    age=\$((  \$(date +%s) - \$(stat -c %Y \$canary) ))
-    days=\$(( age / 86400 ))
-    if (( days > 14 )); then
-        echo \"canary is \$days days old — should be re-signed weekly\"
-        exit 1
-    fi
+# Delegated to the canary's own checker rather than re-implementing the age
+# test here. This check used to read the file's mtime, which is the bug
+# check.sh carries a comment about: rsyncing the site, reinstalling the host
+# or restoring a backup all touch the file without re-signing it, so a canary
+# months stale in content passed the audit. Two copies of the same arithmetic
+# is how a fix lands in one of them.
+CANARY_PATH="${CANARY_PATH:-/var/www/0trust/canary.txt}"
+CANARY_CHECK=""
+for _c in /opt/0trust/canary/scripts/check.sh \
+          "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/canary/scripts/check.sh"; do
+    [[ -x "$_c" ]] && { CANARY_CHECK="$_c"; break; }
+done
+
+check canary-fresh "Warrant canary is within its published signing deadline" -- bash -c "
+    [[ -f '$CANARY_PATH' ]] || { echo 'no canary at $CANARY_PATH'; exit 77; }
+    [[ -n '$CANARY_CHECK' ]] || { echo 'canary check.sh not found'; exit 77; }
+    CANARY_PATH='$CANARY_PATH' '$CANARY_CHECK'
 "
 
 # ============================================================================

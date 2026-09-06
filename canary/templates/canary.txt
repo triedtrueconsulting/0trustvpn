@@ -28,14 +28,22 @@ Issued by:        SIGNER_NAME, CTO
 
   As of ISSUED_AT, 0trust VPN has NOT:
 
-   1.  Received any National Security Letters (NSLs) under
-       18 U.S.C. § 2709, or equivalent secret legal demands
-       under any other jurisdiction in which 0trust operates.
+   1.  Received any demand under the Swiss Federal Act on the
+       Surveillance of Postal and Telecommunications Traffic
+       (BÜPF / LSCPT) or its implementing ordinance (VÜPF),
+       whether served through the Dienst ÜPF or otherwise; any
+       National Security Letter (NSL) under 18 U.S.C. § 2709; or
+       any equivalent secret legal demand under the law of any
+       other jurisdiction in which 0trust is established,
+       operates, or hosts infrastructure.
 
-   2.  Received any FISA court orders under 50 U.S.C. § 1801 et seq.,
-       including any orders requiring the operator to assist in
-       wiretapping, decryption, or the modification of software
-       or infrastructure.
+   2.  Received any order, request or obligation under the Swiss
+       Intelligence Service Act (NDG / LRens), including any
+       cable-intelligence measure; any FISA court order under
+       50 U.S.C. § 1801 et seq.; or any comparable order under
+       Icelandic or Romanian law, requiring the operator to
+       assist in wiretapping, decryption, or the modification of
+       software or infrastructure.
 
    3.  Received any gag orders, secrecy orders, or non-disclosure
        directives that would prevent the operator from disclosing
