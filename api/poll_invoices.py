@@ -98,6 +98,8 @@ def main() -> int:
         (now - INVOICE_TTL_SECS, MAX_PER_RUN)).fetchall()
 
     settled = checked = 0
+    # Per coin, so one broken backend cannot hide behind another working one.
+    attempted, succeeded, failures = {}, {}, {}
     for inv in rows:
         # Atomic units per coin. This was hardcoded to 1e8, which is right for
         # Bitcoin and Zcash and wrong by four orders of magnitude for Monero:
@@ -114,6 +116,7 @@ def main() -> int:
         except (TypeError, ValueError):
             log.warning("invoice %s has an unreadable amount", inv["id"])
             continue
+        attempted[coin] = attempted.get(coin, 0) + 1
         try:
             result = prov.check(inv["payment_address"], atomic, coin=coin,
                                 ref=inv["derivation_index"])
@@ -121,8 +124,10 @@ def main() -> int:
             # One unreachable explorer must not stop the rest of the batch,
             # and must not look like "nobody has paid".
             log.warning("chain check failed for %s (%s): %s", inv["id"], coin, e)
+            failures.setdefault(coin, str(e)[:200])
             continue
         checked += 1
+        succeeded[coin] = succeeded.get(coin, 0) + 1
         if result["status"] != payments.SETTLED:
             continue
         conn.execute("BEGIN IMMEDIATE")
@@ -137,25 +142,50 @@ def main() -> int:
             conn.execute("ROLLBACK")
             raise
 
-    if checked == 0 and rows:
-        # Every check failed. Silence here would look exactly like "no
-        # customers are paying", which is the most expensive thing for an
-        # operator not to be told.
+    # A coin whose every check failed is not crediting, and saying nothing
+    # about it looks exactly like "nobody is paying in that coin" — the most
+    # expensive thing for an operator not to be told. This used to fire only
+    # when the WHOLE batch failed, so a working Bitcoin explorer masked a
+    # broken Zcash one indefinitely.
+    #
+    # Alerts fire on transitions, not states: the subject is the coin, so each
+    # backend gets its own edge rather than one drowning out the others.
+    dead = sorted(c for c, n in attempted.items() if n and not succeeded.get(c))
+    if dead:
         try:
             conn.execute("BEGIN IMMEDIATE")
-            prior = conn.execute(
-                "SELECT kind FROM ops_events WHERE kind LIKE 'payments.%' "
-                "ORDER BY id DESC LIMIT 1").fetchone()
-            if prior is None or prior["kind"] != "payments.explorer_down":
+            for coin in dead:
+                prior = conn.execute(
+                    "SELECT kind FROM ops_events WHERE subject = ? "
+                    "AND kind LIKE 'payments.%' ORDER BY id DESC LIMIT 1",
+                    (coin,)).fetchone()
+                if prior is not None and prior["kind"] == "payments.explorer_down":
+                    continue
                 ops_alerts.record(
-                    conn, "payments.explorer_down", "critical", "watch",
-                    f"could not reach the block explorer for any of "
-                    f"{len(rows)} pending invoice(s) — payments are not "
-                    f"being credited")
+                    conn, "payments.explorer_down", "critical", coin,
+                    f"every {coin} chain check failed across "
+                    f"{attempted[coin]} pending invoice(s) — {coin} payments "
+                    f"are not being credited: {failures.get(coin, 'unknown')}")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
-    elif settled or checked:
+    for coin, n in sorted(succeeded.items()):
+        # The recovery edge, so a resolved outage stops looking like an open
+        # one on the dashboard.
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            prior = conn.execute(
+                "SELECT kind FROM ops_events WHERE subject = ? "
+                "AND kind LIKE 'payments.%' ORDER BY id DESC LIMIT 1",
+                (coin,)).fetchone()
+            if prior is not None and prior["kind"] == "payments.explorer_down":
+                ops_alerts.record(
+                    conn, "payments.explorer_ok", "info", coin,
+                    f"{coin} chain checks are succeeding again")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+    if settled or checked:
         log.info("checked %d pending invoice(s), settled %d", checked, settled)
 
     conn.close()
