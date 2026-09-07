@@ -521,6 +521,29 @@ try:
         check(f"sysctl conf always sets ipv4 forwarding (v6={want6})",
               "net.ipv4.ip_forward=1" in body, body)
 
+    print("\n[6d] the installer proves the control plane before claiming it")
+    # Same non-evidence as the VPN claim: `systemctl enable --now` returning 0
+    # means systemd accepted the unit, not that uvicorn bound a port or that
+    # main.py imported. This printed a green line and then a list of URLs
+    # regardless, so an operator whose API died on a bad env file or a missing
+    # module got cheerful links to nothing.
+    src_v = open(INSTALL).read()
+    check("the install curls the API before saying it is up",
+          "/api/v1/status/public" in src_v and "API_OK" in src_v,
+          "nothing verifies that 0trust-api actually answers")
+    check("and curls the site through nginx",
+          "WEB_OK" in src_v, "nothing verifies nginx serves anything")
+    check("a failure is reported with the command to diagnose it",
+          "journalctl -u 0trust-api" in src_v, src_v[-200:])
+    check("the summary tells the operator when something did not come up",
+          "INSTALL_DEGRADED" in src_v and "Not everything came up" in src_v,
+          "a degraded install must not read like a clean one")
+    check("INSTALL_DEGRADED is initialised before use",
+          re.search(r'^INSTALL_DEGRADED=0', src_v, re.M) is not None,
+          "set -u would abort on an unset flag in the summary")
+    check("and it says a re-run is safe, because it is",
+          "idempotent" in src_v, "the operator needs to know nothing needs undoing")
+
     print("\n[6c] the installer proves the VPN before claiming it")
     # It printed a green "The VPN works" unconditionally. `systemctl enable
     # --now` succeeding says nothing about whether meshd created an interface,

@@ -57,6 +57,8 @@ set -euo pipefail
 
 MODE="" DOMAIN="" EMAIL=""
 DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1 SKIP_PREFLIGHT=0
+# Set when a post-install check found the box not actually serving.
+INSTALL_DEGRADED=0
 # Set when the mesh step could not bring the WireGuard interfaces up, so the
 # closing summary describes the box that exists rather than the one intended.
 VPN_BROKEN=0
@@ -1068,8 +1070,47 @@ if [[ $DRY_RUN -eq 0 ]]; then
     # remember to start a timer.
     systemctl enable --now 0trust-poll.timer
     systemctl reload nginx || systemctl restart nginx
+
+    # Prove the control plane actually answers before saying it is up.
+    #
+    # `systemctl enable --now` returning 0 means systemd accepted the unit, not
+    # that uvicorn bound a port or that main.py imported — and this printed a
+    # green line and then a list of URLs regardless. An operator whose API died
+    # on a bad env file or a missing module got a cheerful set of links to
+    # nothing. Same non-evidence as the mesh step's old "The VPN works".
+    API_OK=0 WEB_OK=0
+    for _ in $(seq 1 20); do
+        if curl -fsS --max-time 3 -o /dev/null \
+                http://127.0.0.1:8080/api/v1/status/public 2>/dev/null; then
+            API_OK=1; break
+        fi
+        sleep 1
+    done
+    for _ in $(seq 1 10); do
+        if curl -fsS --max-time 3 -o /dev/null http://127.0.0.1/ 2>/dev/null; then
+            WEB_OK=1; break
+        fi
+        sleep 1
+    done
 fi
-ok "0trust-api, 0trust-proxy, 0trust-sweep.timer, 0trust-poll.timer, nginx"
+if [[ $DRY_RUN -eq 0 ]]; then
+    if (( API_OK )); then
+        ok "0trust-api answering, sweep + poll timers armed"
+    else
+        INSTALL_DEGRADED=1
+        printf '%s[!] 0trust-api is NOT answering on 127.0.0.1:8080%s\n' "$RED" "$NC" >&2
+        note "journalctl -u 0trust-api -n 50 --no-pager"
+    fi
+    if (( WEB_OK )); then
+        ok "nginx serving the site"
+    else
+        INSTALL_DEGRADED=1
+        printf '%s[!] nginx is NOT serving on port 80%s\n' "$RED" "$NC" >&2
+        note "nginx -t; journalctl -u nginx -n 50 --no-pager"
+    fi
+else
+    ok "0trust-api, 0trust-proxy, 0trust-sweep.timer, 0trust-poll.timer, nginx"
+fi
 
 # ----------------------------------------------------------------------------
 if [[ $DO_FIREWALL -eq 1 ]]; then
@@ -1347,6 +1388,16 @@ if [[ "$MODE" == "test" ]]; then
     fi
     cat <<EOF
 ${GRN}  $HEADLINE${NC}
+EOF
+    if (( INSTALL_DEGRADED )); then cat <<EOF
+
+  ${RED}Not everything came up.${NC} The messages above name what, and the
+  journalctl line to read. Nothing here needs undoing: fix the cause and
+  re-run this installer — it is idempotent and will keep your secrets,
+  database and operator account.
+EOF
+    fi
+    cat <<EOF
 
   Site        http://$IP/
   Free trial  http://$IP/trial
