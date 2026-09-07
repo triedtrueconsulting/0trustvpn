@@ -28,6 +28,7 @@ Usage:
 """
 
 import argparse
+import re
 import hashlib
 import os
 import secrets
@@ -38,9 +39,22 @@ import time
 DB_PATH = os.environ.get("ZTV_DB_PATH", "/var/lib/0trust/0trust.db")
 
 
+def _region(value: str) -> str:
+    if not re.fullmatch(r"[a-z]{2,8}", value or ""):
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a region code: lowercase letters, 2-8 of them")
+    return value
+
+
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--region", required=True)
+    # Shape-constrained, like the API's NodeProvisionRequest. --role already
+    # had `choices`; --region was free text, and the token pins the region a
+    # node may claim — so a typo here mints a token for a region that will
+    # never route, and the mistake only surfaces when the node is up and
+    # nothing reaches it. The region also lands on the public status page.
+    p.add_argument("--region", required=True, type=_region,
+                   help="lowercase region code, 2-8 letters, e.g. zur")
     p.add_argument("--role", required=True, choices=["entry", "exit", "both"])
     p.add_argument("--ttl", type=int, default=3600,
                    help="seconds until token expires (default: 1h)")

@@ -273,13 +273,26 @@ function setRegions(regions) {
       '<span class="label">No regions reporting</span></div>';
     return;
   }
+  // Built node by node with textContent rather than interpolated into
+  // innerHTML. `region` and `state` come from mesh_nodes, and a node sets its
+  // own region when it provisions itself — so this is somebody else's string
+  // arriving on a public page. Escaping would work; not producing HTML from
+  // it at all is one fewer thing to remember.
+  const KNOWN_STATES = ['operational', 'degraded', 'down'];
   for (const r of regions) {
     const el = document.createElement('div');
     el.className = 'region';
-    el.innerHTML =
-      `<span class="small-dot ${r.state}"></span>` +
-      `<span class="code">${r.region.toUpperCase()}</span>` +
-      `<span class="label">${r.state}</span>`;
+    const dot = document.createElement('span');
+    // Class names go through a whitelist: an attribute is a second injection
+    // point even when the text is safe.
+    dot.className = 'small-dot ' + (KNOWN_STATES.includes(r.state) ? r.state : 'down');
+    const code = document.createElement('span');
+    code.className = 'code';
+    code.textContent = String(r.region || '—').toUpperCase();
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = String(r.state || 'unknown');
+    el.append(dot, code, label);
     grid.appendChild(el);
   }
 }

@@ -504,6 +504,62 @@ try:
               rr.returncode != 0 and want in (rr.stdout + rr.stderr),
               (rr.stdout + rr.stderr)[-200:])
 
+    print("\n[9] a node cannot name itself anything it likes")
+    # `region` was an unconstrained str. It is rendered on the PUBLIC status
+    # page, which built its grid by interpolating into innerHTML — somebody
+    # else's markup on our page. status.html now uses textContent, and the
+    # shape is constrained at both entry points: the API model, and
+    # mint-provision-token.py's --region, which is where an operator typo
+    # actually enters. A token pins the region a node may claim, so a typo
+    # mints a token for a region that will never route and only shows up when
+    # the node is live and nothing reaches it.
+    #
+    # The token pins (region, role), so an accepted case needs a token minted
+    # for it; a rejected one is refused by the model before the token is read.
+    for region, want, label in (
+        ("zur", 200, "a real region is accepted"),
+        ("ams", 200, "an unknown but well-formed region is still accepted"),
+        ("<img src=x onerror=alert(1)>", 422, "markup is rejected"),
+        ("ZUR", 422, "uppercase is rejected"),
+        ("z", 422, "too short is rejected"),
+        ("averylongregionname", 422, "too long is rejected"),
+        ("zur; DROP TABLE mesh_nodes", 422, "punctuation is rejected"),
+    ):
+        tok = mint(region=region if want == 200 else "zur", role="both")
+        st, b = H.call("POST", "/api/v1/node/provision",
+                       {"pubkey": H.genkey(), "public_ip": "198.51.100.40",
+                        "region": region, "role": "both"},
+                       headers={"X-Provision-Token": tok})
+        check(f"{label}: {region[:24]!r}", st == want, (st, b))
+
+    for role, want in (("both", 200), ("entry", 200), ("exit", 200),
+                       ("god", 422), ("", 422)):
+        tok = mint(region="rey", role=role if want == 200 else "both")
+        st, b = H.call("POST", "/api/v1/node/provision",
+                       {"pubkey": H.genkey(), "public_ip": "198.51.100.41",
+                        "region": "rey", "role": role},
+                       headers={"X-Provision-Token": tok})
+        check(f"role {role!r} -> {want}", st == want, (st, b))
+
+    # The tool that mints the token is the other entry point.
+    r = subprocess.run([sys.executable,
+                        os.path.join(H.REPO, "api", "mint-provision-token.py"),
+                        "--region", "BAD;rm -rf /", "--role", "both"],
+                       capture_output=True, text=True, timeout=60,
+                       env={**os.environ, "ZTV_DB_PATH": DB})
+    check("mint-provision-token.py refuses a malformed region",
+          r.returncode != 0 and "region code" in (r.stdout + r.stderr),
+          (r.returncode, (r.stdout + r.stderr)[-200:]))
+
+    # And the page that renders it must not build HTML out of it either.
+    status_html = open(os.path.join(H.REPO, "web", "status.html"),
+                       encoding="utf-8").read()
+    check("status.html does not interpolate a region into innerHTML",
+          "${r.region" not in status_html and "${r.state" not in status_html,
+          "a region code reaching innerHTML is an injection point on a public page")
+    check("it builds the grid with textContent instead",
+          "textContent" in status_html, status_html[:200])
+
 finally:
     H.shutdown()
 

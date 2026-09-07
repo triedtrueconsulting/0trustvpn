@@ -52,7 +52,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -1889,8 +1889,13 @@ def wg_rotate(
 class NodeProvisionRequest(BaseModel):
     pubkey: str
     public_ip: str
-    region: str
-    role: str = "both"
+    # Shape-constrained, not enumerated: the set of live regions comes from
+    # mesh_nodes, so a future region code has to be accepted — but a node
+    # names its own region when it registers, and that string is rendered on
+    # the PUBLIC status page. Unbounded free text there is somebody else's
+    # markup on our page, and a typo is a node nothing can ever route to.
+    region: str = Field(..., pattern=r"^[a-z]{2,8}$")
+    role: Literal["entry", "exit", "both"] = "both"
     ipv6: bool = False
     # The port the node's WireGuard interface actually listens on. This used
     # to be assumed to be 51820 and written into the endpoint regardless, so a
