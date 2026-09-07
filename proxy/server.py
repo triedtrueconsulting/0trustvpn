@@ -176,7 +176,17 @@ def fetch(url: str, method: str = "GET") -> tuple[str, bytes, str, int]:
 # ---------------------------------------------------------------------------
 
 def banner(target: str, views: int) -> str:
-    """The upsell. Shown on every proxied page; sharpens after a few views."""
+    """
+    The upsell. Shown on every proxied page; sharpens after a few views.
+
+    Everything here is inline or inside a `#ztv-banner`-scoped <style>, and the
+    container carries `all:initial`, because this bar rides on top of somebody
+    else's stylesheet and that stylesheet is hostile by assumption.
+
+    System fonts on purpose: the proxied response sets `default-src 'self'`, so
+    a webfont from anywhere else is blocked outright. The landing page has no
+    such restriction and does use the brand faces.
+    """
     host = urlsplit(target).hostname or target
     offer = trial_label()
     if views >= TRIAL_AFTER:
@@ -184,45 +194,146 @@ def banner(target: str, views: int) -> str:
             '<strong>You are reading through a shared proxy.</strong> '
             'It hides your IP from this site and nothing else — the page still '
             'sees a datacentre, your ISP still sees you connecting to us, and '
-            'this only covers the browser tab. '
-            f'<a class="ztv-cta" href="/trial?from=surf">Get {offer} of the real VPN, free</a>'
+            'this only covers the browser tab.'
         )
+        cta = f'Get {offer} of the real VPN, free'
     else:
-        pitch = (
-            f'Browsing <code>{host}</code> through 0trust. '
-            'This proxy covers this tab only. '
-            f'<a class="ztv-cta" href="/trial?from=surf">{offer} of the full VPN, free</a>'
-        )
+        pitch = (f'Browsing <code>{host}</code> through 0trust. '
+                 'This proxy covers this tab only.')
+        cta = f'{offer} of the full VPN, free'
     return f"""
-<div id="ztv-banner" style="all:initial;display:block;position:sticky;top:0;z-index:2147483647;
- background:#0c0c0a;color:#f4ede0;font:14px/1.5 ui-sans-serif,system-ui,sans-serif;
- padding:10px 14px;border-bottom:1px solid #2a2820">
-  <span style="color:#d4a574;font-weight:600">0trust</span>
-  <span style="opacity:.85;margin-left:8px">{pitch}</span>
-  <form action="{PREFIX}" method="get" style="display:inline-block;margin-left:12px">
-    <input name="url" placeholder="https://…" style="background:#161511;border:1px solid #2a2820;
-      color:#f4ede0;padding:4px 8px;border-radius:4px;width:220px;font:13px ui-monospace,monospace">
-  </form>
-  <style>#ztv-banner .ztv-cta{{color:#0c0c0a;background:#d4a574;padding:3px 10px;
-    border-radius:4px;text-decoration:none;font-weight:600;margin-left:6px}}</style>
+<div id="ztv-banner" style="all:initial;display:block;position:sticky;top:0;
+ z-index:2147483647;background:#0c0c0a;color:#f4ede0;
+ font:14px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif;
+ border-bottom:1px solid #2a2820;box-shadow:0 1px 0 rgba(212,165,116,.18),
+ 0 6px 24px -12px rgba(0,0,0,.9)">
+  <div class="ztv-row">
+    <span class="ztv-mark">0trust</span>
+    <span class="ztv-pitch">{pitch}</span>
+    <form action="{PREFIX}" method="get" class="ztv-form">
+      <input name="url" placeholder="Read another page…" aria-label="URL to read">
+    </form>
+    <a class="ztv-cta" href="/trial?from=surf">{cta}</a>
+  </div>
+  <style>
+    #ztv-banner *{{box-sizing:border-box}}
+    #ztv-banner .ztv-row{{display:flex;align-items:center;gap:14px;
+      flex-wrap:wrap;max-width:1180px;margin:0 auto;padding:10px 18px}}
+    #ztv-banner .ztv-mark{{font:600 14px/1 ui-monospace,SFMono-Regular,
+      Menlo,monospace;letter-spacing:.04em;color:#d4a574;flex:none;
+      padding-right:14px;border-right:1px solid #2a2820}}
+    #ztv-banner .ztv-pitch{{flex:1 1 22rem;min-width:0;color:#cfc7b8}}
+    #ztv-banner .ztv-pitch strong{{color:#f4ede0;font-weight:600}}
+    #ztv-banner code{{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;
+      color:#d4a574;background:#161511;border:1px solid #2a2820;
+      border-radius:4px;padding:1px 6px}}
+    #ztv-banner .ztv-form{{flex:0 1 15rem;margin:0}}
+    #ztv-banner input{{width:100%;background:#161511;color:#f4ede0;
+      border:1px solid #2a2820;border-radius:6px;padding:6px 10px;
+      font:13px ui-monospace,SFMono-Regular,Menlo,monospace;outline:none;
+      transition:border-color .15s,box-shadow .15s}}
+    #ztv-banner input::placeholder{{color:#6f6858}}
+    #ztv-banner input:focus{{border-color:#d4a574;
+      box-shadow:0 0 0 3px rgba(212,165,116,.16)}}
+    #ztv-banner .ztv-cta{{flex:none;color:#0c0c0a;background:#d4a574;
+      padding:7px 14px;border-radius:6px;text-decoration:none;
+      font-weight:600;font-size:13px;white-space:nowrap;
+      transition:background .15s,transform .15s}}
+    #ztv-banner .ztv-cta:hover{{background:#e0b689;transform:translateY(-1px)}}
+    @media (max-width:720px){{
+      #ztv-banner .ztv-row{{gap:10px;padding:9px 14px}}
+      #ztv-banner .ztv-form{{order:3;flex:1 1 100%}}
+      #ztv-banner .ztv-cta{{order:2}}
+    }}
+  </style>
 </div>"""
+
+
+# The brand faces, as the rest of the site loads them. Only ever used on the
+# proxy's OWN pages — a proxied response sets default-src 'self', which blocks
+# them, and the banner is built for that.
+FONTS = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+    'family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600'
+    '&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap">'
+)
+
+# Every face has a real fallback stack: the page has to look deliberate before
+# the webfont arrives, and stay that way if it never does.
+CSS = """
+ *{box-sizing:border-box}
+ body{background:#0c0c0a;color:#f4ede0;margin:0;
+   font:400 16px/1.65 'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif;
+   -webkit-font-smoothing:antialiased}
+ /* A single soft light source behind the hero, so the page has depth without
+    anything moving or loading. */
+ body::before{content:'';position:fixed;inset:0;pointer-events:none;
+   background:radial-gradient(60rem 32rem at 50% -14rem,
+     rgba(212,165,116,.10),transparent 70%)}
+ .wrap{position:relative;max-width:46rem;margin:0 auto;padding:5rem 1.25rem 4rem}
+ .mark{font:600 13px/1 'JetBrains Mono',ui-monospace,monospace;
+   letter-spacing:.12em;text-transform:uppercase;color:#d4a574;
+   display:block;margin-bottom:1.75rem}
+ h1{font:400 clamp(2.1rem,5.5vw,3rem)/1.12 'Instrument Serif',Georgia,serif;
+   margin:0 0 .85rem;letter-spacing:-.01em}
+ .lede{color:#a99f8d;font-size:1.05rem;margin:0 0 2.25rem;max-width:34rem}
+ /* One control, not two boxes: the button sits inside the field. */
+ .field{display:flex;align-items:center;gap:.5rem;background:#141310;
+   border:1px solid #2a2820;border-radius:10px;padding:.45rem .45rem .45rem .9rem;
+   transition:border-color .15s,box-shadow .15s}
+ .field:focus-within{border-color:#d4a574;
+   box-shadow:0 0 0 4px rgba(212,165,116,.14)}
+ .field input{flex:1;min-width:0;background:none;border:0;outline:none;
+   color:#f4ede0;font:15px/1.4 'JetBrains Mono',ui-monospace,monospace;
+   padding:.55rem 0}
+ .field input::placeholder{color:#6f6858}
+ .field button{flex:none;background:#d4a574;color:#0c0c0a;border:0;
+   border-radius:7px;cursor:pointer;padding:.6rem 1.35rem;
+   font:600 15px/1 'IBM Plex Sans',system-ui,sans-serif;
+   transition:background .15s,transform .15s}
+ .field button:hover{background:#e0b689;transform:translateY(-1px)}
+ .facts{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+   background:#2a2820;border:1px solid #2a2820;border-radius:10px;
+   overflow:hidden;margin:1.5rem 0 2.5rem}
+ .facts div{background:#0f0e0c;padding:.95rem 1rem}
+ .facts dt{font:500 11px/1 'JetBrains Mono',ui-monospace,monospace;
+   letter-spacing:.1em;text-transform:uppercase;color:#7d8f5a;margin-bottom:.4rem}
+ .facts dd{margin:0;font-size:.9rem;color:#cfc7b8}
+ /* The honest part. Given its own frame in the warning colour, because
+    burying it would be the one thing this page must not do. */
+ .limits{border:1px solid #2a2820;border-left:2px solid #c44536;
+   border-radius:8px;background:#100e0c;padding:1.15rem 1.25rem;margin:0 0 2rem}
+ .limits h2{font:600 12px/1 'JetBrains Mono',ui-monospace,monospace;
+   letter-spacing:.1em;text-transform:uppercase;color:#c44536;margin:0 0 .6rem}
+ .limits p{margin:0;color:#a99f8d;font-size:.94rem}
+ .limits strong{color:#f4ede0}
+ .cta{display:inline-block;margin-top:1.1rem;background:none;color:#d4a574;
+   border:1px solid #d4a574;border-radius:7px;padding:.6rem 1.15rem;
+   text-decoration:none;font-weight:600;font-size:.94rem;
+   transition:background .15s,color .15s}
+ .cta:hover{background:#d4a574;color:#0c0c0a}
+ a{color:#d4a574}
+ code{font-family:'JetBrains Mono',ui-monospace,monospace;color:#d4a574}
+ .note{color:#8a8172;font-size:.9rem}
+ h1+.note{margin-top:0}
+ @media (max-width:620px){
+   .wrap{padding:3.25rem 1.1rem 3rem}
+   .facts{grid-template-columns:1fr}
+   .field{flex-wrap:wrap}
+   .field button{width:100%}
+ }
+"""
 
 
 def page(title: str, body: str, status: int = 200) -> HTMLResponse:
     return HTMLResponse(status_code=status, content=f"""<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} — 0trust</title>
-<style>
- body{{background:#0c0c0a;color:#f4ede0;font:16px/1.6 ui-sans-serif,system-ui,sans-serif;
-   max-width:44rem;margin:0 auto;padding:3rem 1.25rem}}
- a{{color:#d4a574}} code{{font-family:ui-monospace,monospace;color:#d4a574}}
- h1{{font-size:1.5rem;margin:0 0 1rem}}
- input,button{{font:inherit;padding:.6rem .8rem;border-radius:6px;border:1px solid #2a2820}}
- input{{background:#161511;color:#f4ede0;width:min(28rem,100%)}}
- button{{background:#d4a574;color:#0c0c0a;font-weight:600;border:0;cursor:pointer}}
- .note{{color:#8a8172;font-size:.9rem}}
-</style>
-{body}""")
+{FONTS}
+<style>{CSS}</style>
+<div class="wrap">{body}</div>""")
 
 
 # ---------------------------------------------------------------------------
@@ -246,16 +357,33 @@ async def surf(request: Request):
     raw = request.query_params.get("url", "").strip()
     if not raw:
         return page("Surf", f"""
+<span class="mark">0trust &middot; surf</span>
 <h1>Read a page through 0trust</h1>
+<p class="lede">Paste a link. We fetch it, strip the scripts, and hand you the
+text — so the site sees our egress instead of your address.</p>
+
 <form action="{PREFIX}" method="get">
-  <input name="url" placeholder="https://example.com" autofocus>
-  <button type="submit">Go</button>
+  <div class="field">
+    <input name="url" placeholder="https://example.com/article" autofocus
+           aria-label="Address to read">
+    <button type="submit">Read it</button>
+  </div>
 </form>
-<p class="note">Public pages only, 5 MB max, no downloads or form submissions.
-The site you visit sees our egress, not your address.</p>
-<p class="note"><strong>This is not the VPN.</strong> It covers one browser tab.
-Your ISP still sees you connecting to us, and nothing outside this tab is
-affected. <a href="/trial?from=surf">Get {trial_label()} of the real thing, free.</a></p>""")
+
+<dl class="facts">
+  <div><dt>Fetches</dt><dd>Public pages, GET only</dd></div>
+  <div><dt>Limit</dt><dd>5&nbsp;MB, no downloads</dd></div>
+  <div><dt>Scripts</dt><dd>Removed before render</dd></div>
+</dl>
+
+<section class="limits">
+  <h2>What this is not</h2>
+  <p><strong>This is not the VPN.</strong> It covers one browser tab. Your ISP
+  still sees you connecting to us, the page you read still lands on a
+  datacentre address shared with everyone else using it, and nothing outside
+  this tab is affected.</p>
+  <a class="cta" href="/trial?from=surf">Get {trial_label()} of the real thing, free</a>
+</section>""")
 
     if request.method not in ALLOWED_METHODS:
         return page("Not allowed", "<h1>Only GET is proxied</h1>", 405)
