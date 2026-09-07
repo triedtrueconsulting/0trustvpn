@@ -3,9 +3,18 @@
 One script, three modes. All idempotent — re-run to pick up new code or to
 repair a half-finished run.
 
+Ubuntu 24.04, root or sudo, 2 GB free disk. Nothing else is assumed — the
+installer brings its own packages and refuses early if the box cannot host
+what you asked for.
+
 ```bash
-git clone <your-repo> /opt/0trust-src
+sudo apt-get update && sudo apt-get install -y git
+sudo git clone https://github.com/triedtrueconsulting/0trustvpn /opt/0trust-src
 cd /opt/0trust-src
+
+# 0. See exactly what a run would do, changing nothing.
+sudo ./scripts/install.sh --dry-run --mode production \
+     --domain 0trustvpn.com --email you@example.com
 
 # 1. Kick the tyres: no domain, no TLS, serves on the box's IP
 sudo ./scripts/install.sh --mode test
@@ -21,7 +30,31 @@ sudo ./scripts/install.sh --mode node \
 ```
 
 `--dry-run` renders everything and touches nothing, which is the safe way to
-see what a run would do before letting it near a live box.
+see what a run would do before letting it near a live box. It still runs the
+host checks and reports what it finds; it just does not refuse.
+
+## Before it changes anything
+
+A host preflight runs first, so a box that cannot host what you asked for
+costs five seconds rather than a half-finished install:
+
+| check | why |
+| --- | --- |
+| 2 GB free on `/` | the venv, packages and site need well under a gigabyte; this catches the VPS that is already full |
+| ports 80/443 free | another web server already bound means this install will not be reachable. Our own nginx on a re-run is fine |
+| the domain resolves | Let's Encrypt has to reach it by name, and certbot runs LAST — discovering it there means everything else is already written. Resolving somewhere else is a warning, not a refusal: behind NAT or a proxy that is legitimate, so it prints both sides and lets you judge |
+| the kernel can make a WireGuard interface | fatal for `--mode node`, a warning for `--mode test`. Common to fail on LXC and OpenVZ VPSes; a node needs a KVM host |
+
+`--skip-preflight` opts out.
+
+## Before it says it worked
+
+`systemctl enable --now` returning 0 means systemd accepted the unit, not that
+anything is listening. So the installer curls `/api/v1/status/public` and the
+site through nginx, and — in test mode with the mesh — checks each WireGuard
+interface actually exists, before the summary claims any of it. If something
+did not come up it says so, names the `journalctl` line to read, and reminds
+you that a re-run is safe.
 
 `--swap 4G` adds a swapfile, enables it, puts it in `/etc/fstab` and sets
 `vm.swappiness=10` so a database box reaches for it late. Worth it on a 2GB
