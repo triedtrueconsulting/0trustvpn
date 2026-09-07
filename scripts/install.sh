@@ -48,12 +48,18 @@
 #                            REFUSED on a node: swap can page the WireGuard
 #                            private key to persistent disk, which is the one
 #                            thing the RAM-only design exists to prevent.
+#   --skip-preflight         skip the host checks (disk, ports, DNS,
+#                            WireGuard support) that run before anything
+#                            is changed
 #   --dry-run                render everything, touch no system state
 # ============================================================================
 set -euo pipefail
 
 MODE="" DOMAIN="" EMAIL=""
-DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1
+DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1 SKIP_PREFLIGHT=0
+# Set when the mesh step could not bring the WireGuard interfaces up, so the
+# closing summary describes the box that exists rather than the one intended.
+VPN_BROKEN=0
 CONTROL_URL="" PROVISION_TOKEN="" REGION="" NODE_ROLE="both" WG_PORT="51820"
 SWAP_SIZE=""
 
@@ -91,6 +97,7 @@ while [[ $# -gt 0 ]]; do
         --domain) DOMAIN="${2:-}"; shift 2 ;;
         --email) EMAIL="${2:-}"; shift 2 ;;
         --no-firewall) DO_FIREWALL=0; shift ;;
+        --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         --no-ssh-hardening) DO_SSH=0; shift ;;
         --no-vpn) DO_VPN=0; shift ;;
         --wallet) WALLET_BTC="${2:-}"; shift 2 ;;
@@ -179,6 +186,111 @@ printf '%s  0trust installer — %s mode%s\n' "$GRN" "$MODE" "$NC"
 [[ -n "$DOMAIN" ]] && note "domain: $DOMAIN"
 [[ $DRY_RUN -eq 1 ]] && note "DRY RUN — nothing will be changed"
 echo
+
+# ============================================================================
+# HOST PREFLIGHT — everything that makes an install fail, checked BEFORE the
+# install starts changing the box
+# ============================================================================
+# Every one of these used to be discovered part-way through: a domain with no
+# DNS record surfaced at certbot, with packages, the service user, secrets,
+# the database and nginx already written; port 80 held by another web server
+# surfaced at `nginx -t`; a full disk surfaced wherever it ran out. A failure
+# that costs five seconds and changes nothing is a different thing from one
+# that leaves a half-built box behind.
+#
+# --skip-preflight for an operator who knows better than this list.
+preflight_host() {
+    local fatal=0
+
+    # Disk. The venv, packages and website need well under a gigabyte; two is
+    # a comfortable floor and catches the 10GB VPS that is already full.
+    local avail_mb
+    avail_mb=$(df -Pm / | awk 'NR==2 {print $4}')
+    if [[ -n "$avail_mb" ]] && (( avail_mb < 2048 )); then
+        printf '%s[!] only %s MB free on / — need ~2 GB%s\n' "$RED" "$avail_mb" "$NC" >&2
+        fatal=1
+    fi
+
+    # Ports. A re-run finds OUR nginx holding 80/443, which is fine; anything
+    # else means a web server this installer is about to fight with.
+    if [[ "$MODE" != "node" ]]; then
+        local p holder
+        for p in 80 443; do
+            [[ "$MODE" == "test" && "$p" == "443" ]] && continue
+            # awk, not `head -1`: head exits after the first line, ss gets
+            # SIGPIPE, and `set -o pipefail` turns that into a failed
+            # assignment. awk consumes the whole stream. (validate.sh's
+            # pipefail-head check caught this in exactly this code.)
+            holder=$(ss -lntpH "sport = :$p" 2>/dev/null | awk 'NR==1' || true)
+            if [[ -n "$holder" && "$holder" != *nginx* ]]; then
+                printf '%s[!] port %s is already held by something that is not nginx:%s\n' \
+                       "$RED" "$p" "$NC" >&2
+                note "$holder"
+                note "stop it first, or this install will not be reachable"
+                fatal=1
+            fi
+        done
+    fi
+
+    # DNS. The single most common production install failure, and the most
+    # expensive to discover late, because certbot runs last.
+    if [[ "$MODE" == "production" && -n "$DOMAIN" ]]; then
+        local resolved mine
+        # `|| true` on both: getent exits 2 for a name that does not resolve,
+        # and under `set -o pipefail` that status propagates out of the
+        # command substitution and `set -e` kills the script — silently, with
+        # exit 2 and no message, on exactly the input this check exists to
+        # report. Same family as the pipefail-head class in CLAUDE.md.
+        resolved=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u || true)
+        mine=$(ip -4 -o addr show scope global 2>/dev/null \
+               | awk '{split($4,a,"/"); print a[1]}' | sort -u || true)
+        if [[ -z "$resolved" ]]; then
+            printf '%s[!] %s does not resolve%s\n' "$RED" "$DOMAIN" "$NC" >&2
+            note "Let's Encrypt has to reach it by name. Add an A record first."
+            fatal=1
+        elif [[ -n "$mine" ]] && ! comm -12 <(echo "$resolved") <(echo "$mine") | grep -q .; then
+            # Behind a NAT or a proxy this is legitimate, so warn rather than
+            # refuse — but say it, because it is usually a stale A record.
+            note "$DOMAIN resolves to: $(echo "$resolved" | tr '\n' ' ')"
+            note "this box has:        $(echo "$mine" | tr '\n' ' ')"
+            note "certbot needs the name to reach THIS box on port 80."
+        fi
+    fi
+
+    # WireGuard. Not fatal for the control plane, which does not need it, but
+    # the operator should hear it now rather than after the install claims a
+    # mesh it could not build.
+    if [[ "$MODE" == "node" || ( "$MODE" == "test" && $DO_VPN -eq 1 ) ]]; then
+        if ! ip link add dev ztvwgprobe type wireguard >/dev/null 2>&1; then
+            printf '%s[!] this kernel cannot create a WireGuard interface%s\n' "$RED" "$NC" >&2
+            note "common on LXC and OpenVZ VPSes. A node needs a KVM host."
+            [[ "$MODE" == "node" ]] && fatal=1
+            [[ "$MODE" == "test" ]] && note "the control plane will still install; the tunnels will not come up"
+        else
+            ip link del ztvwgprobe >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # A dry run exists to show what WOULD happen, including on a box that
+    # cannot host this role. Report everything, refuse nothing: there is no
+    # state to protect, and an operator rendering configs on a laptop should
+    # not be blocked by that laptop's kernel.
+    if (( fatal != 0 )); then
+        if [[ $DRY_RUN -eq 1 ]]; then
+            note "(dry run: a real install would stop here)"
+            return 1
+        fi
+        die "host preflight failed — nothing has been changed"
+    fi
+    return 0
+}
+
+if [[ $SKIP_PREFLIGHT -eq 0 ]]; then
+    # `ok` only when it really passed: saying "preflight passed" one line
+    # under "a real install would stop here" is the same kind of contradiction
+    # this whole pass exists to remove.
+    if preflight_host; then ok "host preflight passed"; fi
+fi
 
 # ============================================================================
 # NODE MODE — a fresh VPS becomes a RAM-only mesh node and joins the mesh
@@ -780,6 +892,39 @@ TMP_SITE="$(mktemp)"
 TMP_ZONES="$(mktemp)"
 render_zones > "$TMP_ZONES"
 
+# Emit `listen [::]` only where there is an IPv6 stack to bind it to.
+#
+# `nginx -t` does not merely parse — it binds every listener, so on a host
+# with IPv6 disabled it fails with "Address family not supported by protocol"
+# and the installer died right here, after having already installed packages,
+# created the service user, written secrets and initialised the database. A
+# half-installed box, on a plain Ubuntu 24.04 VPS whose provider simply does
+# not hand out IPv6. The emulation suite worked around exactly this when it
+# wrapped nginx -t, which is how the product bug stayed hidden behind a green
+# test.
+#
+# ZTV_NGINX_IPV6=0 forces it off, 1 forces it on (for a host where the stack
+# appears after boot).
+if [[ -n "${ZTV_NGINX_IPV6:-}" ]]; then
+    HAS_IPV6="$ZTV_NGINX_IPV6"
+elif [[ -d /proc/sys/net/ipv6 ]] \
+     && [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || echo 1)" == "0" ]]; then
+    HAS_IPV6=1
+else
+    HAS_IPV6=0
+fi
+
+listen6() {   # listen6 <suffix...>  — a `listen [::]:...` line, or nothing
+    (( HAS_IPV6 )) && printf '    listen [::]:%s;' "$*"
+    return 0
+}
+
+# Precomputed because these sit inside heredocs, where a function call cannot.
+# An empty value leaves a blank line, which nginx ignores.
+L6_80_DEFAULT="$(listen6 "80 default_server")"
+L6_80="$(listen6 80)"
+L6_443="$(listen6 "443 ssl http2")"
+
 if [[ "$MODE" == "test" ]]; then
     {
         echo "# 0trust — TEST deployment. Plain HTTP on the box's IP."
@@ -789,7 +934,7 @@ if [[ "$MODE" == "test" ]]; then
         cat <<EOF
 server {
     listen 80 default_server;
-    listen [::]:80 default_server;
+$L6_80_DEFAULT
     server_name _;
     root $WEBROOT;
     index index.html;
@@ -813,7 +958,7 @@ else
         cat <<EOF
 server {
     listen 80;
-    listen [::]:80;
+$L6_80
     server_name $DOMAIN www.$DOMAIN;
     location /.well-known/acme-challenge/ { root /var/www/acme; }
     location / { return 301 https://\$host\$request_uri; }
@@ -825,7 +970,7 @@ server {
     # start. 1.25+ still accepts this form, so one config serves both.
     # (No backticks in this heredoc — it is unquoted, so they would run.)
     listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+$L6_443
     server_name $DOMAIN www.$DOMAIN;
     root $WEBROOT;
     index index.html;
@@ -1102,8 +1247,43 @@ if [[ $DRY_RUN -eq 0 ]]; then
         systemctl restart dnsmasq >/dev/null 2>&1 && break
         sleep 2
     done
+
+    # Prove the interfaces exist before anything says the VPN works.
+    #
+    # This printed a green "The VPN works" unconditionally, because
+    # `systemctl enable --now` succeeding is not evidence that meshd created
+    # anything — and on a host with no WireGuard kernel module (plenty of
+    # LXC and OpenVZ VPSes) it creates nothing at all. The operator was told
+    # in green that three tunnels were carrying traffic on a box that could
+    # not make one. It is the same standard `0trust connect` already holds
+    # itself to: wg-quick's exit code means nothing, so the client waits for
+    # a handshake before claiming a tunnel.
+    #
+    # meshd builds the interface on its first poll, so give it a moment.
+    VPN_UP=() VPN_DOWN=()
+    for spec in "${LOCAL_NODES[@]}"; do
+        IFS=: read -r _ niface _ _ <<<"$spec"
+        up=0
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if ip link show "$niface" >/dev/null 2>&1; then up=1; break; fi
+            sleep 2
+        done
+        if (( up )); then VPN_UP+=("$niface"); else VPN_DOWN+=("$niface"); fi
+    done
 fi
-if [[ $DRY_RUN -eq 0 ]]; then ok "meshd running for all three nodes"; fi
+if [[ $DRY_RUN -eq 0 ]]; then
+    if (( ${#VPN_DOWN[@]} == 0 )); then
+        ok "meshd running, ${#VPN_UP[@]} WireGuard interface(s) up"
+    else
+        VPN_BROKEN=1
+        printf '%s[!] WireGuard interface(s) NOT up: %s%s\n' \
+               "$RED" "${VPN_DOWN[*]}" "$NC" >&2
+        note "meshd could not create them. The usual cause is a kernel with no"
+        note "WireGuard support — check with: ip link add dev wgtest type wireguard"
+        note "Diagnose with: journalctl -u 0trust-meshd@${VPN_DOWN[0]} -n 50"
+        note "The control plane and website are fine; only the tunnels are not."
+    fi
+fi
 fi   # DO_VPN
 
 # ----------------------------------------------------------------------------
@@ -1175,7 +1355,22 @@ ${GRN}  $HEADLINE${NC}
   Status      http://$IP/api/v1/status/public
 
 EOF
-    if [[ $DO_VPN -eq 1 ]]; then cat <<EOF
+    if [[ $DO_VPN -eq 1 && $VPN_BROKEN -eq 1 ]]; then cat <<EOF
+  ${RED}The VPN is NOT up.${NC} The control plane, website, admin dashboard
+  and /surf proxy all work — but meshd could not create the WireGuard
+  interfaces, so \`0trust connect\` will hand out a config that cannot carry
+  traffic.
+
+  The usual cause is a kernel without WireGuard support, which is common on
+  LXC and OpenVZ VPSes. Check it directly:
+    ip link add dev wgtest type wireguard && ip link del wgtest
+  If that fails, this box cannot run a node; use a KVM VPS instead.
+  Otherwise: journalctl -u '0trust-meshd@*' -n 50
+
+  Re-run this installer once the kernel can do it — nothing here needs undoing.
+
+EOF
+    elif [[ $DO_VPN -eq 1 ]]; then cat <<EOF
   ${GRN}The VPN works.${NC} Three node identities run on this box:
     zur-01  wg0  udp 51820      rey-01  wg1  udp 51821
     buc-01  wg2  udp 51822      multi-hop entry ports udp 52000-59999

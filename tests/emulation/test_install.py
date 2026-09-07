@@ -118,13 +118,48 @@ try:
         check(f"malformed domain rejected: {bad!r}", rc != 0, out[-160:])
 
     print("\n[2] dry runs are clean and change nothing")
+
+    def system_state():
+        """
+        Fingerprint the system paths --dry-run must not touch.
+
+        This asserted `not os.path.exists("/etc/0trust/api.env")`, which is a
+        different claim: it says the product was never installed here, not
+        that the dry run left it alone. It fails on any box that HAS 0trust —
+        including the machine an operator would actually re-run the installer
+        on, and including a test box where the suite had just installed it for
+        real. Comparing before and after tests the property that matters and
+        works anywhere.
+        """
+        import hashlib
+        watched = ["/etc/0trust", "/etc/nginx/sites-enabled",
+                   "/etc/systemd/system", "/etc/sysctl.d", "/var/lib/0trust"]
+        state = {}
+        for root in watched:
+            for dirpath, _, names in os.walk(root):
+                for n in names:
+                    f = os.path.join(dirpath, n)
+                    try:
+                        st = os.stat(f)
+                        with open(f, "rb") as fh:
+                            digest = hashlib.sha256(fh.read()).hexdigest()[:16]
+                        state[f] = (st.st_mtime_ns, st.st_size, digest)
+                    except OSError:
+                        state[f] = "unreadable"
+        return state
+
+    before = system_state()
     rc, out = run_installer("--mode", "test")
     check("test dry run exits 0", rc == 0, out[-400:])
     check("test mode warns about the missing TLS", "No TLS" in out, out[-500:])
     rc, out = run_installer("--mode", "production", "--domain", "example.com",
                             "--email", "a@b.c")
     check("production dry run exits 0", rc == 0, out[-400:])
-    check("dry run wrote nothing to /etc", not os.path.exists("/etc/0trust/api.env"))
+    after = system_state()
+    changed = sorted(set(before) ^ set(after)) + \
+              sorted(f for f in set(before) & set(after) if before[f] != after[f])
+    check("dry runs changed nothing under /etc or /var/lib", not changed,
+          f"--dry-run touched: {changed[:10]}")
 
     print("\n[2b] swap: offered on the control plane, refused on a node")
     # A 2GB control-plane VPS runs nginx, uvicorn, the proxy and SQLite, and
@@ -391,6 +426,122 @@ try:
     check("--no-vpn admits the tunnels are fake",
           "placeholder" in out and "cannot" in out, out[-700:])
     check("--no-vpn does not claim the VPN works", "The VPN works" not in out)
+
+    print("\n[1c] the host is checked before anything is changed")
+    # Every one of these used to surface part-way through: an unresolvable
+    # domain at certbot, with packages, the service user, secrets, the
+    # database and nginx already written; a busy port 80 at `nginx -t`. A
+    # failure that costs five seconds and changes nothing is a different
+    # thing from one that leaves a half-built box behind.
+    # A dry run reports and continues — there is no state to protect, and an
+    # operator rendering configs on a laptop should not be blocked by that
+    # laptop. What matters is that the diagnostic appears, and that it says a
+    # real install would stop.
+    rc, out = run_installer("--mode", "production",
+                            "--domain", "nope.invalid", "--email", "a@b.c")
+    check("an unresolvable domain is reported", "does not resolve" in out,
+          out[-400:])
+    check("and the dry run says a real install would stop",
+          "a real install would stop here" in out, out[-400:])
+    check("preflight does not then claim to have passed",
+          "host preflight passed" not in out,
+          "saying 'passed' under 'would stop here' is a contradiction")
+    # The bug this check itself had: getent exits 2 for a name that does not
+    # resolve, `set -o pipefail` propagates that out of the command
+    # substitution, and `set -e` then killed the installer with a bare exit 2
+    # and no message at all — on precisely the input the check exists to
+    # report.
+    check("the failure is reported, not a silent non-zero exit",
+          "[!]" in out, f"exit {rc} with no diagnostic:\n{out[-300:]}")
+
+    rc, out = run_installer("--mode", "production", "--domain", "example.com",
+                            "--email", "a@b.c")
+    check("a domain resolving elsewhere warns but proceeds", rc == 0,
+          "behind NAT or a proxy this is legitimate; refusing would be wrong")
+    check("and prints both sides so the operator can compare",
+          "resolves to" in out and "this box has" in out, out[-400:])
+
+    rc, out = run_installer("--skip-preflight", "--mode", "production",
+                            "--domain", "nope.invalid", "--email", "a@b.c")
+    check("--skip-preflight is an escape hatch that works", rc == 0, out[-300:])
+    check("and it really skips", "does not resolve" not in out, out[-300:])
+
+    src_pf = open(INSTALL).read()
+    for want, why in (("df -Pm", "disk space is checked"),
+                      ("ss -lntpH", "a busy port 80/443 is caught early"),
+                      ("getent ahostsv4", "DNS is checked before certbot runs"),
+                      ("type wireguard", "kernel WireGuard support is probed")):
+        check(why, want in src_pf, f"{want!r} missing from install.sh")
+
+    print("\n[6a] a host with no IPv6 can still be installed")
+    # Three separate aborts, all the same assumption: that every Ubuntu 24.04
+    # box has an IPv6 stack. Plenty do not, and each failure landed part-way
+    # through — after packages, the service user, secrets and the database.
+    #
+    # Found by running the installer for real rather than by reading it, and
+    # the emulation suite had actually WORKED AROUND the first one (nginx -t
+    # binds, so nginx_check wraps it), which is how a green test sat on top of
+    # a broken install for so long.
+    for want6 in ("0", "1"):
+        out = os.path.join(TMP, f"render-v6-{want6}")
+        os.makedirs(out, exist_ok=True)
+        env = {**os.environ, "TERM": "dumb", "ZTV_RENDER_TO": out,
+               "ZTV_NGINX_IPV6": want6}
+        r = subprocess.run(["bash", INSTALL, "--dry-run", "--mode", "test"],
+                           capture_output=True, text=True, timeout=180, env=env)
+        site = os.path.join(out, "site.conf")
+        check(f"dry run renders with ZTV_NGINX_IPV6={want6}",
+              r.returncode == 0 and os.path.exists(site),
+              (r.stdout + r.stderr)[-400:])
+        if os.path.exists(site):
+            conf = open(site).read()
+            has6 = "listen [::]" in conf
+            check(f"IPv6 listeners are {'present' if want6=='1' else 'absent'} "
+                  f"when the host {'has' if want6=='1' else 'has no'} IPv6",
+                  has6 == (want6 == "1"),
+                  "nginx -t BINDS every listener, so a stray `listen [::]` is "
+                  "not a cosmetic issue — it aborts the install with "
+                  "'Address family not supported by protocol'")
+            check(f"IPv4 listeners are always present (v6={want6})",
+                  "listen 80" in conf, conf[:300])
+
+    # The sysctl file goes to /etc/sysctl.d, so a key the kernel does not have
+    # fails `sysctl -p` at install time AND on every boot afterwards.
+    runtime = os.path.join(H.REPO, "scripts", "node-runtime.sh")
+    for want6 in ("0", "1"):
+        r = subprocess.run(["bash", "-c", f"source {runtime!r}; ztv_sysctl_conf"],
+                           capture_output=True, text=True, timeout=60,
+                           env={**os.environ, "ZTV_HAS_IPV6": want6})
+        body = r.stdout
+        active6 = any(l.strip().startswith("net.ipv6.")
+                      for l in body.splitlines())
+        check(f"sysctl conf sets ipv6 forwarding only with IPv6 (v6={want6})",
+              active6 == (want6 == "1"),
+              f"emitted:\n{body}")
+        check(f"sysctl conf always sets ipv4 forwarding (v6={want6})",
+              "net.ipv4.ip_forward=1" in body, body)
+
+    print("\n[6c] the installer proves the VPN before claiming it")
+    # It printed a green "The VPN works" unconditionally. `systemctl enable
+    # --now` succeeding says nothing about whether meshd created an interface,
+    # and on a kernel without WireGuard — ordinary on LXC and OpenVZ VPSes —
+    # it creates none. The operator was told three tunnels were carrying
+    # traffic on a box that could not make one. `0trust connect` already holds
+    # itself to the opposite standard, waiting for a handshake before it
+    # claims anything.
+    src = open(INSTALL).read()
+    check("the mesh step probes for the interface it just asked for",
+          "ip link show" in src,
+          "nothing checks that meshd actually created wg0")
+    check("the summary is conditional on that probe",
+          "VPN_BROKEN" in src and "$DO_VPN -eq 1 && $VPN_BROKEN -eq 1" in src,
+          "'The VPN works' is printed without consulting the probe")
+    check("and the failure path names the usual cause",
+          "type wireguard" in src and ("LXC" in src or "OpenVZ" in src),
+          "an operator on a container VPS needs to be told why, not just that")
+    check("VPN_BROKEN is initialised before use",
+          re.search(r'^VPN_BROKEN=0', src, re.M) is not None,
+          "set -u would abort on an unset flag in the summary")
 
     print("\n[6b] the api tree the installer places can actually import")
     # The suite runs the control plane out of the source checkout, where every

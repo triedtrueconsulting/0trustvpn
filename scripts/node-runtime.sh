@@ -47,10 +47,35 @@ ZTV_DNS_UPSTREAM="${ZTV_DNS_UPSTREAM:-9.9.9.9 149.112.112.112}"
 
 
 # --- Kernel ----------------------------------------------------------------
+# Emit the IPv6 line only where there is an IPv6 stack.
+#
+# `sysctl -p` fails on a key the kernel does not have, and every caller runs
+# under `set -e`, so on a v4-only VPS — which plenty of Ubuntu 24.04 hosts are
+# — this aborted the installer part-way through, after packages, users,
+# secrets, the database and nginx were already in place. It would also have
+# failed on every boot, because the file lands in /etc/sysctl.d. Same root
+# cause as the nginx `listen [::]` bug: assuming IPv6 exists.
+# ZTV_HAS_IPV6=0/1 overrides the probe, for a host where the stack appears
+# after boot and so the tests can exercise both branches on any machine.
+ztv_has_ipv6() {
+    if [[ -n "${ZTV_HAS_IPV6:-}" ]]; then
+        [[ "$ZTV_HAS_IPV6" == "1" ]]
+        return
+    fi
+    [[ -d /proc/sys/net/ipv6 ]] \
+        && [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || echo 1)" == "0" ]]
+}
+
 ztv_sysctl_conf() {
     cat <<'EOF'
 net.ipv4.ip_forward=1
-net.ipv6.conf.all.forwarding=1
+EOF
+    if ztv_has_ipv6; then
+        echo "net.ipv6.conf.all.forwarding=1"
+    else
+        echo "# net.ipv6.conf.all.forwarding — omitted: no IPv6 stack on this host"
+    fi
+    cat <<'EOF'
 # Drop source-routed packets, ignore ICMP redirects
 net.ipv4.conf.all.accept_source_route=0
 net.ipv4.conf.all.accept_redirects=0
