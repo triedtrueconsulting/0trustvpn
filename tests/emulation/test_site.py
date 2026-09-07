@@ -522,6 +522,54 @@ try:
           "overstatement this page exists to avoid")
     check("and says the chain is public and permanent",
           "public chain" in priv, priv[:200])
+    print("\n[no third parties] every page is served from our own origin")
+    # The site linked fonts.googleapis.com and fonts.gstatic.com. privacy.html
+    # §5 now says our pages contact no external origin, docs/AUDIT.md §9 says
+    # the same, and the nginx CSP no longer whitelists either — so one
+    # reintroduced webfont link makes three documents untrue at once. On /surf
+    # especially: a page whose pitch is that your visit is not handed to
+    # anybody must not hand it to anybody.
+    pages = glob.glob(os.path.join(H.REPO, "web", "*.html"))
+    check("some pages were found", bool(pages))
+    for f in pages:
+        body = open(f, encoding="utf-8").read()
+        # Only fetched subresources matter; a link a human clicks is fine.
+        sub = re.findall(
+            r'<(?:link|script|img)\b[^>]*(?:src|href)="(https?://[^"]+)"', body)
+        check(f"{os.path.basename(f)} fetches nothing off-origin", not sub, sub)
+
+    faces = os.path.join(H.REPO, "web", "fonts", "faces.css")
+    check("the brand faces are vendored", os.path.exists(faces))
+    if os.path.exists(faces):
+        css = open(faces, encoding="utf-8").read()
+        check("faces.css points only at local files", "https://" not in css,
+              [l for l in css.splitlines() if "https://" in l][:3])
+        missing = [u for u in re.findall(r'url\(/fonts/([^)]+)\)', css)
+                   if not os.path.exists(os.path.join(H.REPO, "web", "fonts", u))]
+        check("every face it names is committed", not missing, missing[:5])
+
+    # The DIRECTIVE, not the file: both of these carry comments explaining that
+    # the CDNs were removed, and a whole-file grep flags its own explanation.
+    ngx = open(os.path.join(H.REPO, "nginx", "0trustvpn.com.conf"),
+               encoding="utf-8").read()
+    csp = [l for l in ngx.splitlines()
+           if "Content-Security-Policy" in l and not l.strip().startswith("#")]
+    check("a CSP header is set", bool(csp))
+    check("the CSP no longer whitelists the font CDNs",
+          not any("fonts.googleapis.com" in l or "fonts.gstatic.com" in l
+                  for l in csp),
+          "a permission kept after nothing uses it is attack surface for free")
+
+    proxy_src = open(os.path.join(H.REPO, "proxy", "server.py"),
+                     encoding="utf-8").read()
+    fonts_decl = [l for l in proxy_src.splitlines()
+                  if l.startswith("FONTS =")]
+    check("/surf declares where its fonts come from", bool(fonts_decl))
+    check("/surf loads them from our own origin too",
+          fonts_decl and "/fonts/faces.css" in fonts_decl[0]
+          and "googleapis" not in fonts_decl[0],
+          f"the funnel's front door is the page this matters most on: {fonts_decl}")
+
 finally:
     srv.shutdown(); H.shutdown()
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")

@@ -249,16 +249,19 @@ def banner(target: str, views: int) -> str:
 </div>"""
 
 
-# The brand faces, as the rest of the site loads them. Only ever used on the
-# proxy's OWN pages — a proxied response sets default-src 'self', which blocks
-# them, and the banner is built for that.
-FONTS = (
-    '<link rel="preconnect" href="https://fonts.googleapis.com">'
-    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
-    'family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600'
-    '&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap">'
-)
+# The brand faces, served from our own box.
+#
+# This linked fonts.googleapis.com, like the rest of the site did. On THIS page
+# that was a contradiction: /surf exists to stop a site learning who is reading
+# it, and the first thing it did was tell Google. Self-hosting also drops a
+# render-blocking round trip to a third party on the funnel's front door.
+#
+# nginx serves /fonts from the webroot, so the same path works for the proxy's
+# own pages and for the rest of the site. A proxied response sets
+# `default-src 'self'`, which permits these and blocks anything else — the
+# banner is still built for system fonts regardless, because it has to render
+# before anything loads.
+FONTS = '<link rel="stylesheet" href="/fonts/faces.css">'
 
 # Every face has a real fallback stack: the page has to look deliberate before
 # the webfont arrives, and stay that way if it never does.
@@ -345,6 +348,17 @@ def _views(request: Request) -> int:
         return int(request.cookies.get("ztv_views", "0"))
     except ValueError:
         return 0
+
+
+# In production nginx serves /fonts from the webroot and never routes it here.
+# Mounting it anyway means `uvicorn server:app` on its own renders the page
+# correctly — a reviewer or a developer should not need the whole nginx stack
+# to see what the funnel's front door looks like.
+_FONTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "web", "fonts")
+if os.path.isdir(_FONTS_DIR):
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/fonts", StaticFiles(directory=_FONTS_DIR), name="fonts")
 
 
 @app.get("/healthz")
