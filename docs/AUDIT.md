@@ -585,12 +585,15 @@ The operator is required to declare these proactively:
    in-memory database connection's state**, including recently-queried
    tokens. RAM encryption (LUKS + cold-boot protection) on the control
    plane is recommended but out of scope for this audit pack.
-6. **Static pages load Google Fonts** from `fonts.googleapis.com` and
-   `fonts.gstatic.com`. Lighter exposure than cdnjs was (fonts don't
-   execute code) but still lets Google see page visits. Mitigation:
-   self-host the three font families. Tracked in CSP comment in
-   `nginx/0trustvpn.com.conf`.
-6. **The CSP allows `'unsafe-inline'` for scripts and styles**, because
+6. **The pages contact no third-party origin at all.** They used to load
+   Google Fonts from `fonts.googleapis.com` and `fonts.gstatic.com`, which
+   let Google observe page visits — mild next to executing code, but on
+   `/surf`, whose entire claim is that a visit is not handed to anyone, it
+   was a contradiction. The three families are now served from `/fonts`
+   (`scripts/fetch-fonts.sh` regenerates them from upstream, latin and
+   latin-ext subsets), and both origins have been removed from `style-src`
+   and `font-src` rather than left whitelisted for nothing.
+7. **The CSP allows `'unsafe-inline'` for scripts and styles**, because
    each static page embeds its style and behavior inline. This means a
    theoretical XSS in our HTML output could execute attacker JS. The
    mitigation path is to extract each page's `<style>` and `<script>`
