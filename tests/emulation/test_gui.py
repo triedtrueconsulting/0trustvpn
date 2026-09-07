@@ -507,6 +507,39 @@ try:
         page.wait_for_timeout(300)
 
         check("no JS errors across the whole session", not errors, errors)
+    print("\n[offline] the window renders without the internet")
+    # index.html linked fonts.googleapis.com. In a desktop app that is wrong
+    # twice: the window cannot render properly without a connection —
+    # including while the tunnel it exists to manage is down, which is exactly
+    # when somebody opens it — and a VPN client calling Google on every launch
+    # is the opposite of the product. The faces are embedded in the binary now.
+    src = open(os.path.join(H.REPO, "client", "internal", "gui",
+                            "assets", "index.html"), encoding="utf-8").read()
+    check("the GUI asks for no external origin",
+          "fonts.googleapis" not in src and "fonts.gstatic" not in src,
+          [l for l in src.splitlines() if "http" in l and "//" in l][:3])
+    check("and links the embedded faces instead",
+          "/fonts/faces.css" in src, src[:400])
+
+    gui_go = open(os.path.join(H.REPO, "client", "internal", "gui", "gui.go"),
+                  encoding="utf-8").read()
+    check("the fonts are embedded in the binary",
+          "//go:embed assets/fonts" in gui_go, "nothing embeds them")
+    check("and served on /fonts/", '"/fonts/"' in gui_go, "no route serves them")
+
+    fdir = os.path.join(H.REPO, "client", "internal", "gui", "assets", "fonts")
+    check("the face files are committed", os.path.isdir(fdir))
+    if os.path.isdir(fdir):
+        faces = os.path.join(fdir, "faces.css")
+        check("faces.css is there", os.path.exists(faces))
+        if os.path.exists(faces):
+            css = open(faces, encoding="utf-8").read()
+            check("it points only at local files", "https://" not in css,
+                  [l for l in css.splitlines() if "https://" in l][:2])
+            missing = [u for u in re.findall(r'url\(/fonts/([^)]+)\)', css)
+                       if not os.path.exists(os.path.join(fdir, u))]
+            check("every face it names is committed", not missing, missing[:4])
+
 finally:
     if browser:
         try: browser.close()

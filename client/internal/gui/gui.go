@@ -10,11 +10,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -42,6 +43,28 @@ var appCSS []byte
 //go:embed assets/app.js
 var appJS []byte
 
+// The brand faces, embedded rather than fetched.
+//
+// index.html linked fonts.googleapis.com, which is wrong twice over in a
+// desktop app: the window cannot render properly without the internet —
+// including while the tunnel it exists to manage is down, which is exactly
+// when somebody opens it — and a VPN client calling Google every time you
+// launch it is the opposite of the product. Latin subset only; the UI is
+// English. ~340 KB on a ~9.6 MB binary.
+//
+//go:embed assets/fonts
+var fontsFS embed.FS
+
+// mustSub roots the embedded FS at the assets/fonts directory so the URL
+// path and the file path line up.
+func mustSub(f embed.FS, dir string) fs.FS {
+	sub, err := fs.Sub(f, dir)
+	if err != nil {
+		panic("gui: embedded fonts missing: " + err.Error())
+	}
+	return sub
+}
+
 const ListenAddr = "127.0.0.1:51827"
 
 // Serve starts the GUI server and (optionally) opens the browser. Blocks
@@ -63,6 +86,10 @@ func Serve(openBrowser bool) error {
 	mux.HandleFunc("/", handleIndex)
 	mux.HandleFunc("/app.css", handleCSS)
 	mux.HandleFunc("/app.js", handleJS)
+	// Served straight out of the embedded FS; the paths in faces.css are
+	// /fonts/<file>, the same shape the website uses.
+	mux.Handle("/fonts/", http.StripPrefix("/fonts/",
+		http.FileServer(http.FS(mustSub(fontsFS, "assets/fonts")))))
 	mux.HandleFunc("/api/state", handleState)
 	mux.HandleFunc("/api/login", handleLogin)
 	mux.HandleFunc("/api/logout", handleLogout)
