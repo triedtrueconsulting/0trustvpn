@@ -197,6 +197,44 @@ try:
     check("robots.txt disallows indexing", "Disallow: /" in robots, robots)
     st, hz, _ = get("/healthz")
     check("healthz responds", st == 200, st)
+    print("\n[xss] the error page does not reflect what you put in ?url=")
+    # `?url=http://<img src=x onerror=…>.test/` came back with the payload
+    # verbatim inside <p>{e}</p>: guards.py builds "Could not resolve {host}"
+    # from the attacker's hostname and the page interpolated the exception
+    # raw. The error path also set NO CSP — that was only on the success path
+    # — and nginx's site-wide policy allows 'unsafe-inline', so it would have
+    # executed. Reflected XSS on the funnel's front door, which is the one
+    # page whose entire job is being trustworthy.
+    import urllib.parse as _up
+    for payload, label in (
+        ('http://<img src=x onerror=alert(1)>.test/', 'tag injection'),
+        ('http://a"><script>alert(1)</script>.test/', 'attribute break-out'),
+        ("http://'onmouseover='alert(1).test/", 'quote break-out'),
+    ):
+        st, body, hdrs = get("/surf?url=" + _up.quote(payload, safe=''))
+        check(f"{label} is not reflected raw",
+              "<img src=x" not in body and "<script>alert" not in body
+              and "onmouseover='alert" not in body,
+              body[body.find("Could not") - 40:][:220] if "Could not" in body else body[:220])
+        check(f"{label}: response still carries a CSP",
+              "content-security-policy" in {k.lower() for k in hdrs},
+              sorted(hdrs))
+
+    # The headers were attached inside the success handler, so anything that
+    # returned early — every error, the landing page, robots.txt — went out
+    # bare. They belong on every response.
+    for path, label in (("/surf", "landing page"),
+                        ("/surf?url=nonsense", "blocked page"),
+                        ("/healthz", "health check")):
+        st, body, hdrs = get(path)
+        low = {k.lower(): v for k, v in hdrs.items()}
+        check(f"{label} sets a CSP", "content-security-policy" in low, sorted(low))
+        check(f"{label} forbids scripts outright",
+              "script-src 'none'" in low.get("content-security-policy", ""),
+              low.get("content-security-policy"))
+        check(f"{label} sets nosniff",
+              low.get("x-content-type-options") == "nosniff", low)
+
 finally:
     if proc.poll() is None:
         proc.terminate()

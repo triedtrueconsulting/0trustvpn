@@ -20,6 +20,7 @@ abuse, blocklisting or a crash here cannot take the control plane with it.
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import sys
@@ -107,6 +108,37 @@ def trial_label() -> str:
 app = FastAPI(title="0trust surf", docs_url=None, redoc_url=None, openapi_url=None)
 
 
+
+
+# Every response, not just the proxied one.
+#
+# These were set only on the success path, so the error page — the one that
+# reflects whatever you put in ?url= — went out with no CSP at all. The
+# reflected value is escaped now, but a page that renders somebody else's
+# string should not be relying on the escaping alone, and `script-src 'none'`
+# costs nothing here because none of these pages run any script.
+#
+# `default-src 'self'` also forces every subresource of a proxied page back
+# through us, which is what keeps the site from seeing the visitor directly.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        "font-src 'self'; script-src 'none'; object-src 'none'; "
+        "frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Robots-Tag": "noindex, nofollow",
+    "X-Frame-Options": "DENY",
+}
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    resp = await call_next(request)
+    for k, v in SECURITY_HEADERS.items():
+        resp.headers.setdefault(k, v)
+    return resp
 # ---------------------------------------------------------------------------
 # Fetch
 # ---------------------------------------------------------------------------
@@ -175,6 +207,23 @@ def fetch(url: str, method: str = "GET") -> tuple[str, bytes, str, int]:
 # Presentation
 # ---------------------------------------------------------------------------
 
+def esc(value) -> str:
+    """
+    HTML-escape anything that came from outside this file.
+
+    /surf?url=<attacker string> reached the error page unescaped, so
+    `?url=http://<img src=x onerror=…>.test/` reflected the payload straight
+    into the response — and the error path set no CSP at all, while nginx's
+    site-wide policy allows 'unsafe-inline', so it would have executed either
+    way. Reflected XSS on the funnel's front door, which is the single page
+    whose whole job is being trustworthy.
+
+    Everything interpolated into HTML below goes through this: the hostname,
+    the exception text, and the trial label the control plane hands us.
+    """
+    return html.escape(str(value), quote=True)
+
+
 def banner(target: str, views: int) -> str:
     """
     The upsell. Shown on every proxied page; sharpens after a few views.
@@ -196,11 +245,11 @@ def banner(target: str, views: int) -> str:
             'sees a datacentre, your ISP still sees you connecting to us, and '
             'this only covers the browser tab.'
         )
-        cta = f'Get {offer} of the real VPN, free'
+        cta = f'Get {esc(offer)} of the real VPN, free'
     else:
-        pitch = (f'Browsing <code>{host}</code> through 0trust. '
+        pitch = (f'Browsing <code>{esc(host)}</code> through 0trust. '
                  'This proxy covers this tab only.')
-        cta = f'{offer} of the full VPN, free'
+        cta = f'{esc(offer)} of the full VPN, free'
     return f"""
 <div id="ztv-banner" style="all:initial;display:block;position:sticky;top:0;
  z-index:2147483647;background:#0c0c0a;color:#f4ede0;
@@ -380,7 +429,7 @@ text — so the site sees our egress instead of your address.</p>
   <div class="field">
     <input name="url" placeholder="https://example.com/article" autofocus
            aria-label="Address to read">
-    <button type="submit">Read it</button>
+    <button type="submit">Surf it</button>
   </div>
 </form>
 
@@ -400,13 +449,27 @@ text — so the site sees our egress instead of your address.</p>
 </section>""")
 
     if request.method not in ALLOWED_METHODS:
-        return page("Not allowed", "<h1>Only GET is proxied</h1>", 405)
+        return page("Not allowed", f"""
+<span class="mark">0trust &middot; surf</span>
+<h1>Only GET is proxied</h1>
+<p class="lede">This is a reader, not a relay: it will not submit forms or
+send anything on your behalf.</p>
+<p><a class="cta" href="{PREFIX}">Back to surf</a></p>""", 405)
 
     try:
         final, body, ctype, status = fetch(raw)
     except Blocked as e:
-        return page("Blocked", f"<h1>Can't fetch that</h1><p>{e}</p>"
-                               f'<p><a href="{PREFIX}">Try another URL</a></p>', 400)
+        return page("Blocked", f"""
+<span class="mark">0trust &middot; surf</span>
+<h1>Can&rsquo;t fetch that</h1>
+<p class="lede">{esc(e)}</p>
+<form action="{PREFIX}" method="get">
+  <div class="field">
+    <input name="url" placeholder="https://example.com/article" autofocus
+           aria-label="Address to read">
+    <button type="submit">Surf it</button>
+  </div>
+</form>""", 400)
 
     views = _views(request) + 1
     base_ct = (ctype or "").split(";")[0].strip().lower()
@@ -423,17 +486,6 @@ text — so the site sees our egress instead of your address.</p>
 
     resp.set_cookie("ztv_views", str(views), max_age=86400,
                     httponly=True, samesite="lax", path="/")
-    # The fetched page is hostile by default. It renders with scripts already
-    # stripped, and this CSP is the backstop: no scripts, no framing us, no
-    # form posts, and every subresource has to come back through the proxy.
-    resp.headers["Content-Security-Policy"] = (
-        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-        "script-src 'none'; object-src 'none'; frame-ancestors 'none'; "
-        "form-action 'self'; base-uri 'none'"
-    )
-    resp.headers["X-Content-Type-Options"] = "nosniff"
-    resp.headers["Referrer-Policy"] = "no-referrer"
-    resp.headers["X-Robots-Tag"] = "noindex, nofollow"
     return resp
 
 
