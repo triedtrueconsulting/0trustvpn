@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img"
+     aria-label="0trustvpn">
+  <!-- Same mark as the desktop app icon (installer/windows/resources/
+       make-icon.py): amber "0" ring and check on the warm-dark ground. The
+       shield outline that icon draws at >=32px is omitted — at favicon sizes
+       a 2px stroke is mud, and the ring is what makes it recognisable. -->
+  <rect width="128" height="128" rx="22" fill="#0c0c0a"/>
+  <ellipse cx="64" cy="64" rx="36" ry="42" fill="none" stroke="#d4a574"
+           stroke-width="9"/>
+  <path d="M56 64 L62 70 L72 56" fill="none" stroke="#d4a574" stroke-width="7"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -838,6 +838,14 @@ render_common_locations() {
 
     location = /trial   { try_files /trial.html =404; }
 
+    # Same branded error pages as production. They existed in the production
+    # config and the files themselves did not, so nginx served its own default
+    # for a mistyped URL and — worse — for a 502, which is exactly what a
+    # visitor sees when the control plane is down and the moment a useful,
+    # branded message matters most.
+    error_page 404 /404.html;
+    error_page 500 502 503 504 /50x.html;
+
     # --- Operations dashboard ---
     # Restricted by default. This page can ban customers and move money, so it
     # is the one part of the site that should not be reachable from the open

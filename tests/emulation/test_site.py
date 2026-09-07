@@ -522,6 +522,42 @@ try:
           "overstatement this page exists to avoid")
     check("and says the chain is public and permanent",
           "public chain" in priv, priv[:200])
+    print("\n[error pages] nginx points at pages that exist")
+    # Both configs carried `error_page 404 /404.html` and
+    # `error_page 500 502 503 504 /50x.html` while neither file existed, so a
+    # mistyped URL got a bare nginx page — and so did a 502, which is exactly
+    # what a visitor sees when the control plane is down and the moment a
+    # branded, useful message matters most.
+    import re as _re
+    for conf, label in ((os.path.join(H.REPO, "nginx", "0trustvpn.com.conf"), "production"),
+                        (os.path.join(H.REPO, "scripts", "install.sh"), "test mode")):
+        text = open(conf, encoding="utf-8").read()
+        targets = set(_re.findall(r'error_page\s+[\d\s]+\s+(/\S+?);', text))
+        check(f"{label} declares error pages", bool(targets), conf)
+        for t in sorted(targets):
+            f = os.path.join(H.REPO, "web", t.lstrip("/"))
+            check(f"{label}: {t} exists", os.path.exists(f),
+                  f"nginx would serve its own default instead of {t}")
+
+    # A 502 page that says "your VPN is down" would be wrong: tunnels are
+    # carried by the mesh nodes and do not depend on this box.
+    fivex = open(os.path.join(H.REPO, "web", "50x.html"), encoding="utf-8").read()
+    check("the 5xx page says the tunnel is unaffected",
+          "not affected" in fivex or "unaffected" in fivex,
+          "a visitor whose tunnel is fine must not be told the VPN is down")
+
+    print("\n[favicon] the site has one, and every page asks for it")
+    # Without it every visit logs a 404 and the tab shows a blank icon.
+    for name in ("favicon.svg", "favicon.ico"):
+        check(f"web/{name} is committed",
+              os.path.exists(os.path.join(H.REPO, "web", name)))
+    for f in glob.glob(os.path.join(H.REPO, "web", "*.html")):
+        body = open(f, encoding="utf-8").read()
+        if os.path.basename(f) == "admin.html":
+            continue  # not a public page
+        check(f"{os.path.basename(f)} links a favicon",
+              'rel="icon"' in body, "browsers request /favicon.ico regardless")
+
     print("\n[no third parties] every page is served from our own origin")
     # The site linked fonts.googleapis.com and fonts.gstatic.com. privacy.html
     # §5 now says our pages contact no external origin, docs/AUDIT.md §9 says
