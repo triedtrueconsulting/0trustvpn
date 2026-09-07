@@ -427,6 +427,52 @@ try:
           "placeholder" in out and "cannot" in out, out[-700:])
     check("--no-vpn does not claim the VPN works", "The VPN works" not in out)
 
+    print("\n[1c] the host is checked before anything is changed")
+    # Every one of these used to surface part-way through: an unresolvable
+    # domain at certbot, with packages, the service user, secrets, the
+    # database and nginx already written; a busy port 80 at `nginx -t`. A
+    # failure that costs five seconds and changes nothing is a different
+    # thing from one that leaves a half-built box behind.
+    # A dry run reports and continues — there is no state to protect, and an
+    # operator rendering configs on a laptop should not be blocked by that
+    # laptop. What matters is that the diagnostic appears, and that it says a
+    # real install would stop.
+    rc, out = run_installer("--mode", "production",
+                            "--domain", "nope.invalid", "--email", "a@b.c")
+    check("an unresolvable domain is reported", "does not resolve" in out,
+          out[-400:])
+    check("and the dry run says a real install would stop",
+          "a real install would stop here" in out, out[-400:])
+    check("preflight does not then claim to have passed",
+          "host preflight passed" not in out,
+          "saying 'passed' under 'would stop here' is a contradiction")
+    # The bug this check itself had: getent exits 2 for a name that does not
+    # resolve, `set -o pipefail` propagates that out of the command
+    # substitution, and `set -e` then killed the installer with a bare exit 2
+    # and no message at all — on precisely the input the check exists to
+    # report.
+    check("the failure is reported, not a silent non-zero exit",
+          "[!]" in out, f"exit {rc} with no diagnostic:\n{out[-300:]}")
+
+    rc, out = run_installer("--mode", "production", "--domain", "example.com",
+                            "--email", "a@b.c")
+    check("a domain resolving elsewhere warns but proceeds", rc == 0,
+          "behind NAT or a proxy this is legitimate; refusing would be wrong")
+    check("and prints both sides so the operator can compare",
+          "resolves to" in out and "this box has" in out, out[-400:])
+
+    rc, out = run_installer("--skip-preflight", "--mode", "production",
+                            "--domain", "nope.invalid", "--email", "a@b.c")
+    check("--skip-preflight is an escape hatch that works", rc == 0, out[-300:])
+    check("and it really skips", "does not resolve" not in out, out[-300:])
+
+    src_pf = open(INSTALL).read()
+    for want, why in (("df -Pm", "disk space is checked"),
+                      ("ss -lntpH", "a busy port 80/443 is caught early"),
+                      ("getent ahostsv4", "DNS is checked before certbot runs"),
+                      ("type wireguard", "kernel WireGuard support is probed")):
+        check(why, want in src_pf, f"{want!r} missing from install.sh")
+
     print("\n[6a] a host with no IPv6 can still be installed")
     # Three separate aborts, all the same assumption: that every Ubuntu 24.04
     # box has an IPv6 stack. Plenty do not, and each failure landed part-way
