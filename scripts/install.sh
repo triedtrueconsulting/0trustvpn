@@ -54,6 +54,9 @@ set -euo pipefail
 
 MODE="" DOMAIN="" EMAIL=""
 DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1
+# Set when the mesh step could not bring the WireGuard interfaces up, so the
+# closing summary describes the box that exists rather than the one intended.
+VPN_BROKEN=0
 CONTROL_URL="" PROVISION_TOKEN="" REGION="" NODE_ROLE="both" WG_PORT="51820"
 SWAP_SIZE=""
 
@@ -780,6 +783,39 @@ TMP_SITE="$(mktemp)"
 TMP_ZONES="$(mktemp)"
 render_zones > "$TMP_ZONES"
 
+# Emit `listen [::]` only where there is an IPv6 stack to bind it to.
+#
+# `nginx -t` does not merely parse — it binds every listener, so on a host
+# with IPv6 disabled it fails with "Address family not supported by protocol"
+# and the installer died right here, after having already installed packages,
+# created the service user, written secrets and initialised the database. A
+# half-installed box, on a plain Ubuntu 24.04 VPS whose provider simply does
+# not hand out IPv6. The emulation suite worked around exactly this when it
+# wrapped nginx -t, which is how the product bug stayed hidden behind a green
+# test.
+#
+# ZTV_NGINX_IPV6=0 forces it off, 1 forces it on (for a host where the stack
+# appears after boot).
+if [[ -n "${ZTV_NGINX_IPV6:-}" ]]; then
+    HAS_IPV6="$ZTV_NGINX_IPV6"
+elif [[ -d /proc/sys/net/ipv6 ]] \
+     && [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || echo 1)" == "0" ]]; then
+    HAS_IPV6=1
+else
+    HAS_IPV6=0
+fi
+
+listen6() {   # listen6 <suffix...>  — a `listen [::]:...` line, or nothing
+    (( HAS_IPV6 )) && printf '    listen [::]:%s;' "$*"
+    return 0
+}
+
+# Precomputed because these sit inside heredocs, where a function call cannot.
+# An empty value leaves a blank line, which nginx ignores.
+L6_80_DEFAULT="$(listen6 "80 default_server")"
+L6_80="$(listen6 80)"
+L6_443="$(listen6 "443 ssl http2")"
+
 if [[ "$MODE" == "test" ]]; then
     {
         echo "# 0trust — TEST deployment. Plain HTTP on the box's IP."
@@ -789,7 +825,7 @@ if [[ "$MODE" == "test" ]]; then
         cat <<EOF
 server {
     listen 80 default_server;
-    listen [::]:80 default_server;
+$L6_80_DEFAULT
     server_name _;
     root $WEBROOT;
     index index.html;
@@ -813,7 +849,7 @@ else
         cat <<EOF
 server {
     listen 80;
-    listen [::]:80;
+$L6_80
     server_name $DOMAIN www.$DOMAIN;
     location /.well-known/acme-challenge/ { root /var/www/acme; }
     location / { return 301 https://\$host\$request_uri; }
@@ -825,7 +861,7 @@ server {
     # start. 1.25+ still accepts this form, so one config serves both.
     # (No backticks in this heredoc — it is unquoted, so they would run.)
     listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+$L6_443
     server_name $DOMAIN www.$DOMAIN;
     root $WEBROOT;
     index index.html;
@@ -1102,8 +1138,43 @@ if [[ $DRY_RUN -eq 0 ]]; then
         systemctl restart dnsmasq >/dev/null 2>&1 && break
         sleep 2
     done
+
+    # Prove the interfaces exist before anything says the VPN works.
+    #
+    # This printed a green "The VPN works" unconditionally, because
+    # `systemctl enable --now` succeeding is not evidence that meshd created
+    # anything — and on a host with no WireGuard kernel module (plenty of
+    # LXC and OpenVZ VPSes) it creates nothing at all. The operator was told
+    # in green that three tunnels were carrying traffic on a box that could
+    # not make one. It is the same standard `0trust connect` already holds
+    # itself to: wg-quick's exit code means nothing, so the client waits for
+    # a handshake before claiming a tunnel.
+    #
+    # meshd builds the interface on its first poll, so give it a moment.
+    VPN_UP=() VPN_DOWN=()
+    for spec in "${LOCAL_NODES[@]}"; do
+        IFS=: read -r _ niface _ _ <<<"$spec"
+        up=0
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if ip link show "$niface" >/dev/null 2>&1; then up=1; break; fi
+            sleep 2
+        done
+        if (( up )); then VPN_UP+=("$niface"); else VPN_DOWN+=("$niface"); fi
+    done
 fi
-if [[ $DRY_RUN -eq 0 ]]; then ok "meshd running for all three nodes"; fi
+if [[ $DRY_RUN -eq 0 ]]; then
+    if (( ${#VPN_DOWN[@]} == 0 )); then
+        ok "meshd running, ${#VPN_UP[@]} WireGuard interface(s) up"
+    else
+        VPN_BROKEN=1
+        printf '%s[!] WireGuard interface(s) NOT up: %s%s\n' \
+               "$RED" "${VPN_DOWN[*]}" "$NC" >&2
+        note "meshd could not create them. The usual cause is a kernel with no"
+        note "WireGuard support — check with: ip link add dev wgtest type wireguard"
+        note "Diagnose with: journalctl -u 0trust-meshd@${VPN_DOWN[0]} -n 50"
+        note "The control plane and website are fine; only the tunnels are not."
+    fi
+fi
 fi   # DO_VPN
 
 # ----------------------------------------------------------------------------
@@ -1175,7 +1246,22 @@ ${GRN}  $HEADLINE${NC}
   Status      http://$IP/api/v1/status/public
 
 EOF
-    if [[ $DO_VPN -eq 1 ]]; then cat <<EOF
+    if [[ $DO_VPN -eq 1 && $VPN_BROKEN -eq 1 ]]; then cat <<EOF
+  ${RED}The VPN is NOT up.${NC} The control plane, website, admin dashboard
+  and /surf proxy all work — but meshd could not create the WireGuard
+  interfaces, so \`0trust connect\` will hand out a config that cannot carry
+  traffic.
+
+  The usual cause is a kernel without WireGuard support, which is common on
+  LXC and OpenVZ VPSes. Check it directly:
+    ip link add dev wgtest type wireguard && ip link del wgtest
+  If that fails, this box cannot run a node; use a KVM VPS instead.
+  Otherwise: journalctl -u '0trust-meshd@*' -n 50
+
+  Re-run this installer once the kernel can do it — nothing here needs undoing.
+
+EOF
+    elif [[ $DO_VPN -eq 1 ]]; then cat <<EOF
   ${GRN}The VPN works.${NC} Three node identities run on this box:
     zur-01  wg0  udp 51820      rey-01  wg1  udp 51821
     buc-01  wg2  udp 51822      multi-hop entry ports udp 52000-59999

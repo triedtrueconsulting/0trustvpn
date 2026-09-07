@@ -540,6 +540,26 @@ code, actively check for them:
    `test_backup.py`, `test_install.py` and `test_release.py` exist to run
    these for real — extend them rather than trusting a script that parses.
 
+15. **Assuming the host has IPv6.** Three separate installer aborts, all this
+   one assumption, all found by RUNNING install.sh on a v4-only Ubuntu 24.04
+   box rather than reading it. `nginx -t` binds every listener, so a stray
+   `listen [::]` fails with "Address family not supported by protocol"; and
+   `sysctl -p` fails on a key the kernel does not have, at install time and on
+   every boot after. Each aborted part-way through, after packages, the
+   service user, secrets and the database. `ZTV_NGINX_IPV6` and
+   `ZTV_HAS_IPV6` force either branch so both are testable anywhere. Note the
+   shape: the emulation suite had *worked around* the nginx one (nginx_check
+   wraps `nginx -t` precisely because CI has no IPv6), so a green test sat on
+   top of a broken install. A workaround in a test is a bug report about the
+   product.
+16. **An installer that reports success it did not verify.** `install.sh`
+   printed a green "The VPN works" unconditionally. `systemctl enable --now`
+   returning 0 says nothing about whether meshd created an interface, and on
+   a kernel without WireGuard — ordinary on LXC and OpenVZ VPSes — it creates
+   none. It now probes `ip link show` for each interface and the summary
+   reports what it found. This is the standard `0trust connect` already holds
+   itself to: wg-quick's exit code means nothing, so the client waits for a
+   handshake before claiming a tunnel. Hold the deploy path to it too.
 ## Discipline for a privacy product
 
 This is a product whose entire value is trustworthiness. Two rules that
