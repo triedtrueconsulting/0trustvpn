@@ -369,6 +369,57 @@ swapon --show
 # Expect: empty (no swap = no chance of paging private keys to disk)
 ```
 
+### 5.4 The control channel, and what routing it over Tor does and does not do
+
+Every mesh node checks in with the control plane every ~30 seconds.
+`ZTV_POLL_JITTER` varies that interval, which hides the **cadence** — nobody
+picks a metronome out of netflow. It does nothing about the **destination**.
+Each node opens a regular connection to the same control-plane address, so a
+party able to observe two nodes' uplinks — a hosting provider that happens to
+have two of them, or anyone sampling flow records at scale — can group the
+boxes into one system without decrypting a byte. Jitter is the wrong tool for
+that; the shared destination is the signal.
+
+`tor/scripts/control-onion.sh` stands up a second onion service for this, and
+`ZTV_CONTROL_PROXY` points meshd's control traffic through a local Tor SOCKS
+port at it. Each node then reaches its own guard relay and the real endpoint
+is inside the circuit, so there is no common destination to correlate on.
+
+Three properties are worth stating precisely, because each is a decision:
+
+- **The address is never published.** Unlike the browsing mirror in
+  `bootstrap.sh`, it appears on no page. It lives in each node's meshd env.
+- **It requires v3 client authorization.** A party who learns the address
+  anyway cannot fetch the descriptor without a key the operator issued. This
+  is the property the public onion cannot have and the reason `/api` stays off
+  that one.
+- **It is an allowlist of four endpoints**, not a proxy of the API. Only
+  `/api/v1/wg/peers`, `/wg/forwards`, `/node/heartbeat` and `/node/provision`
+  exist at that address; the admin dashboard and every customer route return
+  404 there. Verified by driving a real nginx with the generated block.
+
+**There is no fallback to a direct connection.** If Tor is unreachable the
+node stops syncing, keeps serving the tunnels it already has, and goes stale
+in the control plane where an operator can see it. A silent downgrade would
+put the shared-destination signal back on the wire at exactly the moment
+somebody was interfering with Tor, and nothing would report it — the same
+reasoning that makes the node's upstream DNS fail closed rather than retry in
+cleartext (§4d of the privacy policy).
+
+**What this does not do.** It does not make WireGuard undetectable. Customer
+tunnels still run plain WireGuard to the node's public IP, and DPI identifies
+that on sight. This hides the control plane's relationship to its nodes and
+nothing else. No page may imply otherwise.
+
+Auditor verification:
+
+```bash
+# On a node, with the transport enabled:
+grep ZTV_CONTROL_PROXY /etc/0trust/meshd.env     # Expect: a loopback SOCKS port
+journalctl -u 0trust-meshd | grep 'control='     # Expect: "via SOCKS5 …(no direct fallback)"
+ss -tnp | grep meshd                             # Expect: only the SOCKS port, never the control plane
+```
+
 ---
 
 ## 6. Control-plane database (SQLite)

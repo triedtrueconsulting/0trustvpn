@@ -333,6 +333,18 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   `ZTV_DNS_ENCRYPTED=0` reverts, loudly, in a comment in the config.
   privacy.html §4d, `docs/AUDIT.md`'s third-party table and
   `node-dns-encrypted-upstream` all state this and must move together.
+- **The control channel can run over Tor, and that is about correlation, not
+  obfuscation.** `ZTV_POLL_JITTER` hides the check-in's cadence; it does
+  nothing about the destination, and every node connecting to the same
+  control-plane address lets anyone watching two nodes' uplinks group them
+  into one system. `ZTV_CONTROL_PROXY` sends meshd's control traffic through a
+  local Tor SOCKS port (stdlib SOCKS5 in meshd — no new node dependency) to a
+  SECOND onion from `tor/scripts/control-onion.sh`: unpublished, v3
+  client-authorized, and an nginx allowlist of exactly four node endpoints, so
+  `/api` still never joins the PUBLIC browsing onion. **There is deliberately
+  no fallback to a direct connection** — a silent downgrade restores the
+  signal precisely when someone is interfering with Tor, the same reason the
+  node's DNS fails closed. Default is off (direct), unchanged.
 - **Nodes run plain WireGuard: no obfuscation, and DPI identifies it.** Never
   let copy imply otherwise. What exists is port-level camouflage
   (`--wg-port 443`, recommended, blends with QUIC in netflow), WireGuard's own

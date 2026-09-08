@@ -159,6 +159,120 @@ try:
               not meshd._in_mesh("not-a-cidr") and not meshd._in_mesh("10.64.0.0/999"))
     except Exception as e:
         check("build_wg_config skip guard", False, f"{type(e).__name__}: {e}")
+
+    print("\n[8] the control channel can run through SOCKS5, and never falls back")
+    # Jitter hides the CADENCE of the check-in; it does nothing about the
+    # DESTINATION. Every node connecting to the same control-plane address is
+    # what lets an observer of two nodes' uplinks group them into one system.
+    # ZTV_CONTROL_PROXY sends the check-in through Tor instead. Two properties
+    # matter and both are asserted here: the hostname is resolved BY THE PROXY
+    # (a .onion has no DNS entry, so local resolution is not merely a leak but
+    # a failure), and a dead proxy does NOT silently revert to a direct
+    # connection — that would restore the signal exactly when someone was
+    # interfering with Tor, and nothing would say so.
+    import socket as _sock, threading as _thr, http.server as _hs
+    asked = []
+
+    def _socks5(port):
+        srv = _sock.socket(); srv.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", port)); srv.listen(8)
+        def handle(c):
+            try:
+                n = c.recv(2)[1]; c.recv(n); c.sendall(b"\x05\x00")
+                hdr = c.recv(4)
+                if hdr[3] != 0x03:
+                    asked.append(f"WRONG-ATYP-{hdr[3]}"); c.close(); return
+                ln = c.recv(1)[0]; host = c.recv(ln).decode()
+                dport = int.from_bytes(c.recv(2), "big")
+                asked.append(f"{host}:{dport}")
+                up = _sock.create_connection(("127.0.0.1", dport), timeout=5)
+                c.sendall(b"\x05\x00\x00\x01" + b"\x00" * 4 + b"\x00\x00")
+                def pipe(a, b):
+                    try:
+                        while True:
+                            d = a.recv(65536)
+                            if not d: break
+                            b.sendall(d)
+                    except Exception: pass
+                    finally:
+                        try: b.shutdown(_sock.SHUT_WR)
+                        except Exception: pass
+                _thr.Thread(target=pipe, args=(c, up), daemon=True).start()
+                pipe(up, c)
+            except Exception: pass
+            finally:
+                try: c.close()
+                except Exception: pass
+        def loop():
+            while True:
+                try: conn, _ = srv.accept()
+                except OSError: return
+                _thr.Thread(target=handle, args=(conn,), daemon=True).start()
+        _thr.Thread(target=loop, daemon=True).start()
+        return srv
+
+    class _Stub(_hs.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            b = b'{"peers": [], "generated_at": 1}'
+            self.send_response(200); self.send_header("Content-Length", str(len(b)))
+            self.end_headers(); self.wfile.write(b)
+
+    api_port, socks_port, dead_port = H.pick_port(), H.pick_port(), H.pick_port()
+    stub = _hs.HTTPServer(("127.0.0.1", api_port), _Stub)
+    _thr.Thread(target=stub.serve_forever, daemon=True).start()
+    socks_srv = _socks5(socks_port)
+    try:
+        def _load(proxy, tag, control=None):
+            for k, v in {"CONTROL_URL": control or f"http://control.invalid:{api_port}",
+                         "NODE_API_PSK": "psk", "NODE_ID": "zur-01",
+                         "ZTV_CONTROL_PROXY": proxy}.items():
+                os.environ[k] = v
+            sp = importlib.util.spec_from_file_location(
+                f"meshd_socks_{tag}",
+                os.path.join(H.REPO, "wireguard", "0trust-meshd.py"))
+            mod = importlib.util.module_from_spec(sp); sp.loader.exec_module(mod)
+            return mod
+
+        live = _load(f"127.0.0.1:{socks_port}", "live")
+        # Catch rather than let it escape: an exception here would skip the two
+        # checks below entirely, and a check that silently does not run looks
+        # exactly like a check that passed. Removing the proxy handler made
+        # this section vanish from the results until it was written this way.
+        try:
+            body = live._get("/api/v1/wg/peers")
+        except Exception as e:
+            body = f"{type(e).__name__}: {e}"
+        check("a request completes through the SOCKS5 proxy",
+              body == {"peers": [], "generated_at": 1}, body)
+        # 'control.invalid' does not resolve anywhere. Reaching the stub at all
+        # proves the proxy did the lookup, which is what a .onion requires.
+        check("the proxy was asked for the host by NAME, not a resolved address",
+              asked == [f"control.invalid:{api_port}"], asked)
+
+        # For THIS case the control plane must be directly reachable, or the
+        # check proves nothing: with an unresolvable CONTROL_URL a fallback
+        # would fail on its own and the test would pass whether or not the
+        # fallback existed. Point it straight at the stub, so a fallback
+        # SUCCEEDS and gets caught.
+        down = _load(f"127.0.0.1:{dead_port}", "down",
+                     control=f"http://127.0.0.1:{api_port}")
+        fell_back = False
+        try:
+            down._get("/api/v1/wg/peers"); fell_back = True
+        except Exception:
+            pass
+        check("a dead proxy fails the sync rather than reverting to clearnet",
+              not fell_back,
+              "it reached the control plane directly — the shared-destination "
+              "signal is back and nothing reported it")
+    finally:
+        try: socks_srv.close()
+        except Exception: pass
+        try: stub.shutdown()
+        except Exception: pass
+        for k in ("ZTV_CONTROL_PROXY",):
+            os.environ.pop(k, None)
 finally:
     if proc and proc.poll() is None:
         proc.send_signal(signal.SIGTERM)

@@ -22,15 +22,19 @@ role=exit on another, ideally in different jurisdictions.
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import logging
 import os
 import random
 import base64
+import socket
+import ssl
 import subprocess
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -58,6 +62,20 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
 # and removes the pattern. Set ZTV_POLL_JITTER=0 for a fixed cadence.
 POLL_JITTER = float(os.environ.get("ZTV_POLL_JITTER", "0.35"))
 
+# Route the control channel through a SOCKS5 proxy — in practice a local Tor
+# daemon, with CONTROL_URL pointing at the control plane's .onion.
+#
+# What this is for. Jitter above hides the CADENCE of the check-in; it does
+# nothing about the DESTINATION. Every node opens a regular connection to the
+# same control-plane address, so anyone who can watch two nodes' uplinks — a
+# hosting provider with more than one of them, most obviously — can correlate
+# the boxes into one system without decrypting a byte. Sending the check-in
+# through Tor removes the shared destination: each node talks to its own guard
+# relay and the real endpoint is inside the circuit.
+#
+# Empty (the default) means direct, exactly as before.
+CONTROL_PROXY = os.environ.get("ZTV_CONTROL_PROXY", "").strip()
+
 # NOT "0trust_forward": nftables identifiers cannot start with a digit, and
 # nft parses the leading 0 as a number — "syntax error, unexpected number".
 # Quoting does not help; the parser rejects a quoted string there too. The
@@ -79,15 +97,123 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 
 # ----------------------------------------------------------------------------
-# HTTP
+# HTTP  (optionally through SOCKS5, for the onion control channel)
 # ----------------------------------------------------------------------------
+
+def _socks5_connect(proxy: str, host: str, port: int, timeout: float) -> socket.socket:
+    """
+    Open a TCP connection to host:port through a SOCKS5 proxy.
+
+    The hostname is sent to the proxy as a DOMAINNAME request rather than
+    resolved here — "socks5h" semantics. That is not an optimisation: a .onion
+    has no DNS entry at all, so resolving locally would fail, and for a
+    clearnet host resolving locally would leak the destination to the node's
+    resolver, which is most of what routing through the proxy was meant to
+    avoid.
+
+    Deliberately hand-rolled against RFC 1928 rather than adding PySocks: a
+    mesh node's dependency list is the attack surface of every box we run, and
+    this is forty lines of a fully specified protocol.
+    """
+    phost, _, pport = proxy.rpartition(":")
+    if not phost:
+        raise OSError(f"ZTV_CONTROL_PROXY must be host:port, got {proxy!r}")
+    s = socket.create_connection((phost, int(pport)), timeout=timeout)
+    try:
+        # Greeting: version 5, one method, "no authentication".
+        s.sendall(b"\x05\x01\x00")
+        greet = _recv_exactly(s, 2)
+        if greet[0] != 0x05 or greet[1] != 0x00:
+            raise OSError("SOCKS5 proxy refused the no-auth method")
+
+        name = host.encode("idna")
+        if len(name) > 255:
+            raise OSError("hostname too long for SOCKS5")
+        s.sendall(b"\x05\x01\x00\x03" + bytes([len(name)]) + name
+                  + port.to_bytes(2, "big"))
+
+        reply = _recv_exactly(s, 4)
+        if reply[1] != 0x00:
+            raise OSError(f"SOCKS5 CONNECT failed (reply code {reply[1]})")
+        # Consume the bound address so the socket is positioned at the payload.
+        atyp = reply[3]
+        if atyp == 0x01:
+            _recv_exactly(s, 4)
+        elif atyp == 0x04:
+            _recv_exactly(s, 16)
+        elif atyp == 0x03:
+            _recv_exactly(s, _recv_exactly(s, 1)[0])
+        else:
+            raise OSError(f"SOCKS5 proxy returned an unknown address type {atyp}")
+        _recv_exactly(s, 2)
+        return s
+    except Exception:
+        s.close()
+        raise
+
+
+def _recv_exactly(s: socket.socket, n: int) -> bytes:
+    buf = b""
+    while len(buf) < n:
+        chunk = s.recv(n - len(buf))
+        if not chunk:
+            raise OSError("SOCKS5 proxy closed the connection early")
+        buf += chunk
+    return buf
+
+
+class _SocksHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = _socks5_connect(CONTROL_PROXY, self.host, self.port,
+                                    self.timeout)
+
+
+class _SocksHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        sock = _socks5_connect(CONTROL_PROXY, self.host, self.port,
+                               self.timeout)
+        # server_hostname keeps certificate validation against the real host,
+        # not the proxy. Routing through Tor must not weaken TLS.
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _SocksHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_SocksHTTPConnection, req)
+
+
+class _SocksHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_SocksHTTPSConnection, req)
+
+
+def _build_opener() -> urllib.request.OpenerDirector:
+    """
+    The one opener every control-plane call uses.
+
+    When ZTV_CONTROL_PROXY is set it is the ONLY transport. There is
+    deliberately no fall back to a direct connection if the proxy is down: a
+    silent downgrade would put the shared-destination signal back on the wire
+    at exactly the moment someone was interfering with Tor, and nothing would
+    report it. The node keeps serving the tunnels it already has, stops
+    getting updates, and the control plane marks it stale — which is visible.
+    The upstream DNS resolver on this same box fails closed for the same
+    reason.
+    """
+    if not CONTROL_PROXY:
+        return urllib.request.build_opener()
+    return urllib.request.build_opener(_SocksHTTPHandler, _SocksHTTPSHandler)
+
+
+_OPENER = _build_opener()
+
 
 def _get(path: str) -> dict:
     req = urllib.request.Request(
         f"{CONTROL_URL}{path}",
         headers={"X-Node-Psk": NODE_PSK},
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with _OPENER.open(req, timeout=10) as r:
         return json.loads(r.read())
 
 
@@ -444,7 +570,7 @@ def heartbeat() -> None:
         method="POST",
     )
     try:
-        urllib.request.urlopen(req, timeout=5).read()
+        _OPENER.open(req, timeout=5).read()
     except Exception as e:
         # Warn, not debug: a heartbeat that never lands means the sweeper
         # eventually marks this node dead and traffic stops being routed here.
@@ -473,7 +599,14 @@ def main():
     if role in ("exit", "both"):
         bootstrap_interface()
 
-    log.info("starting meshd: node=%s role=%s", NODE_ID, role)
+    # Name the transport. An operator who thinks the control channel is going
+    # over Tor and is wrong has the exact exposure this setting exists to
+    # remove, and nothing else on the box would tell them.
+    if CONTROL_PROXY:
+        log.info("starting meshd: node=%s role=%s control=via SOCKS5 %s (no direct fallback)",
+                 NODE_ID, role, CONTROL_PROXY)
+    else:
+        log.info("starting meshd: node=%s role=%s control=direct", NODE_ID, role)
     state: dict = {}
 
     while True:

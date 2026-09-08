@@ -188,7 +188,15 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "no-referrer" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+    # No third-party origin. The brand faces are served from /fonts (see
+    # scripts/fetch-fonts.sh), so fonts.googleapis.com and fonts.gstatic.com
+    # came out of style-src and font-src here as they did on the clearnet
+    # config. They were only ever a permissive whitelist — the pages stopped
+    # requesting them when the fonts were self-hosted — but leaving them is
+    # attack surface kept for nothing, and on an onion service, whose whole
+    # point is that the visit is not handed to anybody, permitting a request
+    # to Google is the contradiction at its sharpest.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
 
     # No Onion-Location loop on the onion itself
     # (only the clearnet site sends that header).
