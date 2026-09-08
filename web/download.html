@@ -284,6 +284,44 @@ code {
     </div>
   </div>
 
+  <h2>Running the AppImage</h2>
+  <p class="callout">
+    An AppImage is a single file: make it executable and run it. No installer,
+    no root, no package manager, and nothing left behind when you delete it.
+  </p>
+
+  <div class="verify">
+<pre><span class="prompt">$</span> chmod +x 0trust-0.1.0-x86_64.AppImage
+<span class="prompt">$</span> ./0trust-0.1.0-x86_64.AppImage gui</pre>
+  </div>
+
+  <p class="callout">
+    On a system without FUSE — common on minimal installs, on containers, and
+    on distributions that ship only FUSE 3 — the first line you see will be:
+  </p>
+
+  <div class="verify">
+<pre><span class="comment">Error: No suitable fusermount binary found on the $PATH</span></pre>
+  </div>
+
+  <p class="callout">
+    <strong>It still ran.</strong> That message comes from the AppImage
+    runtime, not from us, and the program carries on working normally: the
+    runtime falls back to unpacking itself and running from there. Every
+    AppImage behaves this way. To stop seeing it, either install your
+    distribution's FUSE 2 package — <code>libfuse2</code> on Debian and
+    Ubuntu — or run the file with <code>--appimage-extract-and-run</code>,
+    which asks for that fallback up front.
+  </p>
+  <p class="callout">
+    One thing worth knowing if you script against the CLI: that line goes to
+    <strong>standard output</strong>, not standard error, so it lands in the
+    middle of anything you are parsing. Use
+    <code>APPIMAGE_EXTRACT_AND_RUN=1</code> in the environment, or the
+    <code>.deb</code> or the raw binary instead — neither has a runtime
+    wrapper, and neither prints anything of its own.
+  </p>
+
   <h2>iOS &amp; Android</h2>
   <p class="callout">
     Native apps are in development. Until then, use <code>0trust export</code>
