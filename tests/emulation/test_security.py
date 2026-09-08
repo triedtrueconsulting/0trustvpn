@@ -127,6 +127,30 @@ try:
     check("an unidentified node is refused rather than served everything",
           st == 400, f"{st} {r}")
 
+    # A node holding its OWN per-node PSK must not be able to read another
+    # node's peers or its live DNAT table (which exposes every multi-hop
+    # session's exit endpoint) by naming a different node_id. The shared PSK
+    # is the legacy trust boundary; a per-node credential is scoped to itself.
+    # Mint a per-node PSK for rey-01 and try to read buc-01 through it.
+    import hashlib as _h, sqlite3 as _sql, os as _os
+    rey_psk = "rey-secret-" + _os.urandom(6).hex()
+    _c = _sql.connect(DB)
+    _c.execute("UPDATE mesh_nodes SET psk_hash=? WHERE id=?",
+               (_h.sha256(rey_psk.encode()).hexdigest(), "rey-01"))
+    _c.commit(); _c.close()
+    st, r = H.call("GET", "/api/v1/wg/peers?node_id=buc-01",
+                   headers={"X-Node-Psk": rey_psk})
+    check("a per-node PSK cannot read another node's peers", st == 403, f"{st} {r}")
+    st, r = H.call("GET", "/api/v1/wg/forwards?node_id=buc-01",
+                   headers={"X-Node-Psk": rey_psk})
+    check("a per-node PSK cannot read another node's forwards", st == 403, f"{st} {r}")
+    st, r = H.call("GET", "/api/v1/wg/forwards?node_id=rey-01",
+                   headers={"X-Node-Psk": rey_psk})
+    check("but it can read its own forwards", st == 200, f"{st} {r}")
+    st, r = H.call("GET", "/api/v1/wg/peers?node_id=buc-01",
+                   headers={"X-Node-Psk": "totally-wrong-psk"})
+    check("an invalid node credential is refused outright", st == 401, f"{st} {r}")
+
     print("\n[input] hostile field values")
     long_name = "x" * 100000
     st, r = H.call("POST", "/api/v1/wg/register",
@@ -137,6 +161,40 @@ try:
                    {"pubkey": "short", "device_name": "d", "region": "zur"},
                    headers={"X-Account-Token": tokA})
     check("malformed pubkey rejected", st == 422, st)
+
+    # A device pubkey becomes a line in a WireGuard config that `wg syncconf`
+    # parses AS ROOT on the exit node. The guard used to be length-only, so 44
+    # characters carrying a newline and a wg directive fragment passed — and
+    # since syncconf is atomic and meshd runs it with check=True, one such
+    # device broke peer sync for EVERY customer on that node. These are the
+    # shapes that must never reach the node: each is 44 chars (or close) but
+    # not a real base64-encoded 32-byte key.
+    import base64 as _b64
+    for label, pk in (
+        ("a newline mid-key", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\nListenPort=1"),
+        ("spaces and brackets", ("[Peer]PublicKey= AllowedIPs=0/0 " + "A" * 44)[:44]),
+        ("44 chars of non-base64", "!!!!" + "A" * 39 + "="),
+        ("valid base64 but 16 bytes, not 32", _b64.b64encode(b"x" * 16).decode()),
+    ):
+        st, r = H.call("POST", "/api/v1/wg/register",
+                       {"pubkey": pk, "device_name": "d", "region": "zur"},
+                       headers={"X-Account-Token": tokA})
+        check(f"pubkey rejected at ingest: {label}", st == 422, f"{st} {r}")
+    # The node's own pubkey and public_ip flow into wg configs and an nft
+    # ruleset loaded as root; both are validated at /node/provision too.
+    ptok = H.mint_provision_token(DB, "zur", "both")
+    st, r = H.call("POST", "/api/v1/node/provision",
+                   {"pubkey": H.genkey(), "public_ip": "1.2.3.4; nft flush ruleset",
+                    "region": "zur", "role": "both", "wg_port": 51820},
+                   headers={"X-Provision-Token": ptok})
+    check("a node public_ip that is not a literal IP is rejected", st == 422, f"{st} {r}")
+    # And a real device key still registers, so the guard is not just refusing
+    # everything.
+    st, r = H.call("POST", "/api/v1/wg/register",
+                   {"pubkey": H.genkey(), "device_name": "real", "region": "zur"},
+                   headers={"X-Account-Token": tokA})
+    check("a genuine WireGuard key still registers", st == 200, f"{st} {r}")
+
     st, r = H.call("POST", "/api/v1/wg/register",
                    {"pubkey": H.genkey(), "device_name": "d",
                     "region": "zur'; DROP TABLE accounts;--"},
@@ -251,11 +309,26 @@ def _exercise(access_log, pub):
         st, _ = H.call("POST", "/api/v1/wg/register",
                        {"pubkey": pub, "device_name": "laptop", "region": "zur"}, hdr)
         assert st == 200, st
-        st, _ = H.call("DELETE", "/api/v1/devices/" + urllib.parse.quote(pub, safe=""),
-                       None, hdr)
+        enc_pub = urllib.parse.quote(pub, safe="")
+        st, _ = H.call("DELETE", "/api/v1/devices/" + enc_pub, None, hdr)
         assert st == 200, st
         H.call("GET", f"/api/v1/payment/{urllib.parse.quote(inv, safe='')}/status")
-        time.sleep(0.8)
+        # uvicorn flushes its access log asynchronously, so a fixed sleep races
+        # the flush — the control assertion then intermittently sees the
+        # invoice line but not the (later) delete line, and fails for a reason
+        # that has nothing to do with what it tests. Wait for the delete line
+        # to land, up to a bound; the quiet case has no line to wait for, so
+        # it just spends the bound and returns (which is correct — it is
+        # asserting ABSENCE).
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            try:
+                blob = open(f"{H.RUN}/api.log").read()
+            except FileNotFoundError:
+                blob = ""
+            if not access_log or "/api/v1/devices/" in blob:
+                break
+            time.sleep(0.1)
     finally:
         H.shutdown()
     return open(f"{H.RUN}/api.log").read(), inv

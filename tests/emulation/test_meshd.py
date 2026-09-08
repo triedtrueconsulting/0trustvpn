@@ -109,6 +109,56 @@ try:
     time.sleep(3)
     check("meshd logs the failure and keeps running",
           proc.poll() is None and "sync failed" in log(), log()[-500:])
+
+    print("\n[7] a malformed peer is skipped, not fatal to the whole sync")
+    # Load the real daemon's config builder directly. `wg syncconf` is atomic
+    # and meshd runs it with check=True, so before this guard a single bad
+    # [Peer] block failed the sync for every customer on the node. The control
+    # plane validates keys at ingest now; this is the belt to that braces.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "meshd_mod", os.path.join(H.REPO, "wireguard", "0trust-meshd.py"))
+    meshd = importlib.util.module_from_spec(spec)
+    # meshd reads these at import time.
+    os.environ.setdefault("CONTROL_URL", "http://127.0.0.1:1")
+    os.environ.setdefault("NODE_API_PSK", "x")
+    os.environ.setdefault("NODE_ID", "test")
+    # WG_PRIV is read at build time; point it at a temp file with a real key.
+    import base64 as _b64
+    keyfile = os.path.join(TMP, "priv.key")
+    open(keyfile, "w").write(_b64.b64encode(b"k" * 32).decode())
+    try:
+        spec.loader.exec_module(meshd)
+        meshd.WG_PRIV = __import__("pathlib").Path(keyfile)
+        good = _b64.b64encode(b"g" * 32).decode()
+        cfg = meshd.build_wg_config([
+            {"public_key": good, "allowed_ips": "10.64.0.5/32"},
+            {"public_key": "AAAA=\nListenPort=1" + "A" * 27, "allowed_ips": "10.64.0.6/32"},
+            {"public_key": "not-base64-at-all-" + "A" * 26 + "=", "allowed_ips": "10.64.0.7/32"},
+        ])
+        check("the good peer is in the config", good in cfg, cfg)
+        check("the two malformed peers are dropped",
+              cfg.count("[Peer]") == 1, cfg)
+        check("no injected directive survived",
+              "ListenPort = 1" not in cfg and cfg.count("ListenPort") == 1, cfg)
+
+        # A peer's AllowedIPs is never installed as a route blindly: _in_mesh
+        # only accepts prefixes inside the mesh network, so a compromised or
+        # hostile peer cannot make the node route 0.0.0.0/0, ::/0 or another
+        # customer's LAN toward itself. This is the Phase 11/12 protection —
+        # arbitrary client-advertised routes are refused by construction.
+        check("a mesh /32 is accepted as a route", meshd._in_mesh("10.64.0.9/32"))
+        check("a mesh v6 /128 is accepted", meshd._in_mesh(
+            meshd.mesh_ip6("10.64.0.9") + "/128") if hasattr(meshd, "mesh_ip6")
+            else meshd._in_mesh("fd0e:5f7a:c21b::a40:9/128"))
+        for hostile in ("0.0.0.0/0", "::/0", "192.168.1.0/24", "8.8.8.8/32",
+                        "10.0.0.0/8"):
+            check(f"a route outside the mesh is refused: {hostile}",
+                  not meshd._in_mesh(hostile))
+        check("a malformed CIDR is refused, not crashed on",
+              not meshd._in_mesh("not-a-cidr") and not meshd._in_mesh("10.64.0.0/999"))
+    except Exception as e:
+        check("build_wg_config skip guard", False, f"{type(e).__name__}: {e}")
 finally:
     if proc and proc.poll() is None:
         proc.send_signal(signal.SIGTERM)

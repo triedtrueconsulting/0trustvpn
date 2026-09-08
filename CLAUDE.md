@@ -377,6 +377,22 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   the privacy properties of the RENDERED bytes, and audit-verify reads
   `sites-enabled/0trust` and `conf.d/0trust-zones.conf`, the names the
   installer actually writes.
+- **A device or node public key is validated as a real key at ingest, not
+  just by length.** A WireGuard pubkey becomes a `PublicKey =` line that
+  `wg syncconf` parses AS ROOT on the exit node (`build_wg_config` in
+  `wireguard/0trust-meshd.py`), and `wg syncconf` is atomic under
+  `check=True` — so one device whose "key" is 44 characters containing a
+  newline and a directive fragment breaks peer sync for EVERY customer on the
+  node. `_validate_wg_key` in `api/main.py` decodes it and requires 32 bytes;
+  `_validate_public_ip` requires a literal IP, because a node's `public_ip`
+  is interpolated into an `nft -f` DNAT rule. Both run on
+  `WGRegisterRequest`, `WGRotateRequest` and `NodeProvisionRequest`.
+  `min_length=44` alone was the old guard and it let all of the above
+  through. meshd also skips a malformed peer rather than failing the whole
+  sync, as defence in depth — but ingest is the real fix. When a test's `wg`
+  stub emits a fake key, it must emit a base64-of-32-bytes shape (the stub in
+  `tests/emulation/bin/wg` did not, and every stubbed enrolment was refused
+  until it did).
 - **The request path is a secret on two routes, so nothing logs it.**
   `DELETE /api/v1/devices/{pubkey}` carries a customer's WireGuard key and
   `GET /api/v1/payment/{invoice_id}/status` carries a bearer capability, so

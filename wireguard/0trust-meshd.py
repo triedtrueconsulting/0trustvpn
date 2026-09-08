@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import random
+import base64
 import subprocess
 import tempfile
 import time
@@ -101,13 +102,35 @@ def fetch_peers() -> list[dict]:
     return _get(f"/api/v1/wg/peers?node_id={NODE_ID}")["peers"]
 
 
+def _is_wg_key(v: str) -> bool:
+    """A base64-encoded 32-byte X25519 point — the shape wg accepts."""
+    v = (v or "").strip()
+    if len(v) != 44 or "\n" in v or "\r" in v:
+        return False
+    try:
+        return len(base64.b64decode(v, validate=True)) == 32
+    except Exception:
+        return False
+
+
 def build_wg_config(peers: list[dict]) -> str:
     priv = WG_PRIV.read_text().strip()
     lines = ["[Interface]", f"PrivateKey = {priv}", f"ListenPort = {WG_PORT}", ""]
     for p in peers:
+        # Defence in depth. The control plane validates the key at ingest now,
+        # so a malformed one should never arrive — but `wg syncconf` is atomic
+        # and run with check=True, so a single bad [Peer] block would fail the
+        # sync for EVERY customer on this node. Skip the offender and carry the
+        # rest rather than dropping everyone. AllowedIPs is not interpolated
+        # blindly either: reconcile_routes only installs prefixes _in_mesh()
+        # accepts, so a hostile CIDR here cannot become a real route.
+        key = str(p.get("public_key") or "")
+        if not _is_wg_key(key):
+            log.warning("skipping peer with an invalid public key: %r", key[:16])
+            continue
         lines += [
             "[Peer]",
-            f"PublicKey = {p['public_key']}",
+            f"PublicKey = {key}",
             f"AllowedIPs = {p['allowed_ips']}",
             "",
         ]

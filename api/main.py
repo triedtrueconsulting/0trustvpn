@@ -40,6 +40,7 @@ Run:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import ipaddress
@@ -559,6 +560,46 @@ def create_invoice(account_id: int, months: int, amount_usd: float,
 # SCHEMAS
 # ============================================================================
 
+# A device or node public key is not free text — it becomes a line in a
+# WireGuard config that `wg syncconf` parses AS ROOT on the exit node
+# (build_wg_config in wireguard/0trust-meshd.py), and a node's pubkey is
+# rendered into every client's config as the peer they connect to. The old
+# guard was min_length=44/max_length=44 only, so 44 characters containing a
+# newline and a fragment of a wg directive passed — and one such device broke
+# `wg syncconf` for EVERY customer on the node, because syncconf is atomic and
+# meshd runs it with check=True. Validate the real shape at ingest, where
+# CLAUDE.md says validation belongs: a WireGuard key is a base64-encoded
+# 32-byte X25519 point, i.e. exactly 43 base64 chars plus one '=' of padding.
+# Decoding is the authoritative check; the length/charset guard keeps the
+# error early and cheap.
+def _validate_wg_key(v: str) -> str:
+    v = (v or "").strip()
+    if len(v) != 44 or not v.endswith("=") or "\n" in v or "\r" in v:
+        raise ValueError("not a valid WireGuard public key")
+    try:
+        raw = base64.b64decode(v, validate=True)
+    except Exception:
+        raise ValueError("not a valid WireGuard public key")
+    if len(raw) != 32:
+        raise ValueError("not a valid WireGuard public key")
+    return v
+
+
+def _validate_public_ip(v: str) -> str:
+    # A node's public IP is DNAT'd to inside an nftables rule that `nft -f`
+    # loads as root (build_nft_ruleset). It arrives from a node holding a
+    # provision token, not an arbitrary customer, but an unparseable value
+    # there brings down the exit node's whole NAT table rather than one rule,
+    # so it is checked at ingest too. ipaddress rejects anything that is not a
+    # literal v4/v6 address — no hostnames, no ranges, no nft metacharacters.
+    v = (v or "").strip()
+    try:
+        ipaddress.ip_address(v)
+    except ValueError:
+        raise ValueError("public_ip must be a literal IPv4 or IPv6 address")
+    return v
+
+
 class AccountCreateRequest(BaseModel):
     months: int = Field(..., description="Subscription duration in months")
     # Which coin to be invoiced in. Validated against what this deployment can
@@ -605,6 +646,8 @@ class AccountStatusResponse(BaseModel):
 class WGRegisterRequest(BaseModel):
     pubkey: str = Field(..., min_length=44, max_length=44)
     device_name: str = Field(..., min_length=1, max_length=64)
+
+    _pubkey_ok = field_validator("pubkey")(lambda cls, v: _validate_wg_key(v))
     region: str = Field("zur", description="Preferred entry region")
     exit_region: str | None = Field(
         None,
@@ -1842,6 +1885,8 @@ class WGRotateRequest(BaseModel):
     region: str = Field("zur")
     exit_region: str | None = None
 
+    _pubkey_ok = field_validator("pubkey")(lambda cls, v: _validate_wg_key(v))
+
 
 @app.post("/api/v1/wg/rotate", response_model=WGRegisterResponse)
 def wg_rotate(
@@ -1933,6 +1978,19 @@ class NodeProvisionRequest(BaseModel):
     # out, and the control plane went on believing the node was fine because
     # meshd's heartbeat is a separate outbound HTTPS call that kept working.
     wg_port: int = 51820
+
+    _pubkey_ok = field_validator("pubkey")(lambda cls, v: _validate_wg_key(v))
+    _public_ip_ok = field_validator("public_ip")(lambda cls, v: _validate_public_ip(v))
+
+    @field_validator("wg_port")
+    @classmethod
+    def _port_in_range(cls, v: int) -> int:
+        # The port is interpolated into a wg config as ListenPort and into an
+        # endpoint string. Constrain it to a real port so neither can carry a
+        # value that is not a number.
+        if not (1 <= v <= 65535):
+            raise ValueError("wg_port must be 1-65535")
+        return v
 
 
 class NodeProvisionResponse(BaseModel):
