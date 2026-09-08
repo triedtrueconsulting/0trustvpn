@@ -44,6 +44,7 @@ MODULES = [
     ("client",       "the compiled 0trust binary, end to end"),
     ("meshd",        "the mesh node daemon against a live control plane"),
     ("node",         "deploying a VPS into the mesh, and rebooting it"),
+    ("obfs",         "the obfuscated transport, with real packets end to end"),
     ("integration",  "pubkey escaping and GUI polling pressure"),
     ("proxy_guards", "SSRF and content rails, nothing patched"),
     ("proxy",        "the visitor proxy against a real origin server"),

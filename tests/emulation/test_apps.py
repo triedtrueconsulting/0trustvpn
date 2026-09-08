@@ -155,7 +155,25 @@ try:
         "pubkey": pub, "device_name": "android-test", "region": "zur"})
     check("wg/register responds", st == 200, reg)
     kt = serial_names(kotlin_class("WgRegisterResponse"))
-    missing = set(reg) - kt
+    # Two keys the app deliberately does not read, named rather than waved
+    # through — a bare exemption would also hide the next key someone forgets.
+    UNREAD_BY_DESIGN = {
+        # wireguard-android pins 1280, below anything the control plane would
+        # publish and safe on every carrier network, so the app has no use
+        # for a computed MTU. See the comment in WgConfig.toLibraryConfig.
+        "mtu",
+        # The app cannot host a local UDP relay in its packet path — GoBackend
+        # owns the tunnel — so it connects directly and the relay the control
+        # plane offers goes unused. Ignoring it is the SAFE direction; acting
+        # on it half-way would not be. The app must also not claim DPI
+        # protection anywhere, which test_obfs.py [9] enforces.
+        "obfuscation",
+    }
+    stale = UNREAD_BY_DESIGN - set(reg)
+    check("every documented exemption is still a key the API sends", not stale,
+          f"{sorted(stale)} is exempted but no longer exists — drop it, or the "
+          "list quietly starts excusing something else")
+    missing = set(reg) - kt - UNREAD_BY_DESIGN
     check("WgRegisterResponse reads every key the API sends", not missing,
           sorted(missing))
     kt = serial_names(kotlin_class("WgPeer"))

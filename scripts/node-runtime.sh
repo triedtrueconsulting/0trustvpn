@@ -254,6 +254,29 @@ ztv_mesh_ip6() {
 # --- meshd environment -----------------------------------------------------
 # $1 control url  $2 node psk  $3 node id  $4 role  $5 iface  $6 port
 # $7 mesh gateway (CIDR)  $8 nft table name
+# ztv_obfs_env <key> <listen> <wg-ports>
+#
+# The relay's environment. The key is here and nowhere else on the node —
+# never an argument, because `ps` shows arguments to every account on the box.
+ztv_obfs_env() {
+    cat <<EOF
+ZTV_OBFS_KEY=$1
+ZTV_OBFS_LISTEN=$2
+ZTV_OBFS_WG_PORTS=$3
+EOF
+}
+
+# ztv_obfs_ports <wg-port>
+#
+# What the relay is allowed to forward to: this node's own WireGuard listener
+# and the multi-hop entry range, both on loopback. Derived in one place so the
+# relay's allowlist cannot drift from the ports the node actually opens —
+# a mismatch gives a customer a tunnel that never handshakes, with the node
+# heartbeating healthy throughout.
+ztv_obfs_ports() {
+    printf '%s,52000-59999\n' "$1"
+}
+
 ztv_meshd_env() {
     cat <<EOF
 CONTROL_URL=$1

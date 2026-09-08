@@ -420,6 +420,69 @@ journalctl -u 0trust-meshd | grep 'control='     # Expect: "via SOCKS5 …(no di
 ss -tnp | grep meshd                             # Expect: only the SOCKS port, never the control plane
 ```
 
+### 5.5 The obfuscated transport, and what it does and does not conceal
+
+A node may optionally run `0trust-obfs`, a relay that lets a customer's
+WireGuard traffic reach it without carrying WireGuard's signature. It is off
+by default on the node (`install.sh --mode node --obfs-port <n>`) and off by
+default in the client (`0trust connect --obfuscate`, or the GUI switch), so
+the ordinary case is unchanged from everything above.
+
+**What it conceals.** WireGuard's handshake initiation is 148 bytes beginning
+`01 00 00 00`. Sealed in a Shadowsocks AEAD packet it is a random 32-byte
+salt followed by ciphertext and a tag, with no fixed bytes anywhere. A DPI
+box cannot classify the protocol.
+
+**What it does not.** Four things, each of which an auditor should confirm we
+state everywhere we mention the feature:
+
+| | |
+| --- | --- |
+| Not authentication | Every client on a node is handed the same relay key — that is what lets the relay open their packets. It is not a secret from anyone who can buy an account. WireGuard remains the only thing authenticating a customer, with or without this. |
+| Not traffic-analysis resistance | Packet sizes, timing and volume are unchanged. A flow to this node still looks like a flow to this node, in the same shape as before. |
+| Not a UDP-block bypass | UDP in, UDP out. A network dropping all outbound UDP drops this too. |
+| Not on by default | It costs an extra userspace hop at each end and 55 bytes of payload. A customer who is not being filtered gains nothing. |
+
+**What it logs: nothing.** The relay writes no file. Its unit is
+`ProtectSystem=strict` with no `ReadWritePaths`, so it has nowhere to write
+even if it tried, and this is deliberate — the only thing it could usefully
+record is which addresses talked to it, which is the log §3.3 says we do not
+keep. A packet that fails to authenticate is dropped in silence and counted
+nowhere: answering it, even with an error, would tell an unauthenticated
+prober that something speaks on that port.
+
+**Privilege.** The relay is a separate unit from meshd, running as a
+`DynamicUser` with `CAP_NET_BIND_SERVICE` and nothing else. meshd holds
+`CAP_NET_ADMIN` over WireGuard, nftables and routing; the relay parses bytes
+an unauthenticated stranger sent to a public port. Those two facts must not
+share a process.
+
+**The open-relay question, which an auditor should press on.** A stock
+Shadowsocks server forwards to whatever destination the packet names. Ours
+holds an allowlist of the node's own loopback WireGuard ports and forwards
+nowhere else; hostname destinations (SOCKS5 ATYP 3) are rejected outright, so
+it never performs a lookup for anybody; and `NewServer` refuses to start on an
+empty allowlist or one naming a non-loopback address. Without that, a key
+every customer holds would make this an open proxy sourced from our node's
+address.
+
+```bash
+# On a node, with the relay enabled:
+systemctl show 0trust-obfs -p CapabilityBoundingSet   # Expect: CAP_NET_BIND_SERVICE only
+systemctl show 0trust-obfs -p ReadWritePaths          # Expect: empty
+grep ZTV_OBFS_WG_PORTS /etc/0trust/obfs.env           # Expect: this node's ports only
+ss -lunp | grep 0trust-obfs                           # Expect: it is actually listening
+```
+
+The end-to-end behaviour is exercised by `tests/emulation/test_obfs.py`,
+which starts the real binary, pushes a real handshake initiation through the
+real client relay, and confirms both that it arrives and that the bytes on
+the wire do not begin `01 00 00 00`. The open-relay guard is checked by
+sending a packet naming a destination the relay was not told about and
+confirming nothing comes back — after first confirming that the allowlisted
+destination does answer, so the check cannot pass on a relay that forwards
+nothing at all.
+
 ---
 
 ## 6. Control-plane database (SQLite)

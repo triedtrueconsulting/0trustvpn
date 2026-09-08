@@ -1,0 +1,53 @@
+[Unit]
+Description=0trust obfuscated transport relay
+After=network-online.target 0trust-node-enroll.service
+Wants=network-online.target
+# The relay's key and port come from enrolment. Starting before that file
+# exists would fail-restart in a loop and fill the journal with nothing
+# useful; requiring it means the unit simply waits.
+ConditionPathExists=/etc/0trust/obfs.env
+
+[Service]
+Type=exec
+EnvironmentFile=/etc/0trust/obfs.env
+ExecStart=/usr/local/bin/0trust-obfs --listen ${ZTV_OBFS_LISTEN} --wg-ports ${ZTV_OBFS_WG_PORTS}
+Restart=on-failure
+RestartSec=5s
+
+# This process parses bytes an unauthenticated stranger sent to a public UDP
+# port. It is the least trustworthy code on the node, so it gets none of the
+# node's privileges: a transient unprivileged user, and the one capability
+# it cannot do without — CAP_NET_BIND_SERVICE, to bind udp/443. It never
+# touches WireGuard, nftables or routing, which is the whole reason it is a
+# separate unit from meshd rather than more code inside it: meshd holds
+# CAP_NET_ADMIN for all three, and that is not a privilege to hand to a
+# parser of stranger-supplied bytes.
+User=0trust-obfs
+Group=0trust-obfs
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryDenyWriteExecute=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+# Nothing to write. If this unit ever needs a writable path, something has
+# gone wrong with the design: the relay holds no state that survives a
+# restart and must never record who talked to it.
+ReadOnlyPaths=/
+
+[Install]
+WantedBy=multi-user.target

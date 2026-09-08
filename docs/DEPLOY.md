@@ -251,19 +251,52 @@ new token and re-run the installer.
 ### What the node does about being noticed
 
 Be precise about this, because it is the area where VPN marketing lies most.
-**0trust runs plain WireGuard. It is not obfuscated, and deep packet
-inspection identifies it.** WireGuard's handshake is a fixed-size packet with
-a constant type byte in a known position; any DPI box worth the name
-fingerprints it in one packet, and a national firewall will block it. If you
-need to work through that, you need an obfuscation layer that does not exist
-here yet — it is on the v0.2 list, and it is a client-side change as much as
-a node-side one.
+**By default 0trust runs plain WireGuard. That is not obfuscated, and
+deep packet inspection identifies it.** WireGuard's handshake is a fixed-size
+packet with a constant type byte in a known position; any DPI box worth the
+name fingerprints it in one packet, and a national firewall will block it.
 
-What the node does do:
+A node can optionally run the obfuscated transport, and then customers who
+turn it on are not identifiable that way:
+
+```bash
+sudo ./scripts/install.sh --mode node ... --obfs-port 443
+```
+
+That starts `0trust-obfs`, a small relay that terminates a Shadowsocks AEAD
+UDP session and hands the WireGuard datagrams inside to the node's own
+loopback tunnel port. On the wire the customer's traffic is a random salt and
+ciphertext — nothing fixed to write a signature against. `--obfs-port 0` (the
+default) leaves it off; the control plane then advertises no relay for this
+node and clients that land here connect directly.
+
+Four things this is NOT, all of which have to stay said:
+
+- **Not the default, and not free.** Every packet takes an extra trip through
+  userspace at each end and loses 55 bytes of payload. The control plane
+  publishes a reduced MTU with the relay's details so clients set it
+  correctly; a customer who is not being filtered should leave it off.
+- **Not authentication.** Every customer on a node is handed the same relay
+  key — that is what lets the relay open their packets. WireGuard remains the
+  only thing authenticating anyone, exactly as when the relay is off.
+- **Not traffic-analysis resistance.** Packet sizes, timing and volume are
+  unchanged, and a flow to this node still looks like a flow to this node.
+- **Not a way through a UDP block.** It is UDP in and UDP out. A network that
+  drops all outbound UDP drops this too. Carrying the same frames over TCP is
+  a different mode and is not implemented.
+
+The relay runs as its own unprivileged unit, not inside meshd. It parses bytes
+an unauthenticated stranger sent to a public port, and meshd holds
+CAP_NET_ADMIN over WireGuard, nftables and routing — those two facts do not
+belong in one process. It will only forward to the node's own loopback
+WireGuard ports: an unrestricted Shadowsocks server is a general-purpose
+proxy, and one with a key every customer holds is an open proxy.
+
+What the node does regardless:
 
 | | |
 | --- | --- |
-| `--wg-port 443` | Recommended. UDP 443 is where QUIC lives, so at the netflow level — ports and volumes, no payload — the tunnel looks like ordinary web traffic instead of announcing itself on 51820, WireGuard's registered port. It does not survive DPI, which reads the handshake. It does survive naive port blocking, which is what most restrictive networks actually do. |
+| `--wg-port 443` | Recommended. UDP 443 is where QUIC lives, so at the netflow level — ports and volumes, no payload — the tunnel looks like ordinary web traffic instead of announcing itself on 51820, WireGuard's registered port. It does not survive DPI, which reads the handshake — that is what `--obfs-port` is for. It does survive naive port blocking, which is what most restrictive networks actually do. Note the two cannot share a port: pick `--wg-port 443 --obfs-port 8443`, or the reverse, and the installer and the control plane both refuse the collision. |
 | Silence to strangers | WireGuard does not reply to a packet it cannot authenticate — no banner, no error, nothing. A UDP scan of the node cannot distinguish the tunnel port from a closed one. This is WireGuard's design, not ours. |
 | Jittered check-in | meshd polls the control plane over its own outbound HTTPS. That used to be every 30.00 seconds forever, which is a shape visible in netflow at the hosting provider without reading a byte. It now varies (`ZTV_POLL_JITTER`, default ±35%). |
 | Nothing branded on the wire | The node sets no hostname of its own and serves nothing on any other port. Its firewall allows ssh, the tunnel port, and the multi-hop range; everything else is dropped, not rejected. |

@@ -34,6 +34,13 @@ client/         Go module github.com/0trust/cli (Go 1.22, dep: skip2/go-qrcode)
     wg.go        Shared: GenKeypair (stdlib crypto/ecdh), BuildConfig, WriteConfig
     wg_unix.go   Linux/macOS: wg-quick + wg syncconf
     wg_windows.go Windows: wireguard.exe /installtunnelservice (official service)
+  internal/obfs/                  Shadowsocks AEAD transport, BOTH ends:
+    shadowsocks.go  packet format (pure stdlib; Pack/Unpack, Overhead=55)
+    relay.go        client-side Relay + node-side Server (allowlisted)
+    lifecycle.go    Spawn/Stop the detached relay process
+  internal/transport/transport.go The one place that decides direct vs
+                                  obfuscated — connect, rotate and the GUI
+  cmd/0trust-obfs/main.go         The node's relay daemon
   internal/gui/gui.go             Browser GUI server on 127.0.0.1:51827
   internal/gui/assets/            index.html, app.css, app.js (embedded)
   internal/export/export.go       Mobile QR config export
@@ -345,12 +352,47 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   no fallback to a direct connection** — a silent downgrade restores the
   signal precisely when someone is interfering with Tor, the same reason the
   node's DNS fails closed. Default is off (direct), unchanged.
-- **Nodes run plain WireGuard: no obfuscation, and DPI identifies it.** Never
-  let copy imply otherwise. What exists is port-level camouflage
-  (`--wg-port 443`, recommended, blends with QUIC in netflow), WireGuard's own
-  silence to unauthenticated packets, a jittered meshd check-in
-  (`ZTV_POLL_JITTER`) so the beacon is not metronomic, and keepalive chatter.
-  Obfuscation proper is v0.2 and is a client change as much as a node one.
+- **Obfuscation is real, but OPT-IN on both ends — the default is still plain
+  WireGuard, which DPI identifies.** Never let copy imply otherwise in either
+  direction. A node runs the relay only with `install.sh --mode node
+  --obfs-port <n>` (default 0 = off), and a customer uses it only with
+  `0trust connect --obfuscate` or the GUI's DPI-protection switch (default
+  off, sticky like the kill switch). `client/internal/obfs` is the Shadowsocks
+  AEAD packet format, aes-256-gcm, pure stdlib, ONE implementation serving
+  both ends — `0trust-obfs` on the node and the client relay in the same
+  package. The PSK is used as the master key directly rather than through
+  Shadowsocks' MD5 EVP_BytesToKey, so we claim no shadowsocks-libev interop
+  and nothing should.
+  **The node relay is not a Shadowsocks server and must never become one.**
+  Every customer on a node holds the same relay key, so an unrestricted relay
+  is an open proxy with a published password. `NewServer` refuses an empty or
+  non-loopback allowlist, destinations are the node's own WireGuard ports
+  only, and hostnames are rejected outright so it never resolves for anybody.
+  **The setting and the fact are different things everywhere.** `Obfuscate` is
+  what the customer asked for; `RelayActive` is whether a relay is really
+  carrying the traffic, and they differ whenever the node they landed on runs
+  none. `transport.Describe`/`Short` read the live process, and a node without
+  a relay produces a direct tunnel that SAYS SO rather than connecting as
+  though the request had been honoured.
+  **The decision lives in `client/internal/transport`, once.** Three callers
+  need it — connect, rotate and the GUI's connect handler — and rotate is the
+  reason it is shared: rotating moves the ENTRY node, which is the node the
+  relay dials, so a relay left running forwards to a box no longer in the
+  route. A second copy of this decision is a second chance to forget half of
+  it, which is exactly how rotate once shipped configs without the kill switch.
+  **MTU is published per transport (`WG_MTU` / `WG_MTU_OBFUSCATED`), never
+  computed in a client.** The relay adds 55 bytes (`obfs.Overhead`); a
+  handshake is 148 bytes and fits either way, so getting it wrong brings the
+  tunnel up healthy and then silently drops full-size packets — which reaches
+  the customer as "some sites hang" and is unattributable.
+  Also still true and still not obfuscation: port-level camouflage
+  (`--wg-port 443`, blends with QUIC in netflow — and it cannot share a port
+  with the relay; both ends refuse the collision), WireGuard's own silence to
+  unauthenticated packets, a jittered meshd check-in (`ZTV_POLL_JITTER`), and
+  keepalive chatter. What obfuscation does NOT give: authentication (shared
+  key), traffic-analysis resistance (sizes and timing unchanged), or a way
+  through a UDP block (it is UDP in, UDP out). `docs/DEPLOY.md` states all
+  four limits and `test_node.py` fails if any one of them goes missing.
 - **Clients are handed `DNS = 10.64.0.1` (plus the v6 gateway where v6 is
   carried), so something must answer there.**
   `dnsmasq` on the mesh gateway, `bind-interfaces` (an open resolver on the
@@ -703,9 +745,20 @@ encrypted DB backup + DR runbook, abuse/DMCA runbook, legal pages
    built to be their starting point.
 
 **Explicit v0.2 backlog:** system tray icon, native desktop window, APT repo
-for auto-updates, a macOS kill switch (pf, not iptables). The iOS app moved out
-of the backlog and into `mobile/ios/`; what remains for it is a Mac, a
-Developer account and Apple's entitlement approval, not engineering.
+for auto-updates, a macOS kill switch (pf, not iptables), and an obfuscation
+mode that survives a total UDP block (the same frames over TCP — the current
+relay is UDP in, UDP out). Obfuscation itself moved out of the backlog: see
+the invariant above. The iOS app moved out too, into `mobile/ios/`; what
+remains for it is a Mac, a Developer account and Apple's entitlement
+approval, not engineering.
+
+**Obfuscation is desktop-only so far.** The CLI and the browser GUI have the
+switch; the Android and iOS apps do not, because their tunnel is brought up
+by wireguard-android's `GoBackend` and WireGuardKit respectively, and neither
+gives us a place to put a local UDP relay in the packet path the way a
+desktop can. They register and connect exactly as before — the control plane
+advertises the relay to them and they ignore it, which is the safe direction.
+Neither app's copy may mention DPI protection until that is untrue.
 
 ## Conventions
 

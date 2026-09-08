@@ -44,6 +44,10 @@
 #   --region <code>          (node) zur | rey | buc
 #   --role entry|exit|both   (node) default both
 #   --wg-port <port>         (node) default 51820
+#   --obfs-port <port>       (node) run the obfuscated transport relay on this
+#                            UDP port. 443 blends with QUIC in netflow. Default
+#                            0 = off; the node is fine without it and clients
+#                            that land there simply connect directly.
 #   --swap <size>            (test/production) make a swapfile, e.g. 4G.
 #                            REFUSED on a node: swap can page the WireGuard
 #                            private key to persistent disk, which is the one
@@ -63,6 +67,7 @@ INSTALL_DEGRADED=0
 # closing summary describes the box that exists rather than the one intended.
 VPN_BROKEN=0
 CONTROL_URL="" PROVISION_TOKEN="" REGION="" NODE_ROLE="both" WG_PORT="51820"
+OBFS_PORT="0"
 SWAP_SIZE=""
 
 WALLET_BTC="${WALLET_BTC:-}"
@@ -108,6 +113,8 @@ while [[ $# -gt 0 ]]; do
         --region) REGION="${2:-}"; shift 2 ;;
         --role) NODE_ROLE="${2:-}"; shift 2 ;;
         --wg-port) WG_PORT="${2:-}"; shift 2 ;;
+        --obfs-port) OBFS_PORT="${2:-}"; shift 2 ;;
+        --no-obfs) OBFS_PORT=0; shift ;;
         --swap) SWAP_SIZE="${2:-}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
@@ -145,6 +152,13 @@ if [[ "$MODE" == "node" ]]; then
     case "$NODE_ROLE" in entry|exit|both) ;; *) die "--role must be entry|exit|both" ;; esac
     [[ "$WG_PORT" =~ ^[0-9]+$ ]] && (( WG_PORT >= 1 && WG_PORT <= 65535 )) \
         || die "--wg-port must be 1-65535"
+    [[ "$OBFS_PORT" =~ ^[0-9]+$ ]] && [[ "$OBFS_PORT" -ge 0 && "$OBFS_PORT" -le 65535 ]] \
+        || die "--obfs-port must be 0-65535"
+    # Both ends check this. The control plane refuses the pair too, because a
+    # relay on the WireGuard port would take the tunnel's own listener away
+    # and the node would look fine while answering nobody.
+    [[ "$OBFS_PORT" == "0" || "$OBFS_PORT" != "$WG_PORT" ]] \
+        || die "--obfs-port cannot be the same as --wg-port ($WG_PORT)"
     # Not a matter of taste. A mesh node keeps its WireGuard private key on
     # tmpfs so it never touches persistent storage, and web/privacy.html,
     # web/audit.html and docs/AUDIT.md 5.3 all tell customers so. Swap is a
@@ -389,6 +403,7 @@ CONTROL_URL=$CONTROL_URL
 REGION=$REGION
 NODE_ROLE=$NODE_ROLE
 WG_PORT=$WG_PORT
+OBFS_PORT=$OBFS_PORT
 ZTV_PROVISION_TOKEN=$PROVISION_TOKEN
 ENV
         chmod 600 "$ETC_NODE"
@@ -411,11 +426,39 @@ ENV
                 /etc/systemd/system/0trust-node-enroll.service
         install -m 0644 "$REPO_DIR/systemd/0trust-meshd.service" \
                 /etc/systemd/system/0trust-meshd.service
+        if [[ "$OBFS_PORT" != "0" ]]; then
+            OBFS_ARCH="$(dpkg --print-architecture)"
+            OBFS_BIN="$REPO_DIR/client/dist/0trust-obfs-linux-$OBFS_ARCH"
+            # A release tarball ships this prebuilt. A git checkout does not,
+            # so build it here when the toolchain is present rather than
+            # sending the operator away mid-install — but never install a
+            # relay we could not produce, because the control plane would
+            # then advertise a transport this node cannot serve.
+            if [[ ! -x "$OBFS_BIN" ]] && command -v go >/dev/null 2>&1; then
+                log "  building 0trust-obfs for linux/$OBFS_ARCH"
+                ( cd "$REPO_DIR/client" && CGO_ENABLED=0 GOOS=linux GOARCH="$OBFS_ARCH" \
+                    go build -trimpath -ldflags "-s -w" \
+                        -o "dist/0trust-obfs-linux-$OBFS_ARCH" ./cmd/0trust-obfs ) \
+                    || die "0trust-obfs would not build — see the output above"
+            fi
+            [[ -x "$OBFS_BIN" ]] || die \
+"no 0trust-obfs binary for linux/$OBFS_ARCH and no Go toolchain to build one.
+       Either install golang-go and re-run, or build it elsewhere and drop it at
+         client/dist/0trust-obfs-linux-$OBFS_ARCH
+       Or re-run with --no-obfs: the node works fine without the relay, and
+       clients that land here simply connect directly."
+            install -m 0755 "$OBFS_BIN" /usr/local/bin/0trust-obfs
+            install -m 0644 "$REPO_DIR/systemd/0trust-obfs.service" \
+                    /etc/systemd/system/0trust-obfs.service
+        fi
         systemctl daemon-reload
         systemctl enable 0trust-node-enroll.service >/dev/null 2>&1 || true
         systemctl enable 0trust-meshd.service >/dev/null 2>&1 || true
+        [[ "$OBFS_PORT" != "0" ]] \
+            && { systemctl enable 0trust-obfs.service >/dev/null 2>&1 || true; }
     fi
     ok "0trust-node-enroll.service, 0trust-meshd.service"
+    [[ "$OBFS_PORT" != "0" ]] && ok "0trust-obfs.service (udp/$OBFS_PORT)"
 
     # ------------------------------------------------------------------
     log "Firewall"
@@ -425,6 +468,8 @@ ENV
         ufw default allow outgoing >/dev/null
         ufw allow 22/tcp comment 'ssh' >/dev/null
         ufw allow "$WG_PORT/udp" comment '0trust wireguard' >/dev/null
+        [[ "$OBFS_PORT" != "0" ]] \
+            && ufw allow "$OBFS_PORT/udp" comment '0trust obfuscation' >/dev/null
         ufw allow in on wg0 >/dev/null 2>&1 || true
         # No `ufw allow 53`: the resolver binds the mesh gateway only. An open
         # resolver on a public address is a DNS-amplification abuse report
@@ -458,6 +503,11 @@ ENV
     systemctl restart 0trust-meshd.service
     ok "meshd running"
 
+    if [[ "$OBFS_PORT" != "0" ]]; then
+        systemctl restart 0trust-obfs.service \
+            || die "the obfuscation relay would not start — journalctl -u 0trust-obfs"
+    fi
+
     # ------------------------------------------------------------------
     log "Node runtime: NAT, egress filter, resolver"
     # ------------------------------------------------------------------
@@ -478,6 +528,19 @@ ENV
     else
         note "wg0 is not up yet — journalctl -u 0trust-meshd"
     fi
+    # Same standard as wg0 above, and for the same reason: `systemctl start`
+    # returning 0 says the unit was launched, not that anything is listening.
+    # A relay the control plane advertises and nothing answers on gives every
+    # customer who turns obfuscation on a tunnel that never handshakes.
+    if [[ "$OBFS_PORT" != "0" ]]; then
+        if ss -lunp 2>/dev/null | grep -q ":$OBFS_PORT\b"; then
+            ok "the obfuscation relay is listening on udp/$OBFS_PORT"
+        else
+            note "NOTHING is listening on udp/$OBFS_PORT — the control plane will
+       advertise obfuscation to clients and they will not connect.
+       Check: journalctl -u 0trust-obfs"
+        fi
+    fi
     if curl -fsS --max-time 15 "$CONTROL_URL/api/v1/regions" 2>/dev/null \
          | grep -q "\"$REGION\""; then
         ok "the control plane lists $REGION as live"
@@ -492,6 +555,9 @@ ENV
 
     region     $REGION ($NODE_ROLE)
     endpoint   $PUBLIC_IP:$WG_PORT
+    obfs       $([[ "$OBFS_PORT" == "0" ]] \
+                  && echo 'off — clients here connect as plain WireGuard' \
+                  || echo "udp/$OBFS_PORT — clients may opt in to DPI protection")
     disk       tmpfs — the WireGuard key and node PSK are RAM only
     on reboot  0trust-node-enroll generates a new key and rejoins as $NODE_ID
 

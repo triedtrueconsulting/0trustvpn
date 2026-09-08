@@ -55,6 +55,10 @@ set -a; source "$ENVFILE"; set +a
 : "${ZTV_PROVISION_TOKEN:?ZTV_PROVISION_TOKEN not set in $ENVFILE}"
 NODE_ROLE="${NODE_ROLE:-both}"
 WG_PORT="${WG_PORT:-51820}"
+# The obfuscation relay. 0 means this node does not run one, which is a
+# perfectly good node — the control plane simply does not offer the transport
+# to clients that land here, and they connect directly.
+OBFS_PORT="${OBFS_PORT:-0}"
 CONTROL_URL="${CONTROL_URL%/}"
 
 umask 077
@@ -67,6 +71,20 @@ wg genkey > "$WG_DIR/$WG_IFACE.key"
 wg pubkey < "$WG_DIR/$WG_IFACE.key" > "$WG_DIR/$WG_IFACE.pub"
 chmod 600 "$WG_DIR/$WG_IFACE.key"
 PUBKEY="$(cat "$WG_DIR/$WG_IFACE.pub")"
+
+# The relay key, minted fresh on the same schedule as the WireGuard key and
+# for the same reason: this box keeps nothing across a reboot. A client
+# holding the previous one is not stranded by that — the node's WireGuard key
+# changed too, so its tunnel was already dead and the next connect re-fetches
+# both.
+OBFS_KEY=""
+if [[ "$OBFS_PORT" != "0" ]]; then
+    if [[ "$OBFS_PORT" == "$WG_PORT" ]]; then
+        die "OBFS_PORT ($OBFS_PORT) is the WireGuard port — pick another"
+    fi
+    OBFS_KEY="$(openssl rand -base64 32)" \
+        || die "could not mint an obfuscation key (is openssl installed?)"
+fi
 
 if [[ -z "$ROOT" ]] \
    && ! grep -qE "[[:space:]]/etc/wireguard[[:space:]]+tmpfs" /proc/mounts; then
@@ -107,8 +125,9 @@ if [[ -z "$HAS_V6" ]]; then
 fi
 
 # --- 3. register ------------------------------------------------------------
-REQ="$(printf '{"pubkey":"%s","public_ip":"%s","region":"%s","role":"%s","ipv6":%s,"wg_port":%s}' \
-       "$PUBKEY" "$PUBLIC_IP" "$REGION" "$NODE_ROLE" "$HAS_V6" "$WG_PORT")"
+REQ="$(printf '{"pubkey":"%s","public_ip":"%s","region":"%s","role":"%s","ipv6":%s,"wg_port":%s,"obfs_port":%s,"obfs_key":"%s"}' \
+       "$PUBKEY" "$PUBLIC_IP" "$REGION" "$NODE_ROLE" "$HAS_V6" "$WG_PORT" \
+       "$OBFS_PORT" "$OBFS_KEY")"
 
 RESP="$(curl -fsS --max-time 30 -X POST \
         -H 'Content-Type: application/json' \
@@ -145,12 +164,27 @@ ztv_meshd_env "$CONTROL_URL" "$NODE_PSK" "$NODE_ID" "$NODE_ROLE" \
               > "$CONF_DIR/meshd.env"
 chmod 600 "$CONF_DIR/meshd.env"
 
+# --- 4b. the relay's environment -------------------------------------------
+# Written only when this node runs one. The file's ABSENCE is what the unit's
+# ConditionPathExists keys on, so a node with the relay turned off does not
+# get a service restart-looping on an empty key — and removing a stale file
+# from a previous configuration matters for the same reason.
+if [[ "$OBFS_PORT" != "0" ]]; then
+    ztv_obfs_env "$OBFS_KEY" "0.0.0.0:$OBFS_PORT" \
+                 "$(ztv_obfs_ports "$WG_PORT")" > "$CONF_DIR/obfs.env"
+    chmod 600 "$CONF_DIR/obfs.env"
+    log "obfuscation relay on udp/$OBFS_PORT"
+else
+    rm -f "$CONF_DIR/obfs.env"
+fi
+
 # Not a secret: the id and address this box is known by, for the installer and
 # for anyone reading the box later. The PSK stays out of it.
 cat > "$STATE_DIR/enrol.state" <<STATE
 NODE_ID=$NODE_ID
 PUBLIC_IP=$PUBLIC_IP
 WG_PORT=$WG_PORT
+OBFS_PORT=$OBFS_PORT
 REGION=$REGION
 NODE_ROLE=$NODE_ROLE
 IPV6=$HAS_V6

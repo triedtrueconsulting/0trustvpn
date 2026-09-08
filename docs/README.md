@@ -570,7 +570,7 @@ report can reference specific findings.
 |-----------|------------|
 | Server seizure (single node) | Multi-hop: seizing the entry yields ciphertext + client IP; seizing the exit yields destinations but no client IP. Either way, no traffic correlation from one box. |
 | Server seizure (two nodes, collusion) | This is the unbreakable case — if the adversary controls both your entry and exit node, they can correlate. Mitigate by jurisdictional diversity and hop-pair rotation. |
-| Traffic correlation by ISP | WireGuard handshakes are timing-correlatable in principle. Mitigate with `PersistentKeepalive=25` (constant chatter) and consider obfuscation in v0.2. |
+| Traffic correlation by ISP | WireGuard handshakes are timing-correlatable in principle. `PersistentKeepalive=25` gives constant chatter so tunnel traffic does not idle in a pattern mirroring what you are doing. The optional obfuscated transport (`--obfuscate`) removes the protocol fingerprint but explicitly NOT this — sizes and timing are unchanged. Traffic-analysis resistance beyond keepalives is a research problem and we do not claim it. |
 | Identity linkage | No email/phone/name; tokens uncorrelated with payments. |
 | Payment trace | Bitcoin under the default `watch` provider, one freshly derived address per invoice, so payments here are not trivially linked to each other — but the chain is public and exchange KYC links coins to a person regardless. Monero, which would close that, needs BTCPay. web/privacy.html says exactly this. |
 | Subpoena | We genuinely have no user records to hand over. The peer table maps pubkey→mesh IP; nothing connects to a real identity. |

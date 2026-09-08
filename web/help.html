@@ -361,6 +361,45 @@ a:focus-visible, button:focus-visible, input:focus-visible {
     </p>
   </div>
 
+  <div class="q" id="q-dpi">
+    <h3>Can my network tell I&rsquo;m using a VPN?</h3>
+    <p>
+      By default, yes. We run plain WireGuard, and WireGuard&rsquo;s handshake
+      is a fixed-shape packet that any deep-packet-inspection box identifies
+      on sight, whatever port it arrives on. We would rather say that than let
+      you assume otherwise &mdash; a lot of VPN marketing does not.
+    </p>
+    <p>
+      <strong>DPI protection</strong> changes it. Turn it on with
+      <code>sudo 0trust connect --obfuscate</code>, or the switch in the
+      desktop app, and each packet is sealed so what leaves your machine is
+      indistinguishable from random data. It is sticky, like the kill switch,
+      and <code>--no-obfuscate</code> turns it off.
+    </p>
+    <p id="dpi-availability" hidden></p>
+    <p>
+      <strong>It is off by default on purpose.</strong> Every packet takes an
+      extra hop through your machine and the server, and loses a little of its
+      payload, so you will notice the speed. If nothing is filtering your
+      connection you gain nothing by turning it on. That is the trade, and it
+      is yours to make.
+    </p>
+    <p>
+      Three things it does <em>not</em> do, because the difference matters if
+      you are relying on it. It does not hide <em>that</em> you are talking to
+      one of our servers, or how much &mdash; sizes and timing are unchanged.
+      It is not an extra layer of authentication; every customer on a server
+      shares its obfuscation key, and WireGuard is still the only thing
+      protecting your traffic, exactly as when this is off. And it is still
+      UDP, so a network that blocks all outbound UDP blocks this too.
+    </p>
+    <p>
+      Not every server runs it. If you turn it on and land on one that does
+      not, the client says so and connects you normally rather than pretending.
+      It is not available in the Android or iOS apps yet.
+    </p>
+  </div>
+
   <div class="q">
     <h3>What about IPv6 and DNS leaks?</h3>
     <p>
@@ -509,6 +548,28 @@ a:focus-visible, button:focus-visible, input:focus-visible {
       visit the clearnet URL (look for the purple onion icon).
     </p>
   </div>
+
+  <script>
+    // How many servers actually run the relay, read from the control plane
+    // rather than written into the copy. The same discipline the trial length
+    // and the currency list are held to: a page must not advertise a
+    // capability no deployment has, and this is the one people would choose
+    // us for. Silent if the control plane cannot be reached — the paragraph
+    // above is true either way.
+    (async () => {
+      try {
+        const cfg = await (await fetch('/api/v1/config', { cache: 'no-store' })).json();
+        const o = cfg && cfg.obfuscation;
+        if (!o) return;
+        const el = document.getElementById('dpi-availability');
+        el.textContent = o.available
+          ? `Right now ${o.nodes} of our servers offer it.`
+          : 'Right now none of our servers offer it, so the switch will ' +
+            'connect you normally and tell you so.';
+        el.hidden = false;
+      } catch (e) { /* leave the static copy alone */ }
+    })();
+  </script>
 
   <div class="footer">
     <span>Last updated 2026-05</span>

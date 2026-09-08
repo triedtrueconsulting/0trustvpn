@@ -32,7 +32,7 @@ LINUX_ARCHES   := amd64 arm64
 DARWIN_ARCHES  := amd64 arm64
 WINDOWS_ARCHES := amd64 arm64
 
-.PHONY: build clean test all linux darwin windows
+.PHONY: build clean test all obfs linux darwin windows
 
 build:
 	go build $(BUILDFLAGS) -o dist/0trust ./cmd/0trust
@@ -48,14 +48,31 @@ all: clean
 				-o dist/0trust-$(VERSION)-$$os-$$arch$$ext \
 				./cmd/0trust; \
 	done
+	@$(MAKE) --no-print-directory obfs
 	@(cd dist && sha256sum 0trust-* > SHA256SUMS)
 	@echo "✓ built $$(ls dist/0trust-* | wc -l) binaries"
 	@echo "  signed checksums: gpg --detach-sign dist/SHA256SUMS"
+
+# --- The node's obfuscation relay ---------------------------------------------
+#
+# Linux only, and deliberately: this runs on a mesh node, which is always
+# Ubuntu. It is not part of any desktop package — the CLIENT half of the same
+# transport is compiled into the 0trust binary itself, so a customer needs
+# nothing extra. This is what `install.sh --mode node --obfs-port` installs.
+obfs:
+	@mkdir -p dist
+	@for arch in $(LINUX_ARCHES); do \
+		echo "→ obfs linux/$$arch"; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch \
+			go build $(BUILDFLAGS) -o dist/0trust-obfs-linux-$$arch \
+				./cmd/0trust-obfs; \
+	done
 
 # --- Per-OS targets: unversioned names, consumed by the installer builders ---
 
 linux:
 	@mkdir -p dist
+	@$(MAKE) --no-print-directory obfs
 	@for arch in $(LINUX_ARCHES); do \
 		echo "→ linux/$$arch"; \
 		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch \

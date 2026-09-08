@@ -419,16 +419,36 @@ try:
           row[0]["endpoint"] if row else "no row")
 
     # The claim discipline: nothing may say the tunnel is hidden.
-    deploy = open(os.path.join(H.REPO, "docs", "DEPLOY.md")).read()
-    check("the docs say plainly that DPI identifies this",
-          "deep packet" in deploy.lower() and "not obfuscated" in deploy.lower(),
+    deploy = open(os.path.join(H.REPO, "docs", "DEPLOY.md")).read().lower()
+    check("the docs say plainly that DPI identifies the DEFAULT transport",
+          "deep packet" in deploy and "not obfuscated" in deploy
+          and "by default" in deploy,
           "a VPN implying stealth it does not have is the worst claim to get "
-          "wrong — people route real risk through it")
+          "wrong — people route real risk through it. Obfuscation is now real "
+          "but OPT-IN and per-node, so the unqualified sentence would be as "
+          "wrong in the other direction.")
+    # Obfuscation exists now, so the docs may say so — but every one of its
+    # four limits has to be stated in the same breath. A reader who takes
+    # this for censorship circumvention and gets only three of them is the
+    # person this discipline is for.
+    for phrase, why in (
+        ("not authentication", "every customer on a node holds the same relay key"),
+        ("not traffic-analysis resistance", "sizes, timing and volume are unchanged"),
+        ("not a way through a udp block", "it is UDP in and UDP out"),
+        ("not the default", "it costs throughput and most people gain nothing"),
+    ):
+        check(f"and that obfuscation is {phrase}", phrase in deploy, why)
+
     for page in ("index.html", "help.html", "privacy.html"):
         txt = open(os.path.join(H.REPO, "web", page)).read().lower()
-        bad = [w for w in ("obfuscat", "undetectable", "stealth",
-                           "bypass censorship", "great firewall") if w in txt]
-        check(f"web/{page} claims no stealth", not bad, bad)
+        # "obfuscat" and "stealth" came off this list when the transport
+        # became real; the absolutes did not, and never will. Nothing we run
+        # makes anyone undetectable, and promising a named national firewall
+        # is a promise about someone else's equipment.
+        bad = [w for w in ("undetectable", "untraceable", "unblockable",
+                           "bypass censorship", "great firewall",
+                           "invisible") if w in txt]
+        check(f"web/{page} makes no absolute stealth claim", not bad, bad)
 
     print("\n[9] the sweeper does not delete a token a live node still needs")
     # The sweeper prunes provisioning tokens a day after use, on the reasoning
