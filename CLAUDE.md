@@ -477,6 +477,22 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   username and pruned only the key it was asked about, so an address seen
   once stayed forever — and one IPv6 /64 is 2^64 addresses. It sweeps above
   `_ATTEMPTS_SOFT_CAP` now, dropping aged-out counters first.
+- **fail2ban covers sshd and nothing else, and that is a decision, not a
+  gap.** `config/fail2ban/0trust.local` is ours, installed by
+  `install_fail2ban_jail()` on the control plane AND every node — the package
+  used to be added to the control plane with no configuration at all (so the
+  distro default was the whole protection) and nodes got neither, while
+  `ufw allow 22/tcp` opens that port on every one of them. `harden_sshd()` was
+  production-only for the same reason and now runs on nodes too.
+  **There is deliberately no nginx jail.** The access log records
+  `$remote_addr_anon`, the client address truncated to a /24 before it is
+  written, so a jail fed by it cannot ban an attacker — only their /24, and up
+  to 254 uninvolved people with them. The privacy property and the IP-banner
+  are incompatible and we keep the first; the web tier is defended by nginx
+  `limit_req_zone` and `admin._login_attempts`, both of which use the full
+  address in memory without recording it. The reasoning lives at the top of
+  the jail file, where the next person to notice the "missing" jail will look,
+  and `test_install.py` [3c] checks both the decision and its premise.
 - **`ops_events` never holds customer data.** Node ids, provider names, counts
   and infrastructure detail only. It is the single table that keeps a running
   narrative of the system's state over time, so an account id in it turns it

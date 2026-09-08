@@ -1,0 +1,46 @@
+# 0trust fail2ban configuration.
+#
+# Installed to /etc/fail2ban/jail.d/0trust.local by scripts/install.sh on both
+# the control plane and every mesh node.
+#
+# WHAT THIS COVERS: sshd, and only sshd. That is the one service on these
+# boxes that accepts credentials from the whole internet and logs the source
+# address in full.
+#
+# WHY THERE IS NO WEB-TIER JAIL, which is the part worth reading. A jail on
+# nginx would be the obvious addition and we deliberately do not ship one:
+# our access log records $remote_addr_anon, the client address truncated to a
+# /24 before it is ever written (privacy.html §4, docs/AUDIT.md §4). A jail
+# fed by that log cannot ban an attacker — it can only ban their /24, taking
+# up to 254 uninvolved people offline with them. The privacy property and the
+# IP-banner are incompatible, and we would rather keep the first.
+#
+# The web tier is defended where the information exists instead:
+#   - nginx limit_req_zone, six zones, tightest on signup (5r/m) and the
+#     trial (3r/m). Rate limiting needs the address only in memory, not in a
+#     file, so it works on the full address without recording it.
+#   - the admin login's own limiter (LOGIN_MAX_ATTEMPTS / LOGIN_WINDOW in
+#     api/admin.py), keyed on source and attempted username, in memory.
+#
+# Anyone tempted to point a jail at /var/log/nginx/0trust-access.log should
+# read this paragraph first and then check what an entry in it looks like.
+
+[DEFAULT]
+# Ban for an hour after 5 failures in 10 minutes. Long enough to make a
+# password-guessing run pointless, short enough that an operator who fumbles
+# their own key is not locked out for the evening.
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+# Never ban loopback or the mesh. A node's own traffic arriving from the
+# tunnel must not be able to lock the box out of its own network.
+ignoreip = 127.0.0.1/8 ::1 10.64.0.0/10
+
+[sshd]
+enabled = true
+# systemd, not /var/log/auth.log. Ubuntu 24.04 ships no rsyslog by default
+# and a mesh node's journald is volatile on purpose, so a jail pointed at a
+# file would find nothing and report itself healthy — the SKIP-standing-in-
+# for-a-pass shape this project keeps running into.
+backend = systemd
+port    = ssh

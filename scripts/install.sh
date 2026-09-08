@@ -66,6 +66,66 @@ INSTALL_DEGRADED=0
 # Set when the mesh step could not bring the WireGuard interfaces up, so the
 # closing summary describes the box that exists rather than the one intended.
 VPN_BROKEN=0
+# install_fail2ban_jail — our sshd jail, on the control plane and every node.
+#
+# The package alone was doing less than it looked like: install.sh added
+# `fail2ban` to the control plane's package list and wrote no configuration at
+# all, so what protected the box was whatever the distro happened to enable
+# by default — and mesh nodes, which open ssh to the internet exactly the
+# same way, did not get the package either. config/fail2ban/0trust.local is
+# ours, says what it covers, and says why there is no web-tier jail.
+install_fail2ban_jail() {
+    [[ $DO_FIREWALL -eq 1 ]] || return 0
+    if [[ $DRY_RUN -eq 1 ]]; then
+        note "would install /etc/fail2ban/jail.d/0trust.local (sshd jail)"
+        return 0
+    fi
+    command -v fail2ban-server >/dev/null 2>&1 || {
+        note "fail2ban is not installed — skipping the sshd jail"
+        return 0
+    }
+    install -d /etc/fail2ban/jail.d
+    install -m 0644 "$REPO_DIR/config/fail2ban/0trust.local" \
+            /etc/fail2ban/jail.d/0trust.local
+    systemctl enable fail2ban >/dev/null 2>&1 || true
+    systemctl restart fail2ban >/dev/null 2>&1 || true
+    # Started is not running, and running is not jailing. `fail2ban-client
+    # status sshd` fails outright if the jail did not load, which is what a
+    # typo in the file or a backend the host cannot use looks like — and the
+    # unit would report active either way.
+    if fail2ban-client status sshd >/dev/null 2>&1; then
+        ok "fail2ban: sshd jail active (5 tries / 10m -> 1h ban)"
+    else
+        note "fail2ban is running but the sshd jail did NOT load —
+       ssh is unprotected. Check: fail2ban-client -d"
+    fi
+}
+
+# harden_sshd <label> — key-only ssh, if and only if a key is already trusted.
+#
+# Was production-only. Mesh nodes run `ufw allow 22/tcp` and got none of it,
+# which left password auth open on the boxes that carry customer traffic and
+# have no operator watching them.
+harden_sshd() {
+    [[ $DO_SSH -eq 1 ]] || return 0
+    if [[ $DRY_RUN -eq 1 ]]; then
+        note "would disable ssh password auth (if a key is already authorized)"
+        return 0
+    fi
+    # Turning off password auth on a box you are holding open WITH a password
+    # locks you out of your own server. Only ever do this when a key is
+    # already trusted.
+    if [[ -s /root/.ssh/authorized_keys ]] || \
+       compgen -G "/home/*/.ssh/authorized_keys" >/dev/null; then
+        sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+        sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+        systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+        ok "ssh password auth disabled ($1)"
+    else
+        note "no authorized_keys found — leaving password auth ON so you keep access"
+    fi
+}
+
 CONTROL_URL="" PROVISION_TOKEN="" REGION="" NODE_ROLE="both" WG_PORT="51820"
 OBFS_PORT="0"
 SWAP_SIZE=""
@@ -338,7 +398,11 @@ if [[ "$MODE" == "node" ]]; then
     # what authenticates the resolver to it, so neither is optional.
     NODE_PACKAGES=(wireguard wireguard-tools nftables dnsmasq stubby python3
                    curl ca-certificates)
-    [[ $DO_FIREWALL -eq 1 ]] && NODE_PACKAGES+=(ufw)
+    # fail2ban here for the same reason as on the control plane: sshd is the
+    # one service on a node that takes credentials from the whole internet.
+    # It was missing, while `ufw allow 22/tcp` below opens that port on every
+    # node we run.
+    [[ $DO_FIREWALL -eq 1 ]] && NODE_PACKAGES+=(ufw fail2ban)
     if [[ $DRY_RUN -eq 0 ]]; then
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
@@ -383,6 +447,12 @@ JCONF
         sysctl -p /etc/sysctl.d/99-0trust.conf >/dev/null
     fi
     ok "/etc/wireguard, /etc/0trust, /var/0trust are tmpfs; swap off; journald volatile"
+
+    # ------------------------------------------------------------------
+    log "Hardening ssh on this node"
+    # ------------------------------------------------------------------
+    install_fail2ban_jail
+    harden_sshd "node"
 
     # ------------------------------------------------------------------
     log "Enrolment credentials"
@@ -1343,22 +1413,10 @@ ok "ufw: 22, 80$([[ "$MODE" == production ]] && echo ', 443')"
 fi
 
 # ----------------------------------------------------------------------------
-if [[ $DO_SSH -eq 1 && "$MODE" == "production" ]]; then
+if [[ "$MODE" == "production" ]]; then
 log "Hardening sshd"
-if [[ $DRY_RUN -eq 0 ]]; then
-    # Only touch this in production, and only if a key is already authorized —
-    # turning off password auth on a box you're holding open with a password
-    # locks you out of your own server.
-    if [[ -s /root/.ssh/authorized_keys ]] || \
-       compgen -G "/home/*/.ssh/authorized_keys" >/dev/null; then
-        sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-        sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-        systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
-        ok "password auth disabled"
-    else
-        note "no authorized_keys found — leaving password auth ON so you keep access"
-    fi
-fi
+install_fail2ban_jail
+harden_sshd "control plane"
 fi
 
 # ----------------------------------------------------------------------------

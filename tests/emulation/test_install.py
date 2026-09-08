@@ -801,6 +801,69 @@ try:
               f"{unit} is named in install.sh but exists in none of "
               + ", ".join(UNIT_DIRS))
 
+    print("\n[3c] fail2ban, and the jail we deliberately do NOT ship")
+    import configparser
+    jail_src = os.path.join(H.REPO, "config", "fail2ban", "0trust.local")
+    check("the jail file exists", os.path.exists(jail_src),
+          "install.sh added the fail2ban PACKAGE to the control plane and "
+          "wrote no configuration at all, so what protected the box was "
+          "whatever the distro enabled by default")
+    if os.path.exists(jail_src):
+        cp = configparser.ConfigParser()
+        cp.read(jail_src)
+        check("it parses as fail2ban configuration", "sshd" in cp.sections(),
+              cp.sections())
+        check("the sshd jail is enabled",
+              cp["sshd"].get("enabled") == "true", dict(cp["sshd"]))
+        # Ubuntu 24.04 ships no rsyslog by default and a node's journald is
+        # volatile on purpose. A jail pointed at /var/log/auth.log would find
+        # nothing and report itself healthy.
+        check("and reads the journal, not a log file that may not exist",
+              cp["sshd"].get("backend") == "systemd", dict(cp["sshd"]))
+        check("the mesh cannot lock the box out of its own network",
+              "10.64.0.0/10" in cp["DEFAULT"].get("ignoreip", ""),
+              cp["DEFAULT"].get("ignoreip"))
+
+    inst = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
+    check("nodes get fail2ban, not just the control plane",
+          "NODE_PACKAGES+=(ufw fail2ban)" in inst,
+          "every node runs `ufw allow 22/tcp`; they had the open port and "
+          "none of the protection")
+    check("and ssh hardening runs on nodes too",
+          'harden_sshd "node"' in inst,
+          "it was production-only, so password auth stayed open on the boxes "
+          "that carry customer traffic and have nobody watching them")
+    check("the installer checks the jail actually LOADED",
+          "fail2ban-client status sshd" in inst,
+          "systemctl reporting active says nothing about whether the jail "
+          "parsed — bug class #16")
+
+    # The finding this file has to protect, because the obvious next commit
+    # is somebody adding an nginx jail.
+    jail_txt = open(jail_src).read() if os.path.exists(jail_src) else ""
+    check("no jail is pointed at the nginx access log",
+          "0trust-access.log" not in jail_txt.split("# Anyone tempted")[0],
+          "our access log records the client address truncated to a /24, so a "
+          "jail fed by it can only ban 254 uninvolved people alongside the "
+          "attacker")
+    check("and the file explains why, where someone would look",
+          "/24" in jail_txt and "limit_req_zone" in jail_txt,
+          "the reason has to sit next to the thing, or the next person adds "
+          "the jail that looks missing")
+    # And the premise of that reasoning has to stay true. Read the bytes the
+    # installer would write, not the reference file it has never installed.
+    f2b_out = os.path.join(TMP, "render-f2b"); os.makedirs(f2b_out, exist_ok=True)
+    subprocess.run(["bash", INSTALL, "--dry-run", "--mode", "test"],
+                   capture_output=True, text=True, timeout=180,
+                   env={**os.environ, "TERM": "dumb", "ZTV_RENDER_TO": f2b_out})
+    zones_p = os.path.join(f2b_out, "zones.conf")
+    zones = open(zones_p).read() if os.path.exists(zones_p) else ""
+    fmt = [l for l in zones.splitlines() if "log_format anon" in l]
+    check("the premise holds: the access log really is anonymized",
+          bool(fmt) and "$remote_addr_anon" in fmt[0],
+          f"{fmt or zones[:200]!r} — if this ever logs the full address, the "
+          "jail decision above is worth revisiting")
+
 finally:
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL: print("  failures: " + ", ".join(FAIL))

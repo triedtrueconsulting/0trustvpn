@@ -288,6 +288,27 @@ grep -E '^log_format anon' -A2 /etc/nginx/sites-available/0trustvpn.com
 # Expect: $uri_anon, not $uri
 ```
 
+### 4.1.2 Why there is no fail2ban jail on the web tier
+
+An auditor will look for one, so here is the reasoning rather than the
+absence. Our access log records `$remote_addr_anon` — the client address with
+its final octet zeroed, §4 above — and fail2ban bans what its filter
+extracts. A jail reading this log could therefore ban only a /24: the
+attacker plus up to 254 people who share their prefix, which on a mobile
+carrier or a university is a lot of customers.
+
+We keep the truncation and skip the jail. The web tier is rate-limited where
+the full address exists but is never written down: six nginx `limit_req_zone`
+zones (tightest on signup at 5r/m and the trial at 3r/m), and the admin
+login's own counter in `api/admin.py`, keyed on source and attempted
+username, held in memory and swept. Neither writes an address anywhere.
+
+fail2ban IS installed and configured, for sshd, on the control plane and on
+every mesh node — `config/fail2ban/0trust.local`, backend `systemd` because
+Ubuntu 24.04 ships no rsyslog and a node's journald is volatile by design.
+sshd logs the full source address to the journal, which never leaves the box
+and on a node does not survive a reboot.
+
 ### 4.2 Retention
 
 `/etc/logrotate.d/0trust` rotates the file daily and **keeps two days** with
