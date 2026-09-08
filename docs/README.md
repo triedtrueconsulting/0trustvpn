@@ -575,7 +575,7 @@ report can reference specific findings.
 | Payment trace | Bitcoin under the default `watch` provider, one freshly derived address per invoice, so payments here are not trivially linked to each other — but the chain is public and exchange KYC links coins to a person regardless. Monero, which would close that, needs BTCPay. web/privacy.html says exactly this. |
 | Subpoena | We genuinely have no user records to hand over. The peer table maps pubkey→mesh IP; nothing connects to a real identity. |
 | Rogue mesh node | Per-node PSK rotation; nodes can read peer/forward manifests but not account data, payment data, or token hashes. |
-| Web fingerprinting | Static HTML, no third-party JS (except qrcodejs, on the TODO list to self-host), strict CSP, anonymized logs. |
+| Web fingerprinting | Static HTML and no third-party origin at all: qrcodejs is served from `/vendor/`, the brand faces from `/fonts/`. CSP is `default-src 'self'` (`'unsafe-inline'` for style and script, because the pages carry inline blocks — external files with a nonce is the roadmap item, not self-hosting). The access log is anonymized to a /24 or /48, drops the User-Agent and the Referer, and collapses the two paths that carry a secret; two days' retention. Both the CSP header and the whole logging configuration were missing from the config `install.sh` generates until they were added — this row described the reference file, which the installer has never used. |
 | DoS on signup | Nginx rate limit: 5 signups/min/IP. |
 
 ## Deployment

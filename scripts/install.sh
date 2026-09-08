@@ -791,6 +791,36 @@ log "Configuring nginx"
 # ----------------------------------------------------------------------------
 render_common_locations() {
     cat <<'LOCEOF'
+    # --- Warrant canary: never cached, ever ---
+    #
+    # The canary works by STOPPING. If a browser, a CDN or an intermediary
+    # keeps serving a copy after the operator stops signing, the one signal
+    # the document exists to send is the one thing that does not get through
+    # — and nothing looks wrong from either end. The reference config has had
+    # this block for a long time; the generated one, which is the config that
+    # actually deploys, served /canary.txt as an ordinary static file with
+    # default caching. audit-verify's nginx-canary-no-cache would have said
+    # so, except that it too was reading the reference file's filename.
+    location = /canary.txt {
+        add_header Content-Type "text/plain; charset=utf-8" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        add_header X-Frame-Options "DENY" always;
+        try_files /canary.txt =404;
+    }
+    location = /canary.txt.sig {
+        add_header Content-Type "text/plain; charset=utf-8" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        try_files /canary.txt.sig =404;
+    }
+    location = /pubkey.asc {
+        add_header Content-Type "application/pgp-keys; charset=utf-8" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        try_files /pubkey.asc =404;
+    }
+    location /canary/archive/ {
+        add_header Content-Type "text/plain; charset=utf-8" always;
+    }
+
     # --- Free trial: proof-of-work makes bulk redemption expensive, this
     #     makes it slow too. Issuing challenges is cheap, so only redemption
     #     is throttled.
@@ -878,6 +908,31 @@ render_common_locations() {
 LOCEOF
 }
 
+# Everything that has to live in nginx's http context: the rate-limit zones,
+# and — the part that took far too long to notice was missing — the logging.
+#
+# This installer generates its own site config and never installed
+# nginx/0trustvpn.com.conf, which is where the anonymizing map, the `anon`
+# format and the access_log directive all lived. So a real deployment fell
+# through to nginx's stock `combined` format in /etc/nginx/nginx.conf and
+# wrote, to /var/log/nginx/access.log, for the fourteen rotations Ubuntu's
+# stock logrotate keeps:
+#
+#   the full client IP        privacy.html says these are truncated to a /24
+#                             "before they are written"
+#   the User-Agent            AUDIT.md §4 says it is "deliberately omitted —
+#                             client fingerprinting is the main
+#                             re-identification vector against anonymized IPs"
+#   the Referer               AUDIT.md §4.1 lists it under "what's NOT in the
+#                             access log"
+#   the full request line     including DELETE /api/v1/devices/<pubkey>
+#
+# and audit-verify.sh could not catch it, because its checks looked for
+# /etc/nginx/sites-enabled/0trustvpn.com.conf — a filename this installer has
+# never created — and a missing file exits 77, which prints SKIP, which is
+# not FAIL. A no-logs VPN keeping full IPs and user agents, with a green
+# audit run. Everything the reference config claimed is emitted here now, and
+# the checks read the path this actually writes.
 render_zones() {
     cat <<'ZONEEOF'
 limit_req_zone $binary_remote_addr zone=signup:10m  rate=5r/m;
@@ -887,7 +942,66 @@ limit_req_zone $binary_remote_addr zone=surf:10m    rate=30r/m;
 limit_req_zone $binary_remote_addr zone=trial:10m   rate=3r/m;
 limit_req_zone $binary_remote_addr zone=admin:10m   rate=120r/m;
 limit_conn_zone $binary_remote_addr zone=surfconn:10m;
+
+# Drop the last octet of an IPv4 address, or everything below the /48 of an
+# IPv6 one, before the value can reach a log line.
+map $remote_addr $remote_addr_anon {
+    ~(?P<ip>\d+\.\d+\.\d+)\.    $ip.0;
+    ~(?P<ip>[^:]+:[^:]+):       $ip::;
+    default                     0.0.0.0;
+}
+
+# Two of our paths carry a secret in the path itself, and $uri is the DECODED
+# path, so logging it verbatim publishes them:
+#
+#   DELETE /api/v1/devices/<the customer's WireGuard public key>
+#   GET    /api/v1/payment/<the invoice capability>/status
+#
+# The invoice id is a bearer capability — /methods and /status are
+# deliberately unauthenticated, because the checkout page polls them before
+# the customer has any credential — so one log line is enough to read
+# somebody's receive address and what they owe. Collapse both to the route.
+# Triage wants to know that device deletions are 500ing; it has never wanted
+# to know whose.
+map $uri $uri_anon {
+    default                                 $uri;
+    "~^/api/v1/devices/.+$"                 /api/v1/devices/-;
+    "~^/api/v1/payment/[^/]+/(?<rest>.*)$"  /api/v1/payment/-/$rest;
+}
+
+# No querystring, no User-Agent, no Referer, no secret path segment.
+log_format anon '$remote_addr_anon - [$time_local] "$request_method $uri_anon" '
+                '$status $body_bytes_sent';
+
+# Cancels the `access_log ... combined` in /etc/nginx/nginx.conf. Same level,
+# and per nginx's documentation the special value off cancels every
+# access_log directive on the current level — so the stock log stops here and
+# each of our server blocks opts back in with the format above. Without this
+# line every request is written twice: once anonymised, once not.
+access_log off;
 ZONEEOF
+}
+
+# Daily, two days kept, which is what privacy.html and AUDIT.md §4.2 both
+# say. AUDIT.md described this file for a long time before anything created
+# it; nginx's stock /etc/logrotate.d/nginx keeps fourteen weekly rotations,
+# so the claim was out by a factor of about fifty.
+render_logrotate() {
+    cat <<'LREOF'
+/var/log/nginx/0trust-access.log /var/log/nginx/0trust-error.log {
+    daily
+    rotate 2
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        [ -f /run/nginx.pid ] && kill -USR1 "$(cat /run/nginx.pid)"
+    endscript
+}
+LREOF
 }
 
 if [[ $DRY_RUN -eq 0 ]]; then
@@ -952,6 +1066,14 @@ $L6_80_DEFAULT
     # Say plainly what this is, in a header a test client can see.
     add_header X-0trust-Deployment "test-no-tls" always;
 
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+
+    # The anon format, defined in conf.d/0trust-zones.conf. Without these two
+    # lines the http-level "access_log off" there means no log at all.
+    access_log /var/log/nginx/0trust-access.log anon buffer=32k flush=5s;
+    error_log  /var/log/nginx/0trust-error.log warn;
+    server_tokens off;
+
 EOF
         render_common_locations
         cat <<'EOF'
@@ -970,6 +1092,9 @@ server {
     listen 80;
 $L6_80
     server_name $DOMAIN www.$DOMAIN;
+    access_log /var/log/nginx/0trust-access.log anon buffer=32k flush=5s;
+    error_log  /var/log/nginx/0trust-error.log warn;
+    server_tokens off;
     location /.well-known/acme-challenge/ { root /var/www/acme; }
     location / { return 301 https://\$host\$request_uri; }
 }
@@ -999,6 +1124,20 @@ $L6_443
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "no-referrer" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()" always;
+    # 'unsafe-inline' because the pages carry inline <style> and <script>;
+    # moving to external files with a nonce is on the roadmap. There are no
+    # third-party origins at all — the brand faces are served from /fonts —
+    # so nothing is whitelisted beyond 'self'. docs/README.md claimed a
+    # "strict CSP" for a long time while the generated config had no CSP
+    # header of any kind; only the reference nginx/0trustvpn.com.conf did,
+    # and this installer has never used that file.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests" always;
+
+    # The anon format, defined in conf.d/0trust-zones.conf. Without these two
+    # lines the http-level "access_log off" there means no log at all.
+    access_log /var/log/nginx/0trust-access.log anon buffer=32k flush=5s;
+    error_log  /var/log/nginx/0trust-error.log warn;
+    server_tokens off;
 
 EOF
         render_common_locations
@@ -1013,6 +1152,8 @@ fi
 
 if [[ $DRY_RUN -eq 0 ]]; then
     install -m 0644 "$TMP_ZONES" /etc/nginx/conf.d/0trust-zones.conf
+    render_logrotate > /etc/logrotate.d/0trust
+    chmod 0644 /etc/logrotate.d/0trust
     install -m 0644 "$TMP_SITE" "$NGINX_SITE"
     ln -sf "$NGINX_SITE" /etc/nginx/sites-enabled/0trust
     rm -f /etc/nginx/sites-enabled/default
@@ -1053,6 +1194,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
         mkdir -p "$ZTV_RENDER_TO"
         cp "$TMP_SITE"  "$ZTV_RENDER_TO/site.conf"
         cp "$TMP_ZONES" "$ZTV_RENDER_TO/zones.conf"
+        render_logrotate > "$ZTV_RENDER_TO/logrotate.conf"
         note "rendered config written to $ZTV_RENDER_TO"
     else
         # head FIRST, then sed. The other way round, head exits after 20

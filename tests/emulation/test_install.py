@@ -203,6 +203,107 @@ try:
                   good, err)
             globals()[f"body_{label}"] = body
 
+    # -------------------------------------------------------------------
+    # [3b] The privacy claims, checked against the bytes the installer writes.
+    #
+    # This is the section that should have existed first. The installer
+    # generates its own nginx config and has never installed
+    # nginx/0trustvpn.com.conf — which is where the anonymizing map, the anon
+    # log format and the access_log directive all lived. So a real deployment
+    # fell through to nginx's stock `combined` and wrote the full client IP,
+    # the User-Agent, the Referer and the complete request line (device
+    # pubkey included) to /var/log/nginx/access.log, for the fourteen
+    # rotations Ubuntu's logrotate keeps. privacy.html says the IP is
+    # truncated to a /24 "before they are written". AUDIT.md §4.1 lists
+    # User-Agent and Referer under "what's NOT in the access log".
+    #
+    # audit-verify.sh could not see it either: its nginx checks looked for
+    # /etc/nginx/sites-enabled/0trustvpn.com.conf, a filename the installer
+    # never creates, and a missing file exits 77 — which prints SKIP, not
+    # FAIL. Section [4] below validated the reference file, which is exactly
+    # the file that does not deploy. Everything here reads the rendered
+    # output instead.
+    # -------------------------------------------------------------------
+    print("\n[3b] the deployed config keeps the promises the site makes")
+    for label, d in (("test", os.path.join(TMP, "render-test")),
+                     ("prod", os.path.join(TMP, "render-prod"))):
+        zones = open(f"{d}/zones.conf").read()
+        site = open(f"{d}/site.conf").read()
+
+        check(f"{label}: an IP-anonymizing map is defined",
+              "map $remote_addr $remote_addr_anon" in zones, zones[:200])
+        check(f"{label}: the secret-path map is defined",
+              "map $uri $uri_anon" in zones, zones[:200])
+        check(f"{label}: a log format that uses both is defined",
+              "log_format anon" in zones and "$remote_addr_anon" in zones
+              and "$uri_anon" in zones, zones[-400:])
+        # The one that makes it real: without this, nginx's own combined log
+        # keeps running alongside ours and the anonymised copy is decoration.
+        check(f"{label}: the stock combined log is cancelled",
+              re.search(r"^access_log off;", zones, re.M) is not None,
+              "no http-level `access_log off` — nginx.conf's combined log survives")
+        # Scoped to the log_format directive, not the whole file: the
+        # anonymizer is `map $remote_addr $remote_addr_anon`, so a check that
+        # greps the file for $remote_addr flags the fix as the bug. The
+        # question is only ever what the FORMAT interpolates.
+        fmt = "".join(re.findall(r"^log_format\s+anon\s+(.*?);\s*$", zones,
+                                 re.M | re.S))
+        check(f"{label}: the anon format was found to inspect", bool(fmt), zones[-300:])
+        for var, why in (("$http_user_agent", "the main re-identification "
+                          "vector against an anonymized IP"),
+                         ("$http_referer", "AUDIT.md §4.1 says it is not kept"),
+                         ("$request'", "carries the raw path, secrets and all"),
+                         ("$request ", "carries the raw path, secrets and all"),
+                         ("$query_string", "AUDIT.md §4.1 says it is not kept"),
+                         ("$remote_addr ", "the un-anonymized address"),
+                         ("$remote_addr'", "the un-anonymized address"),
+                         ("$uri'", "the un-collapsed path"),
+                         ("$uri ", "the un-collapsed path")):
+            check(f"{label}: no {var.strip(chr(39))} in the anon log format ({why})",
+                  var not in fmt, fmt)
+
+        # Every server block has to opt back in, or `access_log off` above
+        # means the operator has no log at all.
+        blocks = [b for b in site.split("\nserver {") if b.strip()][1:] or \
+                 site.split("\nserver {")[1:]
+        check(f"{label}: every server block writes the anon log",
+              len(blocks) > 0 and all("access_log /var/log/nginx/0trust-access.log anon"
+                                      in b for b in blocks),
+              f"{len(blocks)} block(s), "
+              f"{sum('0trust-access.log anon' in b for b in blocks)} with the log")
+        csp = re.search(r'Content-Security-Policy "([^"]*)"', site)
+        check(f"{label}: a CSP is set", csp is not None,
+              "docs/README.md claims a strict CSP")
+        # Read the match once, and only where there is one: calling .group()
+        # on None raises, which aborts the whole module — so removing the CSP
+        # header made this file stop testing rather than report a failure.
+        policy = csp.group(1) if csp else ""
+        check(f"{label}: the CSP allows no third-party origin",
+              "default-src 'self'" in policy
+              and "http" not in policy.replace("upgrade-insecure-requests", ""),
+              policy or "no CSP header to inspect")
+
+        # The canary works by STOPPING. A cached copy served after the
+        # operator stops signing suppresses the one signal the document
+        # exists to send. The reference config has had this block for a long
+        # time; the generated one did not, so the deployed site served
+        # /canary.txt as an ordinary static file with default caching.
+        canary = re.search(r"location = /canary\.txt \{(.*?)\}", site, re.S)
+        check(f"{label}: /canary.txt has its own location block",
+              canary is not None,
+              "served as a plain static file, with whatever caching nginx defaults to")
+        check(f"{label}: and it is served no-store",
+              canary is not None and "no-store" in canary.group(1),
+              canary.group(1) if canary else "")
+
+        lr = open(f"{d}/logrotate.conf").read()
+        check(f"{label}: logrotate keeps two days, daily",
+              "daily" in lr and re.search(r"^\s*rotate 2\s*$", lr, re.M),
+              "privacy.html and AUDIT.md §4.2 both say 2 days; nginx's stock "
+              "logrotate keeps 14 weekly rotations")
+        check(f"{label}: logrotate names the file the config writes",
+              "/var/log/nginx/0trust-access.log" in lr, lr[:200])
+
     print("\n[4] the committed production config is valid too")
     src = open(os.path.join(H.REPO, "nginx", "0trustvpn.com.conf")).read()
     src = (src.replace("/etc/nginx/snippets/", f"{TMP}/snippets/")
@@ -220,6 +321,31 @@ try:
     open(zp, "w").write("\n".join(zones)); open(sp2, "w").write(body)
     good, err, _ = nginx_check(sp2, zp, "committed", [])
     check("nginx accepts nginx/0trustvpn.com.conf", good, err)
+
+    # ...and it agrees with the generated one on everything that carries a
+    # privacy claim. Two copies of a config is how the logging fix went
+    # missing: the reference file had it, the installer did not, and nothing
+    # compared them. This does not diff the files — they are legitimately
+    # different shapes — only the directives a claim depends on. Adding one
+    # to either copy alone is what this is here to catch.
+    rendered = open(os.path.join(TMP, "render-prod", "site.conf")).read() + \
+               open(os.path.join(TMP, "render-prod", "zones.conf")).read()
+    committed = open(os.path.join(H.REPO, "nginx", "0trustvpn.com.conf")).read()
+    for directive, claim in (
+        ("map $remote_addr $remote_addr_anon", "privacy.html: IPs truncated to a /24"),
+        ("map $uri $uri_anon", "AUDIT.md §4.1.1: secret path segments collapsed"),
+        ("log_format anon", "AUDIT.md §4: the anon format is what is used"),
+        ("$uri_anon", "the format has to USE the map, not just define it"),
+        ("add_header Content-Security-Policy", "docs/README.md: strict CSP"),
+        ("location = /canary.txt", "the canary must never be cached"),
+        ("no-store", "the canary must never be cached"),
+    ):
+        in_gen, in_ref = directive in rendered, directive in committed
+        check(f"both configs carry {directive!r} ({claim})",
+              in_gen and in_ref,
+              f"generated={in_gen} reference={in_ref} — the copy missing it is "
+              f"the one that breaks the claim, and if that is the generated "
+              f"config it is the one that deploys")
 
     print("\n[5] the routes that matter are present in both modes")
     for label in ("test", "prod"):

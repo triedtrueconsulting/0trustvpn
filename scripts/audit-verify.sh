@@ -27,6 +27,11 @@ for arg in "$@"; do
 done
 
 PASS=0; FAIL=0; SKIP=0
+# Two checks read a config file. On a deployed host they read the installed
+# copy; run from a clone (an auditor reading the source, or CI) they fall
+# back to the tree this script lives in.
+# Exported because every check body runs as its own `bash -c`.
+export REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YLW=$'\033[1;33m'; DIM=$'\033[2m'; NC=$'\033[0m'
 
 # ----------------------------------------------------------------------------
@@ -197,28 +202,99 @@ check db-failed-invoices-gc "No failed invoices older than 30d" -- bash -c "
 section "§4. WEB-TIER (nginx) LOGS"
 # ----------------------------------------------------------------------------
 
-NGINX_CONF="${NGINX_CONF:-/etc/nginx/sites-enabled/0trustvpn.com.conf}"
+# scripts/install.sh symlinks the site it generates to sites-enabled/0trust —
+# NOT to 0trustvpn.com.conf, which is the name of the reference file in the
+# repository and a file the installer has never created. Every nginx check
+# here pointed at that name, found nothing, and exited 77 — which prints SKIP,
+# which is not FAIL. An auditor got a clean run against a deployment whose
+# nginx was writing full client IPs, User-Agents and Referers to
+# /var/log/nginx/access.log in the stock combined format. Look for what is
+# actually installed, and take the http-context file too: the log format and
+# both anonymizing maps live in conf.d/0trust-zones.conf, not in the site.
+for _c in /etc/nginx/sites-enabled/0trust \
+          /etc/nginx/sites-enabled/0trustvpn.com.conf \
+          /etc/nginx/sites-available/0trust; do
+    [[ -f "$_c" ]] && { NGINX_CONF="${NGINX_CONF:-$_c}"; break; }
+done
+export NGINX_CONF="${NGINX_CONF:-}"
+export NGINX_ZONES="${NGINX_ZONES:-/etc/nginx/conf.d/0trust-zones.conf}"
 NGINX_LOG="/var/log/nginx/0trust-access.log"
 
-check nginx-conf-exists "nginx config present" -- bash -c "
-    [[ -f '$NGINX_CONF' ]] || exit 77
-"
-
-check nginx-no-user-agent "Access log format does not include User-Agent" -- bash -c "
-    [[ -f '$NGINX_CONF' ]] || exit 77
-    if grep -E 'log_format.*\\\$http_user_agent' /etc/nginx/nginx.conf '$NGINX_CONF' /etc/nginx/conf.d/* 2>/dev/null | grep -v '#'; then
-        echo 'User-Agent appears in an active log format'
+check nginx-conf-exists "nginx config present" -- bash -c '
+    # A SKIP here is only honest on a box with no nginx at all. If nginx is
+    # installed and our config is not the one it is serving, that is the
+    # finding — not an absence of evidence.
+    if [[ -z "$NGINX_CONF" ]]; then
+        command -v nginx >/dev/null 2>&1 || exit 77
+        echo "nginx is installed but no 0trust site config was found"
         exit 1
     fi
-"
+'
 
-check nginx-anonymizes-ip "Access log uses anonymized client IP" -- bash -c "
-    [[ -f '$NGINX_CONF' ]] || exit 77
-    if ! grep -q 'remote_addr_anon\\|remote_addr.*regex\\|map.*remote_addr' /etc/nginx/nginx.conf '$NGINX_CONF' 2>/dev/null; then
-        echo 'No IP-anonymization map found in nginx config'
+check nginx-no-user-agent "Access log format does not include User-Agent" -- bash -c '
+    [[ -n "$NGINX_CONF" ]] || exit 77
+    # combined carries $http_user_agent and $http_referer, and both are named
+    # in AUDIT.md §4.1 as things the access log does not keep. The trap is
+    # that nginx.conf ships `access_log /var/log/nginx/access.log;` with NO
+    # format token — which silently means combined. A check that greps for
+    # the word "combined" sees nothing and passes on a host logging every
+    # user agent it serves. So: any ACTIVE access_log whose format is absent,
+    # or is combined/main, is the finding.
+    #
+    # Our zones file cancels the http-level one with `access_log off;` at the
+    # same level and later in the include order, so when that is present the
+    # stock directive in nginx.conf is dead and only the server blocks count.
+    stock_cancelled=0
+    grep -qE "^[[:space:]]*access_log[[:space:]]+off[[:space:]]*;" "$NGINX_ZONES" 2>/dev/null \
+        && stock_cancelled=1
+    files="$NGINX_CONF"
+    [[ -f "$NGINX_ZONES" ]] && files="$files $NGINX_ZONES"
+    (( stock_cancelled )) || files="/etc/nginx/nginx.conf $files"
+    bad=""
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        # access_log <path> [format] [buffer=… flush=… gzip if=…];
+        read -r _kw _path _fmt _rest <<<"$(tr -s " \t" " " <<<"${line%;}")"
+        [[ "$_path" == "off" ]] && continue
+        case "$_fmt" in
+            ""|buffer=*|flush=*|gzip*|if=*) bad="$bad
+  $line   <- no format named, which means combined" ;;
+            combined|main)                 bad="$bad
+  $line   <- a stock format" ;;
+        esac
+    done < <(grep -hE "^[[:space:]]*access_log[[:space:]]" $files 2>/dev/null || true)
+    if [[ -n "$bad" ]]; then
+        echo "an active access_log uses a format carrying User-Agent/Referer:$bad"
         exit 1
     fi
-"
+    if grep -hE ".http_user_agent|.http_referer" "$NGINX_ZONES" "$NGINX_CONF" 2>/dev/null \
+       | grep -qv "^[[:space:]]*#"; then
+        echo "User-Agent or Referer appears in a 0trust log format"
+        exit 1
+    fi
+'
+
+check nginx-anonymizes-ip "Access log uses anonymized client IP" -- bash -c '
+    [[ -n "$NGINX_CONF" ]] || exit 77
+    if ! grep -qE "map[[:space:]]+.remote_addr[[:space:]]+.remote_addr_anon" \
+           "$NGINX_ZONES" "$NGINX_CONF" /etc/nginx/nginx.conf 2>/dev/null; then
+        echo "No IP-anonymization map found in the nginx config"
+        exit 1
+    fi
+    # Defining the map is not using it. Every access_log that is actually on
+    # has to name a format built from it.
+    live=$(grep -hE "^[[:space:]]*access_log[[:space:]]" "$NGINX_CONF" 2>/dev/null \
+           | grep -v "access_log[[:space:]]*off" || true)
+    if [[ -z "$live" ]]; then
+        echo "no access_log in $NGINX_CONF — requests fall through to the stock log"
+        exit 1
+    fi
+    if grep -qv "anon" <<<"$live"; then
+        echo "an active access_log does not use the anon format:"; echo "$live"
+        exit 1
+    fi
+'
+
 
 section "§5. MESH-NODE BEHAVIOR (node checks; skip on the control plane)"
 
@@ -433,11 +509,56 @@ check api-log-no-tokens "Recent API log has no account-token leakage" -- bash -c
 
 check api-log-no-pubkeys "Recent API log has no WireGuard pubkeys" -- bash -c "
     command -v journalctl >/dev/null || exit 77
+    # This used to look for the JSON shape, '\"pubkey\": \"<44 chars>\"', which
+    # is the one place the key never actually appeared: request bodies are not
+    # logged. The real leak was the URL. DELETE /api/v1/devices/{pubkey} puts
+    # the key in the path, uvicorn's access line is the path, and the key
+    # arrives percent-encoded — so '=' is '%3D' and the JSON prefix is absent.
+    # The check reported green on a host that was writing a customer's device
+    # key to journald on every device removal. Match the key itself, in either
+    # form, wherever it appears: 43 base64 characters (raw, or %2B / %2F for
+    # + and /) and the padding (raw '=' or '%3D').
     hit=\$(journalctl -u 0trust-api --since '1 hour ago' 2>/dev/null \
-        | grep -oE '\"pubkey\"\\s*:\\s*\"[A-Za-z0-9+/]{43}=' \
+        | grep -oE '([A-Za-z0-9]|%2[BbFf]|[+/]){43}(=|%3[Dd])' \
         | { head -1; cat >/dev/null; } || true)
     if [[ -n \"\$hit\" ]]; then
-        echo 'Pubkey visible in API journal'
+        echo 'WireGuard pubkey visible in API journal'
+        exit 1
+    fi
+"
+
+check api-no-access-log "API unit does not log request paths" -- bash -c "
+    # The check above catches the leak once it has happened, and only within
+    # the journal's window. This one catches the cause, on any machine, with
+    # no traffic needed: two of our routes carry a secret in the path
+    # (the device pubkey, and the invoice capability), so uvicorn's access
+    # line must be off. See systemd/0trust-api.service and AUDIT.md §7.
+    unit=/etc/systemd/system/0trust-api.service
+    [[ -f \"\$unit\" ]] || unit=\"\$REPO_DIR/systemd/0trust-api.service\"
+    [[ -f \"\$unit\" ]] || exit 77
+    # Comment lines are stripped first. The unit explains the flag in a
+    # comment directly above it, and a bare grep matched the explanation —
+    # so deleting the flag left this check still passing. Only the directive
+    # counts.
+    if ! grep -vE '^[[:space:]]*#' \"\$unit\" | grep -q -- '--no-access-log'; then
+        echo \"\$unit runs uvicorn with its access log on\"
+        exit 1
+    fi
+"
+
+check nginx-log-no-secret-paths "Access log collapses secret-bearing paths" -- bash -c "
+    # nginx logs \$uri, which is the DECODED path — the sibling copy of the
+    # uvicorn leak above. The \$uri_anon map replaces the secret segment of
+    # /api/v1/devices/… and /api/v1/payment/…, and the log format must use it.
+    # The maps and the format live in the http-context file the installer
+    # writes (conf.d/0trust-zones.conf); on a clone with nothing deployed,
+    # fall back to the reference config in the tree.
+    conf=\"\$NGINX_ZONES\"
+    [[ -f \"\$conf\" ]] || conf=\"\$REPO_DIR/nginx/0trustvpn.com.conf\"
+    [[ -f \"\$conf\" ]] || exit 77
+    grep -q 'map \\\$uri \\\$uri_anon' \"\$conf\" || { echo \"no \\\$uri_anon map in \$conf\"; exit 1; }
+    if grep -E '^log_format anon' -A2 \"\$conf\" | grep -qE '\\\$uri[^_a-z]'; then
+        echo 'log_format anon still logs the raw \$uri'
         exit 1
     fi
 "

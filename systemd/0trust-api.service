@@ -15,8 +15,19 @@ ExecStart=/opt/0trust/api/.venv/bin/uvicorn main:app \
     --port 8080 \
     --workers 2 \
     --log-level info \
+    --no-access-log \
     --proxy-headers \
     --forwarded-allow-ips=127.0.0.1
+
+# --no-access-log is a privacy control, not tidiness. Uvicorn's access line is
+# the request path, and two of our paths carry a secret in the path itself:
+# DELETE /api/v1/devices/<the customer's WireGuard public key>, and
+# GET /api/v1/payment/<the invoice capability>/status. At --log-level info
+# uvicorn wrote both into journald, where they sat for the seven days
+# MaxRetentionSec keeps — while privacy.html said device keys never appear in
+# our application logs. They did, percent-encoded, on every device removal.
+# docs/AUDIT.md §7 has the reconciled version; the sibling copy of this leak
+# was nginx logging $uri, fixed there with the $uri_anon map.
 
 Restart=on-failure
 RestartSec=3s

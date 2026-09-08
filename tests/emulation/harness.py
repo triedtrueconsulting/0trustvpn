@@ -111,7 +111,7 @@ def env_for_api(db):
     return e
 
 
-def boot(db, workers=1, log_level="warning", env_extra=None):
+def boot(db, workers=1, log_level="warning", env_extra=None, access_log=False):
     os.makedirs(RUN, exist_ok=True)
     e = env_for_api(db)
     e["CONTROL_URL"] = API
@@ -124,8 +124,18 @@ def boot(db, workers=1, log_level="warning", env_extra=None):
                           env=e, stdout=open(f"{RUN}/btcpay.log", "w"), stderr=subprocess.STDOUT)
     _procs.append(bt)
     api = subprocess.Popen(
+        # --no-access-log matches 0trust-api.service, and it is a privacy
+        # control there: two routes carry a secret in the path, so uvicorn's
+        # access line wrote a customer's device pubkey into the journal on
+        # every DELETE. The default log_level="warning" here hid that for a
+        # long time — the flag the product ships has to be the flag the tests
+        # run against, or the suite is testing a configuration nobody deploys.
+        # test_security.py boots without it on purpose, to prove the leak is
+        # real and that the flag is what stops it.
         [py, "-m", "uvicorn", "main:app", "--host", "127.0.0.1",
-         "--port", str(API_PORT), "--workers", str(workers), "--log-level", log_level],
+         "--port", str(API_PORT), "--workers", str(workers),
+         "--log-level", log_level]
+        + ([] if access_log else ["--no-access-log"]),
         cwd=os.path.join(REPO, "api"), env=e,
         stdout=open(f"{RUN}/api.log", "w"), stderr=subprocess.STDOUT)
     _procs.append(api)

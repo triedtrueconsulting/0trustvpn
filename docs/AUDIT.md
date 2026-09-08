@@ -199,12 +199,45 @@ itself is persisted** beyond fields enumerated in §3.2.
 ## 4. Web-tier logs (nginx)
 
 The nginx access log is the most likely place for accidental data
-retention. Its current configuration:
+retention. It very nearly was one: this section described the logging in
+`nginx/0trustvpn.com.conf`, and **`scripts/install.sh` generates its own
+config and has never installed that file**. A real deployment therefore fell
+through to the stock `access_log ... combined` in `/etc/nginx/nginx.conf` and
+wrote the full client IP, the User-Agent, the Referer and the complete
+request line to `/var/log/nginx/access.log`, for the fourteen rotations
+Ubuntu's stock logrotate keeps. The checks below could not see it either —
+they looked for `/etc/nginx/sites-enabled/0trustvpn.com.conf`, a filename the
+installer does not create, and a missing file SKIPs. Everything described
+here is now emitted by the installer, and the checks read what it writes.
+
+The http-context part, in `/etc/nginx/conf.d/0trust-zones.conf`:
 
 ```
-log_format anon '$remote_addr_anon - [$time_local] "$request_method $uri" '
+map $remote_addr $remote_addr_anon {
+    ~(?P<ip>\d+\.\d+\.\d+)\.    $ip.0;
+    ~(?P<ip>[^:]+:[^:]+):       $ip::;
+    default                     0.0.0.0;
+}
+
+map $uri $uri_anon {
+    default                                 $uri;
+    "~^/api/v1/devices/.+$"                 /api/v1/devices/-;
+    "~^/api/v1/payment/[^/]+/(?<rest>.*)$"  /api/v1/payment/-/$rest;
+}
+
+log_format anon '$remote_addr_anon - [$time_local] "$request_method $uri_anon" '
                 '$status $body_bytes_sent';
 
+access_log off;
+```
+
+That last line matters as much as the format: it cancels the stock
+`access_log` in `nginx.conf` at the same level. Without it nginx writes every
+request twice — once anonymised, once not — and the second copy is the one
+that would end up in a subpoena response. Each server block then opts back
+in:
+
+```
 access_log /var/log/nginx/0trust-access.log anon buffer=32k flush=5s;
 ```
 
@@ -223,13 +256,49 @@ anonymized IPs.
 - Querystring contents
 - Request body contents
 - Response body contents
+- The secret-bearing part of a path (see below)
+
+### 4.1.1 Paths, and the two that are secrets
+
+The path **is** logged — `$uri_anon`, not `$uri`. `$uri` is nginx's decoded
+path, and two of our routes carry a secret in the path itself:
+
+| Route | What the path segment is |
+|---|---|
+| `DELETE /api/v1/devices/{pubkey}` | the customer's WireGuard public key |
+| `GET /api/v1/payment/{invoice_id}/status`, `/methods` | a bearer capability: it returns a receive address and the amount owed, and is deliberately unauthenticated because the checkout page polls it before the customer holds any credential |
+
+Logging those verbatim put a device key and a payment capability into a file
+kept for two days. The `$uri_anon` map replaces the secret segment with `-`,
+leaving every other path exactly as it was:
+
+```
+"DELETE /api/v1/devices/-"          not  /api/v1/devices/yQDx…LCs=
+"GET /api/v1/payment/-/status"      not  /api/v1/payment/btc-3-EhV2…/status
+"GET /download"                     unchanged
+```
+
+Triage still sees that device deletions are 500ing. It never needed to see
+whose. The same leak existed a second time in uvicorn's own access line; see
+§7. Auditor verification:
+
+```bash
+sudo ./scripts/audit-verify.sh nginx-log-no-secret-paths
+grep -E '^log_format anon' -A2 /etc/nginx/sites-available/0trustvpn.com
+# Expect: $uri_anon, not $uri
+```
 
 ### 4.2 Retention
 
-`logrotate.d/0trust` rotates the file daily and **keeps two days** with
-gzip compression. Anything older is gone. Auditor verification:
+`/etc/logrotate.d/0trust` rotates the file daily and **keeps two days** with
+gzip compression. Anything older is gone. This file is written by
+`scripts/install.sh`; this section described it for a long time before
+anything created it, and nginx's stock `/etc/logrotate.d/nginx` keeps
+fourteen weekly rotations — so the claim was out by about a factor of fifty.
+Auditor verification:
 
 ```bash
+cat /etc/logrotate.d/0trust          # Expect: daily, rotate 2
 ls -la /var/log/nginx/0trust-access.log*
 # Expect: current file + at most 2 .gz rotations
 ```
@@ -354,19 +423,50 @@ The API logs to journald via systemd. Configured retention:
 
 What gets logged:
 
-- **Uvicorn access lines** are disabled (`--no-access-log` would be
-  cleaner — currently filtered out at the log-format level).
-- **FastAPI route exceptions** include the route path but not request
-  bodies. Stack traces never include token values because the auth
-  dependency hashes tokens before they hit any logger.
-- **DB integrity errors** could conceivably leak a row's content; the
-  control plane wraps DB calls in narrow try/except blocks to prevent
-  this. See `api/main.py` lines [TODO]–[TODO].
+- **Uvicorn access lines are off** — `--no-access-log` in
+  `systemd/0trust-api.service`. This is a privacy control, not tidiness.
+  The access line is the request path, and two of our paths carry a secret
+  in the path itself: `DELETE /api/v1/devices/{pubkey}` is the customer's
+  WireGuard public key, and `GET /api/v1/payment/{invoice_id}/status` is a
+  bearer capability that returns a receive address and an amount owed.
+  Earlier revisions of this document said the access lines were "filtered
+  out at the log-format level". Nothing did any such filtering: the unit ran
+  uvicorn at `--log-level info`, and every device removal wrote that
+  customer's key into the journal, percent-encoded, for the seven days
+  `MaxRetentionSec` keeps. The claim is corrected here, the flag is in the
+  unit, and `audit-verify.sh api-no-access-log` fails if it is ever removed.
+- **FastAPI route exceptions** produce a Python traceback: the exception
+  type, its message, and the *source lines* of the frames. Not the frames'
+  local variables, and not the parameters bound into a SQL statement —
+  CPython's default traceback formatter emits neither. Request bodies are
+  not logged at all.
+- **DB integrity errors** surface as `sqlite3.IntegrityError`, whose message
+  names the constraint that failed — `UNIQUE constraint failed:
+  invoices.id`, `NOT NULL constraint failed: devices.pubkey`. The table and
+  the column, never the value. There is no exception handler suppressing
+  these and there does not need to be; the operator needs the traceback and
+  it carries no customer data.
+- **Account tokens** are hashed by the auth dependency before anything can
+  log them, so a token cannot reach the journal by way of a stack trace.
 
-Auditor verification:
+Auditor verification — run the two checks rather than typing a grep, because
+the grep most people reach for is the one that missed the leak above:
 
 ```bash
-journalctl -u 0trust-api --since "1 hour ago" | grep -iE "(token|pubkey|secret)"
+sudo ./scripts/audit-verify.sh api-log api-no-access-log
+# Expect: api-log-no-tokens PASS, api-log-no-pubkeys PASS,
+#         api-no-access-log PASS
+```
+
+`api-log-no-pubkeys` matches a 44-character WireGuard key wherever it
+appears and in either encoding — raw, or percent-encoded as it would arrive
+in a URL. It previously matched only the JSON shape `"pubkey": "…"`, which
+is the one place a key is never logged, since bodies are not. If you want to
+run it by hand:
+
+```bash
+journalctl -u 0trust-api --since "1 hour ago" \
+  | grep -oE '([A-Za-z0-9]|%2[BbFf]|[+/]){43}(=|%3[Dd])'
 # Expect: empty
 ```
 
@@ -490,6 +590,7 @@ document. If one fails, the claim above it is the one that needs answering.
 | `nginx-conf-exists` | nginx config present |
 | `nginx-no-user-agent` | Access log format does not include User-Agent |
 | `nginx-anonymizes-ip` | Access log uses anonymized client IP |
+| `nginx-log-no-secret-paths` | Access log collapses secret-bearing paths |
 
 **§5. MESH-NODE BEHAVIOR**
 
@@ -538,6 +639,7 @@ document. If one fails, the claim above it is the one that needs answering.
 |-------|--------------------|
 | `api-log-no-tokens` | Recent API log has no account-token leakage |
 | `api-log-no-pubkeys` | Recent API log has no WireGuard pubkeys |
+| `api-no-access-log` | API unit does not log request paths |
 | `api-journald-retention` | journald retention ≤ 7 days |
 
 **§8. BACKUPS**

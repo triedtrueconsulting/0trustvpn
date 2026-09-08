@@ -8,6 +8,12 @@ LOCK = threading.Lock()
 SECRET = os.environ.get("BTCPAY_WEBHOOK_SECRET", "test-webhook-secret")
 CONTROL = os.environ.get("CONTROL_URL", "http://127.0.0.1:8099")
 _seq = [0]
+# Real BTCPay invoice ids are globally unique. This counter restarts at zero
+# with the process, so a module that reboots the stack against the same
+# database got a UNIQUE constraint failure on invoices.id — surfacing as a
+# 500 from POST /api/v1/account that looks like a control-plane bug and
+# isn't. Salt the id per process so restarting is harmless.
+_RUN = os.urandom(3).hex()
 
 
 class H(BaseHTTPRequestHandler):
@@ -27,7 +33,7 @@ class H(BaseHTTPRequestHandler):
         if "/invoices" in self.path:
             with LOCK:
                 _seq[0] += 1
-                iid = f"inv{_seq[0]:06d}"
+                iid = f"inv{_RUN}{_seq[0]:06d}"
                 INVOICES[iid] = {
                     "id": iid, "status": "New",
                     "amount": body.get("amount"),
