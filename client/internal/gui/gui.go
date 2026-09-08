@@ -31,6 +31,7 @@ import (
 	"github.com/0trust/cli/internal/api"
 	"github.com/0trust/cli/internal/config"
 	"github.com/0trust/cli/internal/export"
+	"github.com/0trust/cli/internal/transport"
 	"github.com/0trust/cli/internal/wg"
 )
 
@@ -105,6 +106,7 @@ func Serve(openBrowser bool) error {
 	mux.HandleFunc("/api/trial", handleTrial)
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/killswitch", handleKillSwitch)
+	mux.HandleFunc("/api/obfuscate", handleObfuscate)
 
 	srv := &http.Server{
 		Addr:         ListenAddr,
@@ -247,6 +249,13 @@ type StateView struct {
 	// would draw it "off" whatever the real setting is.
 	KillSwitch          bool `json:"kill_switch"`
 	KillSwitchSupported bool `json:"kill_switch_supported"`
+	// Obfuscate is the SETTING; RelayActive is the FACT. They differ
+	// whenever the node the customer landed on runs no relay, and the page
+	// must render the fact — someone reading "obfuscated" while sending
+	// plain WireGuard is the worst outcome this feature has.
+	Obfuscate   bool   `json:"obfuscate"`
+	RelayActive bool   `json:"relay_active"`
+	Transport   string `json:"transport"`
 }
 
 // The browser polls /api/state every 3s to keep the tunnel indicator live.
@@ -304,6 +313,9 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 
 		KillSwitch:          st.KillSwitch,
 		KillSwitchSupported: wg.KillSwitchSupported(),
+		Obfuscate:           st.Obfuscate,
+		RelayActive:         transport.Running(st),
+		Transport:           transport.Short(st),
 	}
 	if st.Token != "" {
 		view.Token = maskToken(st.Token)
@@ -453,8 +465,17 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Same decision the CLI makes, from the same code — the window
+	// reimplementing it is how a surface ends up quietly ignoring a setting
+	// the customer turned on.
+	tr := transport.Apply(st, resp)
+	if err := st.Save(); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+
 	cfg := wg.BuildConfigDual(st.PrivateKey, resp.InterfaceIP, resp.InterfaceIP6, resp.DNS, resp.Peers,
-		wg.OptionsFor(st.KillSwitch)...)
+		wg.OptionsFor(st.KillSwitch, tr.MTU)...)
 	if _, err := wg.WriteConfig(cfg); err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -474,6 +495,10 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		"entry_node": resp.EntryNode,
 		"exit_node":  resp.ExitNode,
 		"endpoint":   endpoint,
+		// What the transport actually is, and why, so the page can show a
+		// customer who asked for obfuscation and did not get it.
+		"obfuscated":      tr.Active,
+		"transport_notes": tr.Notes,
 	})
 }
 
@@ -488,6 +513,13 @@ func handleDisconnect(w http.ResponseWriter, r *http.Request) {
 	if err := checkRoot(); err != nil {
 		writeErr(w, 403, err.Error())
 		return
+	}
+	// The relay is a separate process; taking the interface down does not
+	// stop it. Stop it first and unconditionally, for the same reason
+	// `0trust disconnect` does.
+	if st, err := config.Load(); err == nil {
+		transport.Stop(st)
+		_ = st.Save()
 	}
 	if err := wg.Down(); err != nil {
 		writeErr(w, 500, err.Error())
@@ -903,6 +935,39 @@ func handleKillSwitch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"ok": true, "kill_switch": st.KillSwitch,
 		"applies": "next connect",
+	})
+}
+
+// handleObfuscate flips the persisted obfuscation setting.
+//
+// Like the kill switch it does not touch a live tunnel: the transport is
+// chosen when the tunnel is built, and swapping it under a running
+// connection means tearing the interface down. The page says "next connect"
+// and that is the truth.
+func handleObfuscate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		writeErr(w, 400, "malformed request")
+		return
+	}
+	st, err := config.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	st.Obfuscate = body.Enabled
+	if err := st.Save(); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok": true, "obfuscate": st.Obfuscate, "applies": "next connect",
 	})
 }
 

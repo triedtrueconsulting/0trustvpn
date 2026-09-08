@@ -26,6 +26,7 @@ import (
 	"github.com/0trust/cli/internal/config"
 	"github.com/0trust/cli/internal/export"
 	"github.com/0trust/cli/internal/gui"
+	"github.com/0trust/cli/internal/transport"
 	"github.com/0trust/cli/internal/wg"
 )
 
@@ -53,6 +54,9 @@ func main() {
 		// last time". A safety setting that silently switches itself off
 		// because the flag was not repeated is worse than not having one.
 		var killSwitch *bool
+		// Same tri-state, same reason: --obfuscate is sticky, so someone
+		// behind a filter does not lose it by forgetting the flag once.
+		var obfuscate *bool
 		for i := 0; i < len(args); i++ {
 			a := args[i]
 			switch {
@@ -65,11 +69,17 @@ func main() {
 			case a == "--no-kill-switch":
 				f := false
 				killSwitch = &f
+			case a == "--obfuscate":
+				t := true
+				obfuscate = &t
+			case a == "--no-obfuscate":
+				f := false
+				obfuscate = &f
 			case !strings.HasPrefix(a, "--"):
 				region = a
 			}
 		}
-		err = cmdConnect(region, exitRegion, killSwitch)
+		err = cmdConnect(region, exitRegion, killSwitch, obfuscate)
 	case "rotate":
 		err = cmdRotate()
 	case "devices":
@@ -90,6 +100,13 @@ func main() {
 			}
 		}
 		err = gui.Serve(open)
+	case "relay":
+		// Not in the help text and not meant to be typed. `0trust connect
+		// --obfuscate` re-executes this binary with it to run the transport
+		// as a process that outlives connect. Documenting it as a user
+		// command would invite someone to run it by hand against a tunnel
+		// that is not expecting it.
+		err = cmdRelay(args)
 	case "disconnect":
 		err = cmdDisconnect()
 	case "regions":
@@ -124,6 +141,9 @@ COMMANDS
   connect [region] [--exit r]    Bring up the tunnel
         [--kill-switch]          Block any traffic outside the tunnel (sticky)
         [--no-kill-switch]       Turn that back off
+        [--obfuscate]            Hide that this is WireGuard, at a cost in
+                                   speed (sticky). See OBFUSCATION below
+        [--no-obfuscate]         Turn that back off — the default
                                    region:  entry region (default: zur)
                                    --exit:  enable multi-hop; exit region
   rotate                         Rotate to a fresh entry/exit pair
@@ -149,6 +169,25 @@ EXAMPLES
   0trust rotate                       refresh the multi-hop pair
   0trust export --exit buc --name phone     QR for iOS/Android WireGuard app
   sudo 0trust gui                     graphical client
+
+OBFUSCATION
+  Off by default. On, each packet is sealed in a Shadowsocks AEAD frame
+  before it leaves your machine, so the tunnel does not have WireGuard's
+  handshake signature on the wire and deep packet inspection cannot
+  identify the protocol.
+
+  What it costs: every packet takes an extra trip through userspace at each
+  end, and 55 bytes of the payload. Expect noticeably less throughput. If
+  nobody is filtering your connection, leave it off — you gain nothing.
+
+  What it does NOT do: it does not hide that you are talking to this
+  address, how much, or when. It is not authentication — every customer on
+  a node shares its relay key, and WireGuard remains the only thing
+  authenticating anyone. It is UDP in and UDP out, so a network that blocks
+  all outbound UDP blocks this too.
+
+  Not every node runs a relay. If the one you land on does not, connect
+  says so and gives you a direct tunnel rather than pretending.
 
 ROTATION
   Multi-hop pairs expire every 24h. Cron the rotate command to keep your
@@ -266,12 +305,14 @@ func cmdStatus() error {
   devices     : %d / %d
   tunnel      : %s
   mode        : %s
+  transport   : %s
   ipv6        : %s
   kill switch : %s
   next rotate : %s
 `,
 		maskToken(st.Token), s.Status, expiryStr, plural(s.DaysRemaining, "day"),
-		s.DeviceCount, devCap, tunnelState(), mode, ipv6Str, killStr, rotateStr)
+		s.DeviceCount, devCap, tunnelState(), mode, transport.Describe(st),
+		ipv6Str, killStr, rotateStr)
 
 	// There is no email address on this account — by design — so a notice is
 	// the only way the service can tell a customer anything, including that
@@ -387,7 +428,7 @@ func wrap(text string, width int) []string {
 // attempts — long enough for a slow link, short enough not to feel hung.
 const handshakeTimeout = 15 * time.Second
 
-func cmdConnect(region, exitRegion string, killSwitch *bool) error {
+func cmdConnect(region, exitRegion string, killSwitch *bool, obfuscate *bool) error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
@@ -445,6 +486,17 @@ func cmdConnect(region, exitRegion string, killSwitch *bool) error {
 			return err
 		}
 	}
+	if obfuscate != nil && *obfuscate != st.Obfuscate {
+		st.Obfuscate = *obfuscate
+		if err := st.Save(); err != nil {
+			return err
+		}
+	}
+	// Any relay left over from a previous connect is pointed at the node
+	// that connect chose, which is not necessarily this one. Stop it before
+	// deciding about a new one, or the old process keeps a loopback port and
+	// the new tunnel is aimed at a relay dialling somewhere else.
+	transport.Stop(st)
 
 	if resp != nil && len(resp.Peers) > 0 {
 		st.InterfaceIP = resp.InterfaceIP
@@ -456,8 +508,17 @@ func cmdConnect(region, exitRegion string, killSwitch *bool) error {
 			return err
 		}
 
+		tr := transport.Apply(st, resp)
+		for _, n := range tr.Notes {
+			fmt.Printf("→ %s\n", n)
+		}
+		mtu := tr.MTU
+		if err := st.Save(); err != nil {
+			return err
+		}
+
 		cfg := wg.BuildConfigDual(st.PrivateKey, resp.InterfaceIP, resp.InterfaceIP6, resp.DNS, resp.Peers,
-			wg.OptionsFor(st.KillSwitch)...)
+			wg.OptionsFor(st.KillSwitch, mtu)...)
 		path, err := wg.WriteConfig(cfg)
 		if err != nil {
 			return err
@@ -574,12 +635,24 @@ func cmdRotate() error {
 	}
 
 	st.ExpiresAt = resp.ExpiresAt
+
+	// Rotating moves the ENTRY node, which is the node the relay dials. The
+	// old relay is pointed at a box that is no longer in this route, so it
+	// has to be replaced, not kept — a hot-swap that left it running would
+	// hand the new peer an endpoint whose relay forwards to the previous
+	// entry, and the handshake would never complete. This is the same
+	// omission that let rotate ship configs without the kill switch.
+	tr := transport.Apply(st, resp)
+	for _, n := range tr.Notes {
+		fmt.Printf("  %s\n", n)
+	}
+	mtu := tr.MTU
 	if err := st.Save(); err != nil {
 		return err
 	}
 
 	cfg := wg.BuildConfigDual(st.PrivateKey, resp.InterfaceIP, resp.InterfaceIP6, resp.DNS, resp.Peers,
-		wg.OptionsFor(st.KillSwitch)...)
+		wg.OptionsFor(st.KillSwitch, mtu)...)
 
 	// If the tunnel is up, hot-swap peers in-place. If it's down, just
 	// write the new config — next `connect` picks it up.
@@ -760,6 +833,18 @@ func truncate(s string, n int) string {
 func cmdDisconnect() error {
 	if err := requireRoot(); err != nil {
 		return err
+	}
+	// The relay is stopped whether or not the interface is up, and BEFORE
+	// the early return. It is a separate process holding a loopback socket:
+	// a tunnel taken down some other way (a reboot of the interface, a
+	// crash, wg-quick by hand) leaves it running with nothing to carry, and
+	// an early return here would make `0trust disconnect` the one command
+	// that cannot clean it up.
+	st, err := config.Load()
+	if err == nil && (st.RelayActive || st.RelayPID > 0) {
+		transport.Stop(st)
+		_ = st.Save()
+		fmt.Println("✓ obfuscation relay stopped")
 	}
 	if !wg.IsUp() {
 		fmt.Println("⊘ not connected")

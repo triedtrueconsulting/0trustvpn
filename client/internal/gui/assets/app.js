@@ -7,6 +7,7 @@ const $ = (id) => document.getElementById(id);
 // True when the kill-switch setting has changed under a tunnel that is
 // already up, so the running tunnel does not yet reflect it.
 let ksPending = false;
+let obPending = false;
 
 let state = null;
 let pollHandle = null;
@@ -40,6 +41,37 @@ function render() {
   // what the client will actually write on the next connect. ksPending
   // carries the one thing state cannot tell us — that the running tunnel was
   // built before the setting changed, so the change is not in force yet.
+  // The toggle shows the SETTING; the hint shows what is actually running.
+  // They disagree whenever the node this tunnel landed on has no relay, and
+  // the honest thing is to show both rather than let the tick mark imply a
+  // property the traffic does not have.
+  const ob = $('ob-toggle'), obLabel = $('ob-label'), obHint = $('ob-hint');
+  if (ob) {
+    ob.checked = !!state.obfuscate;
+    obLabel.textContent = state.obfuscate ? 'on' : 'off';
+    if (state.relay_active) {
+      obHint.textContent =
+        'On — packets are sealed so this does not look like WireGuard. ' +
+        'Slower. It does not hide who you are connected to, or how much.';
+    } else if (state.obfuscate && state.tunnel_up) {
+      obHint.textContent =
+        'Requested, but this node runs no relay — the tunnel is connected ' +
+        'directly and IS identifiable as WireGuard.';
+    } else if (state.obfuscate) {
+      obHint.textContent =
+        'Will be used on the next connect, if the node you land on offers it.';
+    } else {
+      obHint.textContent =
+        'Off — full speed. Deep packet inspection can identify this as a ' +
+        'VPN. Turn on only if your network filters WireGuard.';
+    }
+    if (obPending) {
+      obHint.textContent =
+        'Saved — applies on the next connect. The running tunnel still uses ' +
+        'the transport it was built with.';
+    }
+  }
+
   const ks = $('ks-toggle'), ksLabel = $('ks-label'), ksHint = $('ks-hint');
   if (ks) {
     ks.checked = !!state.kill_switch;
@@ -323,6 +355,7 @@ $('toggle-btn').addEventListener('click', async () => {
       };
       const r = await api('/api/connect', { method: 'POST', body: JSON.stringify(body) });
       ksPending = false;   // this tunnel was built with the current setting
+      obPending = false;
       toast(r.multihop ? `Connected — multi-hop via ${r.entry_node} → ${r.exit_node}` : 'Connected');
     }
     await refresh();
@@ -508,6 +541,33 @@ $('devices-btn').addEventListener('click', async () => {
 });
 $('devices-close').addEventListener('click', () => {
   $('devices-modal').classList.add('hidden');
+});
+
+// ---------------------------------------------------------------------------
+// DPI protection (obfuscation)
+// ---------------------------------------------------------------------------
+
+$('ob-toggle').addEventListener('change', async (e) => {
+  const want = e.target.checked;
+  const hint = $('ob-hint');
+  e.target.disabled = true;
+  try {
+    await api('/api/obfuscate', {
+      method: 'POST', body: JSON.stringify({ enabled: want }),
+    });
+    // Same reasoning as the kill switch: the transport is chosen when the
+    // tunnel is built, so flipping it under a live one would mean dropping
+    // the connection of someone who clicked a checkbox.
+    obPending = !!(state && state.tunnel_up);
+    toast(want ? 'DPI protection enabled' : 'DPI protection disabled');
+  } catch (err) {
+    e.target.checked = !want;
+    obPending = false;
+    hint.textContent = err.message;
+  } finally {
+    e.target.disabled = false;
+    await refresh();
+  }
 });
 
 // ---------------------------------------------------------------------------

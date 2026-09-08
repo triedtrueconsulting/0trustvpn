@@ -138,6 +138,27 @@ type RegisterResp struct {
 	// privacy property multi-hop exists for is not, and the client says so
 	// rather than printing the usual claim.
 	SameHost bool `json:"same_host"`
+	// MTU for this config. Differs between the direct and obfuscated
+	// transports, so it is answered per response rather than assumed — see
+	// the note on WG_MTU in the API. Zero means an older control plane said
+	// nothing; leave the interface MTU to wg-quick in that case.
+	MTU int `json:"mtu"`
+	// Obfuscation is non-nil when the node this config points at runs the
+	// relay. Its presence is a capability, not an instruction: whether to
+	// use it is the customer's choice, made locally, with no round trip.
+	Obfuscation *Obfuscation `json:"obfuscation"`
+}
+
+// Obfuscation describes a node's relay. Nil means that node does not run
+// one — which is a normal state, not an error, and must not stop a client
+// connecting directly.
+type Obfuscation struct {
+	Kind     string `json:"kind"`     // "shadowsocks"
+	Method   string `json:"method"`   // "aes-256-gcm"
+	Endpoint string `json:"endpoint"` // where the relay listens, host:port
+	Key      string `json:"key"`      // base64, 32 bytes; shared per node
+	Target   string `json:"target"`   // what the relay forwards to, on its loopback
+	MTU      int    `json:"mtu"`      // interface MTU to use with this transport
 }
 
 // --- Calls ---

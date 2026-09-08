@@ -46,7 +46,22 @@ func GenKeypair() (string, string, error) {
 // Option tunes the generated config.
 type Option func(*buildOpts)
 
-type buildOpts struct{ killSwitch bool }
+type buildOpts struct {
+	killSwitch bool
+	mtu        int
+}
+
+// WithMTU pins the interface MTU instead of letting wg-quick derive one.
+//
+// This is not a tuning knob. wg-quick's derivation assumes the tunnel's
+// packets go straight onto the path, and that stops being true the moment
+// the obfuscation relay wraps each datagram in 55 more bytes: the derived
+// MTU then produces outer packets larger than the path carries, which the
+// network drops. The handshake is small enough to fit either way, so the
+// tunnel comes up and looks healthy while full-size packets vanish. The
+// control plane publishes the right number per transport; this writes it.
+
+func WithMTU(mtu int) Option { return func(o *buildOpts) { o.mtu = mtu } }
 
 // WithKillSwitch blocks any traffic that is not going through the tunnel, so
 // a tunnel that drops takes the connection down with it instead of quietly
@@ -94,11 +109,15 @@ func killSwitchLines() []string {
 // OptionsFor turns the persisted setting into build options. One place, so a
 // code path that forgets it cannot silently ship a config without the kill
 // switch the user asked for — which is exactly what rotate used to do.
-func OptionsFor(killSwitch bool) []Option {
+func OptionsFor(killSwitch bool, mtu ...int) []Option {
+	var opts []Option
 	if killSwitch {
-		return []Option{WithKillSwitch()}
+		opts = append(opts, WithKillSwitch())
 	}
-	return nil
+	if len(mtu) > 0 && mtu[0] > 0 {
+		opts = append(opts, WithMTU(mtu[0]))
+	}
+	return opts
 }
 
 // KillSwitchSupported reports whether WithKillSwitch does anything here.
@@ -132,6 +151,9 @@ func buildConfig(privKey string, addrs []string, dns []string, peers []api.Peer,
 	fmt.Fprintf(&b, "Address = %s\n", strings.Join(addrs, ", "))
 	if len(dns) > 0 {
 		fmt.Fprintf(&b, "DNS = %s\n", strings.Join(dns, ", "))
+	}
+	if o.mtu > 0 {
+		fmt.Fprintf(&b, "MTU = %d\n", o.mtu)
 	}
 	if o.killSwitch {
 		for _, line := range killSwitchLines() {

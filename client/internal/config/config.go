@@ -44,6 +44,25 @@ type State struct {
 	// carried. Recorded so `0trust status` can say which it is instead of
 	// leaving the customer to guess.
 	InterfaceIP6 string `json:"interface_ip6,omitempty"`
+
+	// Obfuscate: route the tunnel through the node's relay so it does not
+	// look like WireGuard on the wire. Sticky for the same reason the kill
+	// switch is — a protection you have to remember to re-enable on every
+	// connect is not one you can rely on — and off by default, because it
+	// costs throughput and most people are not being filtered.
+	Obfuscate bool `json:"obfuscate,omitempty"`
+
+	// State of the relay the last connect started. RelayActive distinguishes
+	// "the customer asked for obfuscation" (Obfuscate) from "the tunnel is
+	// actually running through a relay right now", which are different
+	// whenever the node they landed on does not offer one. Reporting the
+	// wish as though it were the fact is the single worst thing this feature
+	// could do: someone would believe their traffic is unrecognizable when
+	// it is plain WireGuard.
+	RelayActive bool   `json:"relay_active,omitempty"`
+	RelayPID    int    `json:"relay_pid,omitempty"`
+	RelayLocal  string `json:"relay_local,omitempty"`
+	RelayServer string `json:"relay_server,omitempty"`
 }
 
 func configDir() (string, error) {

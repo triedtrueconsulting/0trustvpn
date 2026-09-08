@@ -91,6 +91,25 @@ TRIAL_SECRET = os.environ.get("ZTV_TRIAL_SECRET", "")
 TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 TOKEN_LENGTH = 16  # ~80 bits entropy
 
+# --- Obfuscated transport ---------------------------------------------------
+# The MTU a client must use on its WireGuard interface when it routes through
+# a node's obfuscation relay, and the plain one otherwise.
+#
+# Published rather than hardcoded in each client, for the reason bug class #11
+# exists: a value that differs per deployment and is printed from a constant
+# is wrong on every deployment but ours. Getting it wrong here is worse than
+# a wrong number on a screen — a handshake is 148 bytes and fits either way,
+# so the tunnel comes up, reports healthy, and then silently drops full-size
+# packets. That reaches the customer as "some sites hang", which is
+# unattributable.
+#
+# 1420 is wg-quick's own default for a 1500-byte v4 path. The relay adds a
+# 32-byte salt, a 7-byte destination header and a 16-byte AEAD tag: 55 bytes,
+# the Overhead constant in client/internal/obfs. 1420 - 55 = 1365, rounded
+# down to 1360 for a little slack on a path that is not quite 1500.
+WG_MTU = int(os.environ.get("ZTV_WG_MTU", "1420"))
+WG_MTU_OBFUSCATED = int(os.environ.get("ZTV_WG_MTU_OBFS", "1360"))
+
 PRICING = {
     1: 5.00,    # 1 month
     3: 13.00,   # 3 months
@@ -408,6 +427,13 @@ MIGRATIONS = [
     ("provision_tokens", "used_count", "INTEGER NOT NULL DEFAULT 0"),
     ("provision_tokens", "bind_ip", "TEXT"),
     ("provision_tokens", "revoked_at", "INTEGER"),
+    # Obfuscated transport. A node that has not been told about it keeps
+    # obfs_port = 0, which is how every existing row reads and how the
+    # register response decides there is nothing to advertise — so a mesh
+    # upgraded one node at a time carries both kinds at once without the
+    # control plane needing to know which is which.
+    ("mesh_nodes", "obfs_port", "INTEGER NOT NULL DEFAULT 0"),
+    ("mesh_nodes", "obfs_key", "TEXT"),
 ]
 
 
@@ -671,6 +697,20 @@ class WGRegisterResponse(BaseModel):
     # True when entry and exit turn out to be the same machine — a one-box
     # test deployment. The route is real; the privacy property is not.
     same_host: bool = False
+    # The MTU the client must put on its interface for THIS config. It
+    # differs between the two transports, so it is answered per response
+    # rather than left for a client to work out.
+    mtu: int = WG_MTU
+    # How to reach this peer without looking like WireGuard, when the node
+    # the customer landed on offers it. Absent means the node does not — not
+    # that the feature is off — and the client must then connect directly
+    # rather than failing, because a node without the sidecar is a perfectly
+    # good node.
+    #
+    # Note which node this describes: on multi-hop the client's packets are
+    # addressed to the ENTRY, so this is the entry's relay. Advertising the
+    # exit's would send the customer to a box that is not expecting them.
+    obfuscation: dict | None = None
 
 
 # ============================================================================
@@ -863,6 +903,30 @@ def public_config() -> dict:
         "confirmations": payments.confirmations_for(prov),
         "takes_cards": payments.is_card_provider(prov),
         "mesh_network": MESH_NETWORK,
+        # Whether ANY live node actually runs the obfuscation relay. Read
+        # from mesh_nodes, not from a setting, so a page cannot advertise a
+        # capability no box has — the claim discipline that keeps a coin off
+        # the checkout when no wallet backs it applies to this exactly as
+        # hard, and more so: someone choosing a VPN for censorship
+        # circumvention is choosing on this line.
+        "obfuscation": _obfuscation_availability(),
+    }
+
+
+def _obfuscation_availability() -> dict:
+    with db() as conn:
+        try:
+            n = conn.execute(
+                """SELECT COUNT(*) AS n FROM mesh_nodes
+                    WHERE active = 1 AND obfs_port > 0
+                      AND obfs_key IS NOT NULL AND obfs_key != ''"""
+            ).fetchone()["n"]
+        except sqlite3.OperationalError:
+            n = 0                        # pre-migration database
+    return {
+        "available": n > 0,
+        "nodes": n,
+        "kind": "shadowsocks" if n else None,
     }
 
 
@@ -1656,7 +1720,49 @@ def _multihop_response(mesh_ip: str, pair: dict) -> WGRegisterResponse:
         exit_node=exit_["id"],
         expires_at=pair["expires_at"],
         same_host=same_host,
+        mtu=WG_MTU,
+        # The entry node's relay, on the entry port this device was given —
+        # that is the socket its packets are aimed at.
+        obfuscation=_obfuscation_block(entry, port),
     )
+
+
+def _obfuscation_block(node, peer_port: int) -> dict | None:
+    """
+    What the client needs to route to `node` through its obfuscation relay,
+    or None if that node does not run one.
+
+    `peer_port` is the port on the node that the tunnel actually terminates
+    on — the WireGuard listener for a single hop, the device's allocated
+    entry port for multi-hop. It is passed rather than derived because the
+    relay's allowlist is keyed on exactly that port, and a client packing a
+    destination the relay will not forward to gets a tunnel that never
+    handshakes with nothing anywhere reporting why.
+    """
+    if "obfs_port" not in node.keys():
+        return None                      # a row from before the migration
+    if not node["obfs_port"] or not node["obfs_key"]:
+        return None
+    return {
+        "kind": "shadowsocks",
+        "method": "aes-256-gcm",
+        "endpoint": f"{node['public_ip']}:{node['obfs_port']}",
+        "key": node["obfs_key"],
+        # The relay forwards to the node's own loopback and nothing else.
+        # Naming it here keeps the client from guessing, and keeps the
+        # allowlist on the node the single authority on what is reachable.
+        "target": f"127.0.0.1:{peer_port}",
+        "mtu": WG_MTU_OBFUSCATED,
+    }
+
+
+def _endpoint_port(endpoint: str, default: int = 51820) -> int:
+    """The port half of a stored `host:port` endpoint, v6-literal safe."""
+    _, _, tail = endpoint.rpartition(":")
+    try:
+        return int(tail)
+    except (TypeError, ValueError):
+        return default
 
 
 def _assign_nodes(conn, device_id: int, node_ids) -> None:
@@ -1722,6 +1828,8 @@ def _single_hop_response(mesh_ip: str, node) -> WGRegisterResponse:
         multihop=False,
         entry_node=node["id"],
         exit_node=node["id"],
+        mtu=WG_MTU,
+        obfuscation=_obfuscation_block(node, _endpoint_port(node["endpoint"])),
     )
 
 
@@ -1979,8 +2087,41 @@ class NodeProvisionRequest(BaseModel):
     # meshd's heartbeat is a separate outbound HTTPS call that kept working.
     wg_port: int = 51820
 
+    # The obfuscation relay, if this node runs one. Zero means it does not,
+    # which is what every node registered before this existed reports and
+    # what a node started without the sidecar reports today — so the mesh can
+    # be upgraded a box at a time and the register response simply does not
+    # offer what a given node cannot do.
+    obfs_port: int = 0
+    # Base64 of 32 bytes. Not a secret from customers — every client on the
+    # node is handed it, because it is what makes their packets openable by
+    # the relay. It is the node's obfuscation key, not an access credential;
+    # WireGuard is still the only thing authenticating anybody.
+    obfs_key: str = ""
+
     _pubkey_ok = field_validator("pubkey")(lambda cls, v: _validate_wg_key(v))
     _public_ip_ok = field_validator("public_ip")(lambda cls, v: _validate_public_ip(v))
+
+    @field_validator("obfs_key")
+    @classmethod
+    def _obfs_key_ok(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            return ""
+        try:
+            raw = base64.b64decode(v, validate=True)
+        except Exception:
+            raise ValueError("obfs_key must be base64")
+        if len(raw) != 32:
+            raise ValueError("obfs_key must decode to 32 bytes")
+        return v
+
+    @field_validator("obfs_port")
+    @classmethod
+    def _obfs_port_ok(cls, v: int) -> int:
+        if v and not (1 <= v <= 65535):
+            raise ValueError("obfs_port must be 0 or 1-65535")
+        return v
 
     @field_validator("wg_port")
     @classmethod
@@ -2034,6 +2175,16 @@ def node_provision(req: NodeProvisionRequest, request: Request):
         raise HTTPException(400, "role must be entry|exit|both")
     if not 1 <= req.wg_port <= 65535:
         raise HTTPException(400, "wg_port out of range")
+    # Half a relay is worse than none: a port with no key advertises an
+    # endpoint whose packets nothing can open, and a key with no port
+    # advertises nothing while looking configured. Both send every client
+    # that opts in to a listener that will never answer, and the node goes on
+    # heartbeating healthy throughout — the same failure shape as the node
+    # registered on the wrong wg_port.
+    if bool(req.obfs_port) != bool(req.obfs_key):
+        raise HTTPException(400, "obfs_port and obfs_key must be set together")
+    if req.obfs_port and req.obfs_port == req.wg_port:
+        raise HTTPException(400, "obfs_port cannot be the WireGuard port")
 
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     now = int(time.time())
@@ -2090,10 +2241,11 @@ def node_provision(req: NodeProvisionRequest, request: Request):
             conn.execute(
                 """UPDATE mesh_nodes
                       SET pubkey = ?, endpoint = ?, role = ?, ipv6 = ?,
-                          psk_hash = ?, last_heartbeat = ?, active = 1
+                          psk_hash = ?, last_heartbeat = ?, active = 1,
+                          obfs_port = ?, obfs_key = ?
                     WHERE id = ?""",
                 (req.pubkey, endpoint, req.role, 1 if req.ipv6 else 0,
-                 psk_hash, now, node_id),
+                 psk_hash, now, req.obfs_port, req.obfs_key or None, node_id),
             )
             # Its old peers pointed at a key that no longer exists. Clearing
             # the assignments makes the next /wg/register place those devices
@@ -2108,13 +2260,15 @@ def node_provision(req: NodeProvisionRequest, request: Request):
             conn.execute(
                 """INSERT INTO mesh_nodes
                      (id, hostname, pubkey, endpoint, region, role, public_ip,
-                      ephemeral, psk_hash, last_heartbeat, active, ipv6)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?)""",
+                      ephemeral, psk_hash, last_heartbeat, active, ipv6,
+                      obfs_port, obfs_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?, ?, ?)""",
                 (
                     node_id, f"{node_id}.0trust",
                     req.pubkey, endpoint,
                     req.region, req.role, req.public_ip,
                     psk_hash, now, 1 if req.ipv6 else 0,
+                    req.obfs_port, req.obfs_key or None,
                 ),
             )
 
