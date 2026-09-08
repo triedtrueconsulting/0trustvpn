@@ -1,5 +1,16 @@
-fastapi==0.115.0
-uvicorn[standard]==0.32.0
-pydantic==2.9.2
+# Pinned exactly: the control plane takes money and issues tunnels, and a
+# transitive minor bump is not something to discover in production.
+#
+# starlette is fastapi's dependency, not ours, but it is the one that carries
+# the advisories — nine of them against the 0.38.6 that fastapi 0.115 resolved
+# to, including two Host/path confusions that let request.url disagree with
+# the path actually routed. Pin fastapi high enough to pull a fixed starlette,
+# and re-check with:
+#
+#     pip install pip-audit && pip-audit -r api/requirements.txt
+#
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.5
 
 # The /surf visitor proxy reuses these — it is FastAPI on its own port.

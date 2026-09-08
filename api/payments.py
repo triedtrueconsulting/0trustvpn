@@ -51,6 +51,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -131,16 +132,48 @@ class PaymentError(Exception):
     """Provider returned a non-2xx, or was unreachable."""
 
 
+# Nothing this module asks for is big. The largest legitimate answer is an
+# Esplora address history — 25 transactions, tens of kilobytes — and the
+# smallest is a Kraken ticker. 8 MB is two orders of magnitude of headroom.
+#
+# It is bounded at all because the other end is a third party by design: the
+# whole point of the watch provider is that we run no chain of our own, so
+# every settlement check is a request to a public explorer whose response
+# size we do not control. Worse, an attacker has a cheap lever on it —
+# invoice addresses are published to whoever is paying, and dust-spamming one
+# inflates that address's history without limit. An unbounded r.read() on the
+# once-a-minute poller turns that into memory exhaustion on the control
+# plane. Truncation raises, the poller logs "chain check failed" and tries
+# again next minute, and the invoice stays pending rather than being
+# wrongly settled.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
+
+def _read_capped(r, what: str) -> bytes:
+    """Read a response body, refusing anything over the cap."""
+    payload = r.read(MAX_RESPONSE_BYTES + 1)
+    if len(payload) > MAX_RESPONSE_BYTES:
+        raise PaymentError(
+            f"{what} returned more than {MAX_RESPONSE_BYTES} bytes; refusing to buffer it")
+    return payload
+
+
 def _http(method: str, url: str, headers: dict, body: dict | None = None,
           timeout: float = 15.0) -> Any:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            payload = r.read()
+            # The HOST, not the URL. An explorer URL carries the customer's
+            # payment address in its path, and this string ends up in a
+            # PaymentError that poll_invoices logs — journald keeps that for
+            # seven days, outliving the invoice row the sweeper garbage
+            # collects. Which explorer misbehaved is the whole diagnostic;
+            # whose address it was asking about is not.
+            payload = _read_capped(r, urllib.parse.urlsplit(url).netloc or "the provider")
             return json.loads(payload) if payload else None
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")[:500]
+        detail = e.read(4096).decode("utf-8", errors="replace")[:500]
         raise PaymentError(f"{e.code} {e.reason}: {detail}") from e
     except urllib.error.URLError as e:
         raise PaymentError(f"payment provider unreachable: {e.reason}") from e
@@ -519,10 +552,10 @@ class StripeProvider:
                      "Stripe-Version": "2024-06-20"})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                return json.loads(r.read() or b"{}")
+                return json.loads(_read_capped(r, "Stripe") or b"{}")
         except urllib.error.HTTPError as e:
             raise PaymentError(
-                f"{e.code}: {e.read().decode('utf-8', 'replace')[:400]}") from e
+                f"{e.code}: {e.read(4096).decode('utf-8', 'replace')[:400]}") from e
         except urllib.error.URLError as e:
             raise PaymentError(f"Stripe unreachable: {e.reason}") from e
 
@@ -901,7 +934,21 @@ class WatchOnlyProvider:
             address, ref = self.address_for(index, coin), index
 
         return {
-            "id": f"{coin.lower()}-{ref}-{int(time.time())}",
+            # The invoice id is a CAPABILITY: /api/v1/payment/{id}/methods and
+            # /status are deliberately unauthenticated, because the checkout
+            # page polls them before the customer has any credential. So the
+            # id has to be unguessable, and this one was not — it was the coin,
+            # the derivation index (0, 1, 2, … sequential) and the unix second.
+            # An attacker who opened one invoice of their own learned the
+            # current index and the clock, and every other customer's id was a
+            # handful of guesses away: their receive address, the amount owed,
+            # and how much had arrived. On a product whose pitch is that
+            # payments cannot be linked to each other, that is the link.
+            #
+            # The readable prefix stays for support and log-grepping; the
+            # entropy is what makes it a capability. Nothing parses this id —
+            # derivation_index is its own column — so the shape is free.
+            "id": f"{coin.lower()}-{ref}-{secrets.token_urlsafe(18)}",
             # No hosted checkout to send anyone to: the customer pays from
             # their own wallet. The UI renders the address and a QR.
             "checkout_url": "",

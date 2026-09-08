@@ -344,9 +344,23 @@ try:
                   all(d["pubkey"] != other for d in devs), devs)
 
         print("\n[5] removing THIS device tears the tunnel down")
-        rows = page.query_selector_all("#devices-list .device-row") if CONNECTED else []
         if not CONNECTED:
             print("      (needs a tunnel, which needs root — skipped here)")
+        else:
+            # The wait above only established that "sidecar" is gone, and an
+            # EMPTY list satisfies that too: loadDevices() writes "Loading…"
+            # into #devices-list before it awaits the API, so there is a window
+            # after every delete where the list has no .device-row at all.
+            # Sampling straight after the delete lands in that window roughly
+            # at random — which is how this section failed on a loaded runner
+            # and passed on the next run with nothing to explain it. Wait for
+            # the state the assertion needs, then read it.
+            page.wait_for_function(
+                "() => { const l = document.getElementById('devices-list');"
+                " return l.querySelectorAll('.device-row').length > 0"
+                " && l.textContent.toLowerCase().includes('this device'); }",
+                timeout=20000)
+        rows = page.query_selector_all("#devices-list .device-row") if CONNECTED else []
         this_row = None
         for row in rows:
             if "this device" in row.inner_text().lower():

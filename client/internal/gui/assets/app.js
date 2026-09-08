@@ -118,9 +118,15 @@ function render() {
   $('kv-exp').textContent = state.expires_at
     ? new Date(state.expires_at * 1000).toISOString().slice(0, 10)
     : '—';
-  const cap = state.max_devices || 8;
+  // No `|| 8`. The cap is 8 paid and 2 on trial, and printing the paid
+  // number when the API did not send one told trial customers they had six
+  // slots spare until the next register returned 409 — CLAUDE.md's recurring
+  // bug class #11, which has shipped three times. If max_devices is absent,
+  // say so rather than guessing.
   $('kv-dev').textContent =
-    state.device_count != null ? `${state.device_count} / ${cap}` : '—';
+    state.device_count == null ? '—'
+      : state.max_devices ? `${state.device_count} / ${state.max_devices}`
+      : `${state.device_count}`;
 }
 
 function formatRotate(ts) {
@@ -434,9 +440,12 @@ async function loadDevices() {
     return;
   }
 
-  const cap = (state && state.max_devices) || 8;
+  // Same reason as kv-dev above: never substitute the paid cap for a cap the
+  // control plane did not send.
+  const cap = state && state.max_devices;
   $('devices-count').textContent =
-    `${devices.length} of ${cap} slots used` +
+    (cap ? `${devices.length} of ${cap} slots used`
+         : `${devices.length} registered`) +
     (state && state.plan === 'trial' ? ' (trial)' : '');
 
   list.textContent = '';

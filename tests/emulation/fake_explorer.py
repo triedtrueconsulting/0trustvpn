@@ -38,6 +38,11 @@ PRICES = {"XXBTZUSD": 50_000.0, "XZECZUSD": 30.0, "XXMRZUSD": 150.0}
 PAIR_ALIAS = {"XBTUSD": "XXBTZUSD", "ZECUSD": "XZECZUSD", "XMRUSD": "XXMRZUSD"}
 DOWN = [False]
 PRICE_DOWN = [False]
+# Pad every address response with this many junk bytes. Models an explorer
+# answering with more than the provider is willing to buffer — which an
+# attacker can bring about for free, since invoice addresses are published to
+# whoever is paying and dust-spamming one inflates its history without limit.
+FLOOD = [0]
 
 
 class H(BaseHTTPRequestHandler):
@@ -88,6 +93,7 @@ class H(BaseHTTPRequestHandler):
                 "utxo": [{"block_id": p["height"] if p["height"] else -1,
                           "value": p["sats"], "index": i}
                          for i, p in enumerate(paid)],
+                **({"_pad": "x" * FLOOD[0]} if FLOOD[0] else {}),
             }}, "context": {"code": 200, "state": TIP[0]}})
         if "/address/" in path and path.endswith("/txs"):
             addr = path[:-len("/txs")].rsplit("/address/", 1)[1]
@@ -108,6 +114,7 @@ class H(BaseHTTPRequestHandler):
                                 "tx_count": 1 if conf else 0},
                 "mempool_stats": {"funded_txo_sum": mem, "spent_txo_sum": 0,
                                   "tx_count": 1 if mem else 0},
+                **({"_pad": "x" * FLOOD[0]} if FLOOD[0] else {}),
             })
         self._json(404, {"error": "no route"})
 
@@ -145,6 +152,7 @@ def mine(blocks=1):
 def reset():
     with LOCK:
         PAYMENTS.clear()
+    FLOOD[0] = 0
 
 
 if __name__ == "__main__":

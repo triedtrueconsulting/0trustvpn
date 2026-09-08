@@ -415,8 +415,23 @@ def healthz():
     return {"status": "ok", "ts": int(time.time())}
 
 
+# Deliberately `def`, not `async def`.
+#
+# The body of this handler blocks: fetch() is urllib, and it will sit on a
+# socket for FETCH_TIMEOUT (12s) per hop across up to MAX_REDIRECTS+1 hops,
+# then read up to 5 MB from whatever trickle the origin is sending. As an
+# `async def` all of that ran ON the event loop, so a single visitor pointing
+# ?url= at a slow host froze that worker — every other visitor's request,
+# including the front page, waited behind it. Two of them (the unit runs
+# --workers 2) took /surf down completely, from an unauthenticated GET that
+# anybody can send. This is the most exposed thing we run and the cheapest
+# possible denial of service against it.
+#
+# A plain `def` hands the whole handler to Starlette's threadpool, so a slow
+# origin occupies one thread instead of the entire worker. trial_label()'s
+# 2s call to the control plane rides along in the same thread.
 @app.get(PREFIX, response_class=HTMLResponse)
-async def surf(request: Request):
+def surf(request: Request):
     raw = request.query_params.get("url", "").strip()
     if not raw:
         return page("Surf", f"""

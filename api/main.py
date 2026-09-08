@@ -49,13 +49,14 @@ import secrets
 import sqlite3
 import subprocess
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 import ops_alerts
@@ -693,12 +694,38 @@ def require_node(x_node_psk: str = Header(...)) -> Optional[str]:
 # FASTAPI APP
 # ============================================================================
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """
+    Startup work, run once per worker before the first request.
+
+    This was @app.on_event("startup"), which FastAPI deprecated and will
+    eventually remove — at which point the decorator becomes a no-op, the
+    database is never initialised, and the first request fails on a missing
+    table. Nothing about that failure would point at a framework upgrade, so
+    it is worth not waiting for.
+
+    The body is synchronous and runs on the event loop, deliberately: it is
+    two SQLite reads and at most one write against a local file, and no
+    request can be served until it finishes anyway.
+    """
+    init_db()
+    # Settings the dashboard owns live in the database and take precedence
+    # over the environment. Push them out before the first request builds a
+    # payment provider, or the API runs on stale credentials until a restart.
+    with db() as conn:
+        settings.apply_to_environ(conn)
+    _bootstrap_admin()
+    yield
+
+
 app = FastAPI(
     title="0trust VPN API",
     version="0.1.0",
     docs_url=None,        # disable Swagger in production
     redoc_url=None,       # disable ReDoc in production
     openapi_url=None,     # don't expose schema
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -715,17 +742,6 @@ import admin as admin_module          # noqa: E402
 import settings_store as settings     # noqa: E402
 
 app.include_router(admin_module.router)
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
-    # Settings the dashboard owns live in the database and take precedence
-    # over the environment. Push them out before the first request builds a
-    # payment provider, or the API runs on stale credentials until a restart.
-    with db() as conn:
-        settings.apply_to_environ(conn)
-    _bootstrap_admin()
 
 
 def _bootstrap_admin() -> None:
@@ -1316,10 +1332,23 @@ async def payment_webhook(request: Request):
     """
     The provider calls this when invoice state changes. On settlement we
     extend the account's expiry by `months` and mark it active.
+
+    Async only to read the raw body — the signature covers the exact bytes, so
+    it cannot be a parsed model. Everything after that is blocking work and is
+    handed to the threadpool: db(write=True) opens BEGIN IMMEDIATE and waits up
+    to DB_TIMEOUT_SECS for the lock, and running that on the event loop meant a
+    webhook arriving while the sweeper held the write lock stalled every other
+    request on the worker for the whole busy_timeout. Every other route in this
+    file is a plain `def` and already gets the threadpool for free; this one
+    was the exception because of the `await` above.
     """
     body = await request.body()
+    return await run_in_threadpool(_apply_webhook, body, request.headers)
+
+
+def _apply_webhook(body: bytes, headers) -> dict:
     pv = provider()
-    if not pv.verify_webhook(body, request.headers):
+    if not pv.verify_webhook(body, headers):
         raise HTTPException(401, "Invalid webhook signature")
 
     try:

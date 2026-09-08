@@ -21,6 +21,10 @@ def check(n, ok, d=""):
 ORIGIN_PORT = H.pick_port()
 PROXY_PORT  = H.pick_port()
 
+# How long /slow holds a connection open. Long enough that a serialized proxy
+# is unmistakable, short enough not to pad the suite.
+SLOW_SECS = 3.0
+
 PAGE = """<!doctype html><html><head><title>Origin</title>
 <link rel="stylesheet" href="/style.css">
 <script>window.EVIL = 1; document.title = 'pwned';</script>
@@ -54,6 +58,17 @@ class Origin(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "http://169.254.169.254/latest/meta-data/")
             self.end_headers(); return
+        elif p == "/slow":
+            # A page that answers, eventually. Real sites do this; so does
+            # anyone who wants to tie up the proxy. Sleeps inside the handler
+            # with the response half-written, which is what a slow origin
+            # looks like from urllib's side.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            time.sleep(SLOW_SECS)
+            self.wfile.write(b"<html><body><h1>Slow</h1></body></html>")
+            return
         elif p == "/second.html":
             b = b"<html><body><h1>Second</h1></body></html>"; ct = "text/html"
         elif p == "/setcookie":
@@ -234,6 +249,44 @@ try:
               low.get("content-security-policy"))
         check(f"{label} sets nosniff",
               low.get("x-content-type-options") == "nosniff", low)
+
+    # -------------------------------------------------------------------
+    # A slow origin must not take the service down with it.
+    #
+    # fetch() is urllib: it blocks for FETCH_TIMEOUT per hop and then reads
+    # up to 5 MB from whatever trickle the origin sends. While `surf` was an
+    # `async def`, all of that ran on the event loop, so one visitor pointing
+    # ?url= at a slow host froze the worker and everybody else queued behind
+    # it — an unauthenticated GET, on the most exposed service we run.
+    #
+    # The measurement is a race, not a stopwatch: fire a slow fetch, and
+    # while it is in flight ask for the landing page, which touches no
+    # network at all. If the landing page comes back before the slow fetch
+    # finishes, the handler is off the event loop. If it comes back after,
+    # the worker was blocked. SLOW_SECS is the margin between those.
+    # -------------------------------------------------------------------
+    print("\n[concurrency] a slow origin does not block the service")
+    import concurrent.futures
+    slow_url = f"/surf?url=http%3A%2F%2F127.0.0.1%3A{ORIGIN_PORT}%2Fslow"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        t0 = time.time()
+        slow = pool.submit(get, slow_url, 30)
+        time.sleep(0.5)                       # let the slow fetch get going
+        quick = pool.submit(get, "/surf", 30)
+        quick_st, quick_body, _ = quick.result()
+        quick_done = time.time() - t0
+        slow_st, slow_body, _ = slow.result()
+        slow_done = time.time() - t0
+
+    check("the slow page is still served correctly",
+          slow_st == 200 and "Slow" in slow_body, f"{slow_st} {slow_body[:200]}")
+    check("the slow fetch really was slow (control)",
+          slow_done >= SLOW_SECS, f"finished in {slow_done:.1f}s — /slow did not "
+          f"hold the connection, so the check below proves nothing")
+    check("the landing page answers while a slow fetch is in flight",
+          quick_st == 200 and quick_done < slow_done - 1.0,
+          f"landing took {quick_done:.1f}s, slow fetch {slow_done:.1f}s — the "
+          f"handler is blocking the event loop")
 
 finally:
     if proc.poll() is None:

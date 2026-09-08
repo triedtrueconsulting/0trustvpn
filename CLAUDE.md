@@ -363,6 +363,50 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   `|| true` or a failed teardown strands the user offline. Windows needs
   nothing (WireGuard for Windows does it natively when AllowedIPs covers both
   families); macOS is unsupported and the client says so rather than pretending.
+- **`scripts/install.sh` GENERATES the nginx config; `nginx/0trustvpn.com.conf`
+  is a reference file it has never installed.** Anything added to the
+  reference and not to `render_zones`/`render_common_locations`/the server
+  blocks does not exist on a deployed box. That gap held the worst
+  claim-vs-reality defect in the product: no `log_format`, no `access_log`,
+  no anonymizing map and no logrotate meant a real deployment fell through to
+  nginx's stock `combined`, keeping full client IPs, User-Agents and Referers
+  for fourteen rotations while privacy.html said the IP was truncated to a
+  /24 before it was written. The CSP header and the `/canary.txt` no-store
+  block were missing the same way — a cached canary cannot stop appearing,
+  which is the only thing a canary does. `test_install.py` [3b] now asserts
+  the privacy properties of the RENDERED bytes, and audit-verify reads
+  `sites-enabled/0trust` and `conf.d/0trust-zones.conf`, the names the
+  installer actually writes.
+- **The request path is a secret on two routes, so nothing logs it.**
+  `DELETE /api/v1/devices/{pubkey}` carries a customer's WireGuard key and
+  `GET /api/v1/payment/{invoice_id}/status` carries a bearer capability, so
+  both uvicorn (`--no-access-log` in `0trust-api.service`) and nginx (the
+  `$uri_anon` map, not `$uri`) have to drop the secret segment. It leaked in
+  both places at once for months while privacy.html said device keys never
+  appear in our logs and AUDIT.md claimed the access lines were "filtered out
+  at the log-format level" — nothing did any filtering. `api-no-access-log`
+  and `nginx-log-no-secret-paths` are the gates; `api-log-no-pubkeys` now
+  matches a key in either encoding, having previously matched only the JSON
+  shape, which is the one place a key is never logged.
+- **An `async def` handler must not block.** FastAPI runs a plain `def` in
+  the threadpool and an `async def` on the event loop, so a blocking call in
+  the second one stalls every other request on that worker. `/surf` was
+  `async def` around a urllib fetch with a 12s-per-hop timeout — an
+  unauthenticated GET froze the whole service. `payment_webhook` has to stay
+  async to read the raw body for its signature, so its blocking half goes
+  through `run_in_threadpool`. Grep for `async def` before adding one.
+- **Anything read from a third party is read with a cap.** The watch
+  provider's whole design is that we run no chain, so settlement is a request
+  to a public explorer — and the invoice address is published to whoever is
+  paying, so dust-spamming it inflates that address's history for free.
+  `payments.MAX_RESPONSE_BYTES` and the matching cap in `monerowatch` turn
+  that into a `PaymentError` and a retry next minute. The Go client bounds
+  its side too (`api.maxResponseBytes`).
+- **An in-memory table keyed by anything an attacker picks has to be
+  bounded.** `admin._login_attempts` is keyed by source address and attempted
+  username and pruned only the key it was asked about, so an address seen
+  once stayed forever — and one IPv6 /64 is 2^64 addresses. It sweeps above
+  `_ATTEMPTS_SOFT_CAP` now, dropping aged-out counters first.
 - **`ops_events` never holds customer data.** Node ids, provider names, counts
   and infrastructure detail only. It is the single table that keeps a running
   narrative of the system's state over time, so an account id in it turns it
@@ -560,6 +604,35 @@ code, actively check for them:
    reports what it found. This is the standard `0trust connect` already holds
    itself to: wg-quick's exit code means nothing, so the client waits for a
    handshake before claiming a tunnel. Hold the deploy path to it too.
+17. **A gate that cannot see the thing it is named after, or a SKIP standing
+   in for a pass.** `api-log-no-pubkeys`
+   grepped for `"pubkey": "<44 chars>"` — the JSON body shape — and passed
+   green for months on a host writing device keys to journald in the URL,
+   percent-encoded, where neither the prefix nor the `=` it matched on
+   existed. `nginx_check` wrapping `nginx -t` (#15) is the same shape, and so
+   was `audit-verify.sh` aging the canary by mtime. When you add or trust a
+   check, break the thing on purpose and confirm the check goes red. A check
+   nobody has watched fail is a check nobody has tested — and every fix in
+   this file has a mutation behind it for that reason. Watch for the check
+   matching its own explanatory comment, too: `grep -- '--no-access-log'`
+   found the comment above the flag and passed with the flag deleted.
+   And watch the SKIP path hardest of all — `audit-verify.sh`'s nginx checks
+   read a filename the installer does not create, so `[[ -f … ]] || exit 77`
+   fired on every real host and an auditor got a clean run against a
+   deployment logging full client IPs. A SKIP is only honest when the thing
+   genuinely does not apply; when the component is present and OUR config is
+   the part that is missing, that is the finding.
+
+18. **Dependency pins age into vulnerabilities on their own.** Nothing in the
+   build goes red when a pin that was current becomes a CVE. `fastapi==0.115.0`
+   resolved `starlette 0.38.6`, which by the time anyone looked carried nine
+   advisories — two of them Host/path confusions that make `request.url`
+   disagree with the path actually routed. `pip-audit -r api/requirements.txt`
+   is the check; run it when touching the pins and periodically regardless.
+   Upgrading FastAPI is also when `@app.on_event` finally disappears, which
+   fails as "no such table" on the first request rather than as anything
+   naming the framework — the app uses `lifespan=` for that reason.
+
 ## Discipline for a privacy product
 
 This is a product whose entire value is trustworthiness. Two rules that

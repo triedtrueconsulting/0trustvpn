@@ -162,6 +162,26 @@ check api-smoke "control plane end-to-end" -- bash -c "
     \"$PY\" -c 'import fastapi' >/dev/null 2>&1 || exit 77
     \"$PY\" api/smoke_test.py"
 
+# The only check here whose result can change without anyone touching the
+# repository, and that is the point: a pin that was current when it was
+# written becomes a CVE on somebody else's schedule, and nothing else in this
+# battery would ever notice. fastapi==0.115.0 resolved starlette 0.38.6, which
+# by the time anyone looked carried nine advisories.
+#
+# Audits api/requirements.txt — what actually reaches the control plane — not
+# the dev extras. Skips rather than fails when pip-audit is missing or the
+# advisory database is unreachable, so an offline machine reports "no opinion"
+# instead of a false alarm. A FAIL here means a real advisory against a
+# version we ship: read it, and bump the pin.
+check deps-audit "runtime deps carry no known advisories" -- bash -c '
+    command -v pip-audit >/dev/null 2>&1 || exit 77
+    out=$(pip-audit -r api/requirements.txt --progress-spinner off 2>&1) || true
+    case "$out" in
+        *"No known vulnerabilities found"*) exit 0 ;;
+        *"known vulnerabilit"*) echo "$out"; exit 1 ;;
+        *) echo "advisory database unreachable"; exit 77 ;;
+    esac'
+
 # Boots the real stack — control plane, meshd, the compiled client — and
 # drives it. Slower than the rest of the battery put together and worth it:
 # every bug this suite was written for was invisible to a parse check.

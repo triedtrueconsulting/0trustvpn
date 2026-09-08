@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+// The largest response this API produces is a device list — 8 devices of a
+// few hundred bytes each. 1 MB is three orders of magnitude of headroom and
+// still small enough to be harmless.
+const maxResponseBytes = 1 << 20
+
 type Client struct {
 	BaseURL string
 	Token   string
@@ -53,15 +58,25 @@ func (c *Client) do(method, path string, body, out any) error {
 	}
 	defer resp.Body.Close()
 
+	// Cap what we are willing to read. Every response this API sends is a
+	// small JSON object — the largest is a device list, a few KB — but
+	// io.ReadAll and json.Decoder will both consume whatever arrives, and
+	// the 20s client timeout is a lot of bytes on a fast link. The endpoint
+	// is not always ours in practice: ZTV_API_BASE points elsewhere in
+	// testing, and a captive portal will happily answer with a page of its
+	// own. Bounding it turns "the client ate all the memory on the laptop"
+	// into an ordinary parse error.
+	limited := io.LimitReader(resp.Body, maxResponseBytes)
+
 	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(limited)
 		return &APIError{Status: resp.StatusCode, Body: string(b)}
 	}
 
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.NewDecoder(limited).Decode(out)
 }
 
 // --- Types ---

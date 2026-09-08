@@ -64,6 +64,24 @@ SCRYPT_MAXMEM = 96 * 1024 * 1024
 # deliberately do not have.
 _login_attempts: dict[str, list[float]] = {}
 
+# Every key in that dict is attacker-chosen: one per source address ("a:…")
+# and one per attempted username ("u:…"). Nothing ever removed one. The
+# per-key prune in _rate_limited only touches the key it was asked about, and
+# a source address that appears once is never asked about again — so the dict
+# grew by an entry per address, permanently. The per-IP limit does not help:
+# it caps attempts FROM an address, not the number OF addresses, and a single
+# IPv6 /64 offers 2^64 of them. On the 2GB box that also runs nginx, the API
+# and SQLite, that is a slow but certain way to exhaust memory.
+#
+# So the dict is swept. Above the soft cap, drop every key whose most recent
+# attempt has already aged out of the window — those are counters that can no
+# longer rate-limit anything. If that is not enough (a live spray, every entry
+# fresh), drop the oldest keys down to the cap: forgetting an attacker's
+# counter is a worse outcome than remembering it and a far better one than
+# running out of memory, and the per-username counter and the scrypt cost are
+# both still standing.
+_ATTEMPTS_SOFT_CAP = int(os.environ.get("ZTV_ADMIN_ATTEMPTS_CAP", "20000"))
+
 # Peers whose forwarded-for headers we believe. nginx runs on the same host and
 # sets X-Real-IP from the address it actually saw, so loopback is the default.
 TRUSTED_PROXIES = {
@@ -140,6 +158,22 @@ def _rate_limited(key: str) -> bool:
 
 def _record_attempt(key: str) -> None:
     _login_attempts.setdefault(key, []).append(time.time())
+    if len(_login_attempts) > _ATTEMPTS_SOFT_CAP:
+        _sweep_attempts()
+
+
+def _sweep_attempts() -> None:
+    """Bound _login_attempts. See the note on _ATTEMPTS_SOFT_CAP."""
+    cutoff = time.time() - LOGIN_WINDOW
+    for key in [k for k, hits in _login_attempts.items()
+                if not hits or hits[-1] < cutoff]:
+        del _login_attempts[key]
+    if len(_login_attempts) <= _ATTEMPTS_SOFT_CAP:
+        return
+    # Still over: everything in here is inside the window, so evict by age.
+    by_age = sorted(_login_attempts, key=lambda k: _login_attempts[k][-1])
+    for key in by_age[:len(_login_attempts) - _ATTEMPTS_SOFT_CAP]:
+        del _login_attempts[key]
 
 
 # ---------------------------------------------------------------------------

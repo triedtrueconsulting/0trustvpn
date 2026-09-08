@@ -53,6 +53,12 @@ import urllib.request
 ATOMIC = 10 ** 12
 
 
+# The wallet is ours, but the transfers in it are not: anyone can send to a
+# subaddress we published on a checkout page, and get_transfers grows with
+# them. Same cap, same reason, as payments.MAX_RESPONSE_BYTES.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
+
 class MoneroError(Exception):
     """wallet-rpc returned an error, or could not be reached."""
 
@@ -96,11 +102,20 @@ class MoneroWatcher:
                 urllib.request.HTTPDigestAuthHandler(mgr))
         try:
             with opener.open(req, timeout=self.timeout) as r:
-                payload = json.loads(r.read() or b"{}")
+                # Capped for the same reason payments._http is: an incoming
+                # transfer list grows with whatever anyone chooses to send to
+                # the wallet, and this runs on the control plane once a
+                # minute. Truncation raises and the invoice stays pending.
+                raw = r.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise MoneroError(
+                        f"wallet-rpc returned more than {MAX_RESPONSE_BYTES} "
+                        f"bytes for {method}; refusing to buffer it")
+                payload = json.loads(raw or b"{}")
         except urllib.error.HTTPError as e:
             raise MoneroError(
                 f"wallet-rpc HTTP {e.code} for {method}: "
-                f"{e.read()[:200].decode('utf-8', 'replace')}") from None
+                f"{e.read(4096)[:200].decode('utf-8', 'replace')}") from None
         except Exception as e:
             raise MoneroError(
                 f"wallet-rpc unreachable at {self.url}: {e}") from None

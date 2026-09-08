@@ -147,6 +147,164 @@ try:
     check("accounts table still exists after that", st == 200 and chk["regions"], chk)
 finally:
     H.shutdown()
+
+# --------------------------------------------------------------------------
+# The admin lockout's bookkeeping is attacker-sized unless something bounds it.
+#
+# _login_attempts is keyed by source address and by attempted username, both
+# chosen by whoever is knocking. Nothing removed a key: the per-key prune only
+# touches the key being looked up, and an address seen once is never looked up
+# again. The per-IP limit caps attempts FROM an address, not the number OF
+# addresses, and one IPv6 /64 is 2^64 of them — so the dict grew forever on a
+# 2GB box that also runs nginx, the API and SQLite.
+#
+# In-process rather than over HTTP: filling the dict through the API would
+# take as long as the attack does. What matters is the eviction policy, and
+# these are the three things it has to get right.
+# --------------------------------------------------------------------------
+print("\n[admin] the login-attempt table cannot grow without bound")
+import admin as admin_mod
+
+_saved_cap, _saved_hits = admin_mod._ATTEMPTS_SOFT_CAP, dict(admin_mod._login_attempts)
+try:
+    admin_mod._ATTEMPTS_SOFT_CAP = 100
+    admin_mod._login_attempts.clear()
+    for i in range(500):
+        admin_mod._record_attempt(f"a:198.51.100.{i}")
+    check("a spray from 500 addresses does not keep 500 counters",
+          len(admin_mod._login_attempts) <= 100, len(admin_mod._login_attempts))
+
+    # Aged-out counters go first: they cannot rate-limit anything any more,
+    # while the fresh ones are the whole point of the table.
+    admin_mod._login_attempts.clear()
+    stale = time.time() - admin_mod.LOGIN_WINDOW - 60
+    for i in range(150):
+        admin_mod._login_attempts[f"a:stale{i}"] = [stale]
+    for i in range(20):
+        admin_mod._login_attempts[f"a:fresh{i}"] = [time.time()]
+    admin_mod._record_attempt("a:trigger")
+    survivors = [k for k in admin_mod._login_attempts if k.startswith("a:fresh")]
+    check("the sweep drops aged-out counters, not live ones",
+          len(survivors) == 20 and len(admin_mod._login_attempts) <= 100,
+          f"{len(survivors)} of 20 live counters survived, "
+          f"table is {len(admin_mod._login_attempts)}")
+
+    # And the lockout still locks out.
+    admin_mod._login_attempts.clear()
+    for _ in range(admin_mod.LOGIN_MAX_ATTEMPTS):
+        admin_mod._record_attempt("a:203.0.113.9")
+    check("an address that used its attempts is still rate limited",
+          admin_mod._rate_limited("a:203.0.113.9"))
+finally:
+    admin_mod._ATTEMPTS_SOFT_CAP = _saved_cap
+    admin_mod._login_attempts.clear()
+    admin_mod._login_attempts.update(_saved_hits)
+
+
+# --------------------------------------------------------------------------
+# The request path is a secret. Two routes carry one:
+#
+#   DELETE /api/v1/devices/{pubkey}          the customer's WireGuard key
+#   GET    /api/v1/payment/{invoice_id}/…    a bearer capability
+#
+# uvicorn's access line is the path, so at --log-level info the key went
+# into journald percent-encoded, and stayed the seven days MaxRetentionSec
+# keeps — while web/privacy.html said device keys never appear in our
+# application logs. The audit pack's own api-log-no-pubkeys check could not
+# see it: it matched the JSON shape "pubkey": "…", which is the one place
+# the key is never logged, because bodies are not.
+#
+# This runs the stack twice. Once with the access log on, to prove the leak
+# is real and not a story about a flag; once with it off, the way
+# 0trust-api.service ships, to prove the flag is what closes it.
+# --------------------------------------------------------------------------
+print("\n[logs] the request path never reaches the journal")
+import urllib.parse
+
+def _pubkey_with(chars):
+    """A valid 44-char WireGuard pubkey containing every character in `chars`.
+
+    H.genkey() draws at random, and about half of all keys happen to contain
+    a '/'. That mattered: urllib re-normalises the path it is handed, so a
+    '/' this test carefully encoded as %2F arrives at the server as a bare
+    '/' while a '+' stays %2B — one line, two different encodings. The
+    original check looked for quote(key, safe="") and therefore missed
+    exactly the keys with a slash in them, which is a coin flip per run:
+    green alone, red in CI, for a reason the output never stated. Same
+    family as the admin-search bug in CLAUDE.md's list. Construct the
+    property instead of hoping for it.
+    """
+    for _ in range(20000):
+        k = base64.b64encode(os.urandom(32)).decode()
+        if all(c in k for c in chars) and not any(
+                c in k for c in set("+/") - set(chars)):
+            return k
+    raise AssertionError(f"could not build a pubkey containing {chars!r}")
+
+
+def _exercise(access_log, pub):
+    """Boot, delete a device and poll an invoice, return (log, invoice)."""
+    H.boot(DB, workers=1, log_level="info", access_log=access_log)
+    try:
+        tok, inv = H.paid_account(1)
+        hdr = {"X-Account-Token": tok}
+        st, _ = H.call("POST", "/api/v1/wg/register",
+                       {"pubkey": pub, "device_name": "laptop", "region": "zur"}, hdr)
+        assert st == 200, st
+        st, _ = H.call("DELETE", "/api/v1/devices/" + urllib.parse.quote(pub, safe=""),
+                       None, hdr)
+        assert st == 200, st
+        H.call("GET", f"/api/v1/payment/{urllib.parse.quote(inv, safe='')}/status")
+        time.sleep(0.8)
+    finally:
+        H.shutdown()
+    return open(f"{H.RUN}/api.log").read(), inv
+
+
+def _leaked(log, pub, inv):
+    """Is the key or the capability in the log, in ANY encoding?
+
+    Decode the log rather than encode the needle: one line can mix raw and
+    percent-encoded characters, so there is no single encoding of the key to
+    search for. unquote() collapses every variant to the same string.
+    """
+    plain = urllib.parse.unquote(log)
+    return [n for n, v in (("pubkey", pub), ("invoice id", inv))
+            if v in log or v in plain]
+
+try:
+    # Both encodings of the awkward characters, in one key.
+    pub = _pubkey_with("+/")
+
+    leaky, inv_a = _exercise(access_log=True, pub=pub)
+    # Not an assertion about the product — an assertion about this test. If
+    # the access log stops carrying the path, the check below proves nothing
+    # and should say so rather than passing for free.
+    check("with the access log on, the path really does leak (control)",
+          _leaked(leaky, pub, inv_a) == ["pubkey", "invoice id"],
+          f"leaked={_leaked(leaky, pub, inv_a)}; the control case no longer "
+          f"reproduces, so the case below has nothing to prove")
+
+    quiet, inv_b = _exercise(access_log=False, pub=pub)
+    check("as shipped, no device pubkey or invoice id in the API log",
+          not _leaked(quiet, pub, inv_b),
+          f"leaked={_leaked(quiet, pub, inv_b)}\n{quiet[-1200:]}")
+    check("the log is still useful — startup is reported",
+          "Application startup complete" in quiet, quiet[-600:])
+
+    # The audit pack's grep has to see the same line this test just proved is
+    # there. That is the specific thing that failed before: the check looked
+    # for a JSON shape and the leak was a URL, so it reported green on a
+    # leaking host. Run the shipped regex against the shipped leak.
+    import re as _re
+    pat = _re.compile(r"([A-Za-z0-9]|%2[BbFf]|[+/]){43}(=|%3[Dd])")
+    check("audit-verify's pubkey regex matches the real leaked line",
+          bool(pat.search(leaky)),
+          "the grep in scripts/audit-verify.sh cannot see a leak this test "
+          "can — that is how the last one went unnoticed for months")
+    check("and it does not fire on the clean log",
+          not pat.search(quiet), pat.search(quiet).group(0) if pat.search(quiet) else "")
+finally:
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL: print("  failures: " + ", ".join(FAIL))
     shutil.rmtree(TMP, ignore_errors=True)

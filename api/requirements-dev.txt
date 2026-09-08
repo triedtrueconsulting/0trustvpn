@@ -6,6 +6,10 @@
 -r requirements.txt
 
 httpx==0.28.1    # transport behind fastapi.testclient, used by api/smoke_test.py
+pip-audit        # scripts/validate.sh deps-audit — checks the RUNTIME pins in
+                 # requirements.txt against the published advisory database.
+                 # Unpinned on purpose: pinning the auditor is how you keep
+                 # auditing against a snapshot of last year's advisories.
 PyYAML==6.0.3    # parses wireguard/cloud-init-ephemeral.yaml in scripts/validate.sh
 
 # Drives a real Chromium for the four modules that check surfaces a parser

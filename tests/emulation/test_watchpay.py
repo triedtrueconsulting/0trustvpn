@@ -423,6 +423,44 @@ try:
           "a wallet-rpc on a public interface with --disable-rpc-login is an "
           "open door to the wallet")
 
+    print("\n[11a] an invoice id is a capability, so it has to be unguessable")
+    # /api/v1/payment/{id}/methods and /status are deliberately public: the
+    # checkout page polls them before the customer holds any credential, and
+    # the docstring says the id is "the only secret needed to view it". It was
+    # not a secret — the coin, the derivation index (0, 1, 2, … sequential) and
+    # the unix second. Open one invoice of your own, learn the index and the
+    # clock, and every other customer's receive address, amount owed and
+    # amount received was a handful of guesses away. On a product that sells
+    # payments not being linkable, that is the link.
+    ids = []
+    for _ in range(3):
+        st, acct = H.call("POST", "/api/v1/account", {"months": 1})
+        check("signup for the id check", st == 200, (st, acct))
+        ids.append(acct["invoice_id"])
+
+    # split from the LEFT with maxsplit=2: the token is base64url and may
+    # itself contain '-', so rsplit would cut inside it.
+    for iid in ids:
+        coin, idx, token = iid.split("-", 2)
+        check(f"the id carries real entropy: {iid[:30]}…",
+              len(token) >= 16 and not token.isdigit(),
+              f"token {token!r} — a timestamp or a counter is not a secret")
+    check("ids are not sequential", len(set(ids)) == 3, ids)
+
+    # The concrete attack: take a real id, decrement the index, keep the rest.
+    # It must not resolve to somebody else's invoice.
+    victim = ids[-1]
+    head, idx, tail = victim.split("-", 2)
+    guessed = f"{head}-{max(0, int(idx) - 1)}-{tail}"
+    st, body = H.call("GET", f"/api/v1/payment/{guessed}/methods")
+    check("walking the index back does not open another invoice",
+          st == 404, f"{guessed} -> {st} {body}")
+
+    # And a plausible timestamp-shaped id from the old scheme resolves to
+    # nothing at all.
+    st, body = H.call("GET", f"/api/v1/payment/btc-0-{int(time.time())}/methods")
+    check("an old-format guess resolves to nothing", st == 404, (st, body))
+
     print("\n[11b] nothing in the default path downloads a blockchain")
     # A standing operator constraint, not a preference: this box has no room
     # for a chain, and every coin must settle against a PUBLIC node somebody
@@ -544,6 +582,54 @@ try:
               conf_before)
     finally:
         os.environ["ZTV_ZEC_CONFIRMATIONS"] = "1"
+        fake_explorer.reset()
+
+    # ---------------------------------------------------------------------
+    # [13] An explorer that answers with too much is refused, not buffered.
+    #
+    # The watch provider exists so we run no chain of our own, which means
+    # every settlement check is a request to a third party whose response
+    # size we do not control. And an attacker has a free lever on it: the
+    # invoice address is handed to whoever is paying, so dust-spamming it
+    # inflates that address's history without bound. The poller asks once a
+    # minute, on the same 2GB box as the API and the database.
+    #
+    # The requirement is not that the check succeeds — it can't, the answer
+    # is unusable. It is that it fails as an ordinary PaymentError, leaves
+    # the invoice pending, and does not read the body into memory first.
+    # ---------------------------------------------------------------------
+    print("\n[13] an oversized explorer response is refused")
+    prov = pay_mod.WatchOnlyProvider()
+    flood_addr = "probe-btc-flood"
+    fake_explorer.pay(flood_addr, 100_000)
+    try:
+        ok = prov.check(flood_addr, 100_000, coin="BTC")
+        check("a normal-sized response still settles (control)",
+              ok["status"] == pay_mod.SETTLED, ok)
+
+        fake_explorer.FLOOD[0] = pay_mod.MAX_RESPONSE_BYTES + 4096
+        raised = None
+        try:
+            prov.check(flood_addr, 100_000, coin="BTC")
+        except pay_mod.PaymentError as e:
+            raised = str(e)
+        except Exception as e:                      # noqa: BLE001
+            raised = f"WRONG TYPE {type(e).__name__}: {e}"
+        check("an over-cap response raises PaymentError",
+              raised is not None and "WRONG TYPE" not in raised,
+              raised if raised else "the read was not capped — it buffered "
+              f"{pay_mod.MAX_RESPONSE_BYTES + 4096} bytes and carried on")
+        check("and the error names the cap rather than a parse failure",
+              raised is not None and "refusing to buffer" in raised, raised)
+
+        # The poller treats that as "chain check failed" and leaves the
+        # invoice alone, which is the only safe direction: crediting on an
+        # answer we could not read is how a month gets given away.
+        fake_explorer.FLOOD[0] = 0
+        again = prov.check(flood_addr, 100_000, coin="BTC")
+        check("and the next poll, against a sane response, works again",
+              again["status"] == pay_mod.SETTLED, again)
+    finally:
         fake_explorer.reset()
 
 finally:
