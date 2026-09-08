@@ -123,10 +123,17 @@ fi
 # The AppImage needs appimagetool, which the build script fetches from GitHub.
 # Attempt it, but do not die: an unreachable network is not a reason to fail a
 # release, and the cross-check below will insist the artifact be staged instead.
+# Both architectures, because download.html offers both and the cross-check
+# below refuses a release that is missing anything the page promises. The .deb
+# script loops internally; this one takes one ARCH per run, so call it twice.
+# aarch64 is a cross-build from an x86_64 host — see the runtime handling in
+# installer/linux/appimage/build.sh.
 if [[ -x installer/linux/appimage/build.sh ]]; then
-    log "  building AppImage"
-    VERSION="$VERSION" ./installer/linux/appimage/build.sh >/dev/null 2>&1 \
-        || log "  AppImage build unavailable here — stage it instead"
+    for aiarch in x86_64 aarch64; do
+        log "  building AppImage ($aiarch)"
+        VERSION="$VERSION" ARCH="$aiarch" ./installer/linux/appimage/build.sh >/dev/null 2>&1 \
+            || log "  AppImage ($aiarch) unavailable here — stage it instead"
+    done
 fi
 
 for f in installer/linux/deb/out/*.deb installer/linux/appimage/out/*.AppImage; do
