@@ -76,6 +76,31 @@ class Origin(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.send_header("Set-Cookie", "origin_track=abc; Path=/")
             self.end_headers(); self.wfile.write(b"<html><body>ck</body></html>"); return
+        elif p == "/err-zip":
+            # The bypass: a disallowed content type behind an error status.
+            # fetch()'s success path runs content_type_allowed; its HTTPError
+            # branch used to return the origin's type unchecked, so any site
+            # could hand us any payload by serving it with a 404.
+            b = b"PK\x03\x04binary"
+            self.send_response(404)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers(); self.wfile.write(b); return
+        elif p == "/err-svg":
+            # image/* IS allowed, so this one must still come through — the
+            # fix is an allowlist on both paths, not a blanket refusal of
+            # error bodies.
+            b = b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"
+            self.send_response(404)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers(); self.wfile.write(b); return
+        elif p == "/err-big":
+            b = b"x" * (6 * 1024 * 1024)
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers(); self.wfile.write(b); return
         else:
             self.send_response(404); self.end_headers(); return
         self.send_response(200)
@@ -200,6 +225,46 @@ try:
     st, body10, _ = get("/surf?url=file%3A%2F%2F%2Fetc%2Fpasswd")
     check("file scheme refused", st == 400, (st, body10[:200]))
 
+    print("\n[5b] the rails hold on an error response too")
+    # An error response is still a response. fetch() checked the content type
+    # and the size cap on the 2xx path and neither on the HTTPError path, so
+    # an origin could serve any payload of any type by attaching a 404 to it
+    # — and we would return it from OUR origin. What kept that from being an
+    # XSS on 0trustvpn.com was the proxy's CSP (`script-src 'none'`), not
+    # anything on this path; a rail that only holds on 2xx is not a rail.
+    def ctype(hdrs):
+        for k, v in hdrs.items():
+            if k.lower() == "content-type":
+                return v.split(";")[0].strip().lower()
+        return ""
+
+    st, body, hdrs = get(f"/surf?url={O}%2Ferr-zip")
+    check("a disallowed type behind a 404 is not served",
+          ctype(hdrs) != "application/zip",
+          f"served {ctype(hdrs)!r} from our own origin")
+    check("the visitor gets the proxy's own refusal instead", st == 400, st)
+    check("and it says what was refused", "does not serve" in body.lower(),
+          body[:200])
+
+    # An allowlist, not a blanket block on error bodies: an allowed type
+    # behind an error status still has to come through, or every 404 page
+    # anyone reads through /surf stops rendering.
+    st2, body2, hdrs2 = get(f"/surf?url={O}%2Ferr-svg")
+    # The status is deliberately not passed through — /surf is a reader, and
+    # it answers 200 with whatever the origin gave it to show. What matters
+    # here is that an ALLOWED type behind an error status still reaches the
+    # visitor, so the fix is an allowlist on both paths and not a blanket
+    # refusal of error bodies, which would blank every 404 page anyone reads.
+    check("an ALLOWED type behind a 404 still reaches the visitor",
+          ctype(hdrs2) == "image/svg+xml" and "<svg" in body2,
+          f"status {st2}, type {ctype(hdrs2)!r}, body {body2[:80]!r}")
+
+    st3, body3, _ = get(f"/surf?url={O}%2Ferr-big")
+    check("the size cap applies to an error body too",
+          st3 == 400 and "larger than" in body3.lower(),
+          f"status {st3} — a truncated body rendered as a whole page is "
+          f"worse than a refusal")
+
     print("\n[6] visitor isolation")
     st, _, hdrs11 = get(f"/surf?url={O}%2Fsetcookie")
     sc = hdrs11.get("set-cookie", "")
@@ -207,7 +272,13 @@ try:
     check("only our own view counter is set", "ztv_views" in sc, sc)
 
     print("\n[7] funnel")
-    check("trial link present on proxied pages", "/trial?from=surf" in body, body[:600])
+    # Fetch a proxied page here rather than reading a `body` left over from a
+    # section several blocks up. That dependency was invisible and undeclared:
+    # inserting anything above that reassigned `body` turned this check red
+    # while naming the funnel, which is not where the problem was.
+    _, proxied, _ = get(f"/surf?url={O}%2F")
+    check("trial link present on proxied pages",
+          "/trial?from=surf" in proxied, proxied[:600])
     st, robots, _ = get("/robots.txt")
     check("robots.txt disallows indexing", "Disallow: /" in robots, robots)
     st, hz, _ = get("/healthz")

@@ -194,8 +194,26 @@ def fetch(url: str, method: str = "GET") -> tuple[str, bytes, str, int]:
             current = urllib.parse.urljoin(current, e.location)
             continue
         except urllib.error.HTTPError as e:
-            body = e.read(MAX_BODY_BYTES)
-            return current, body, e.headers.get("Content-Type", "text/html"), e.code
+            # An error response is still a response, and it gets the same
+            # rails. This branch used to return the origin's Content-Type
+            # unchecked, so any site could hand us a payload of any type by
+            # serving it with a 404: application/pdf, application/zip,
+            # video/mp4, application/octet-stream — none of which the success
+            # path will carry — and we would serve it from our own origin.
+            # The CSP's `script-src 'none'` is what kept that from being an
+            # XSS on 0trustvpn.com rather than anything on this path, and a
+            # security rail that only holds on 2xx is not a rail.
+            ct = e.headers.get("Content-Type", "text/html")
+            if not content_type_allowed(ct):
+                raise Blocked(
+                    f"The proxy does not serve {ct.split(';')[0]} content")
+            # One byte past the cap, as above, so an oversized body is
+            # refused rather than silently truncated and rendered as though
+            # it were the whole page.
+            body = e.read(MAX_BODY_BYTES + 1)
+            if len(body) > MAX_BODY_BYTES:
+                raise Blocked("That page is larger than the 5 MB proxy limit")
+            return current, body, ct, e.code
         except urllib.error.URLError as e:
             raise Blocked(f"Could not reach that site ({e.reason})")
         except TimeoutError:

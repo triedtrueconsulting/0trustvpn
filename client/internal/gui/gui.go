@@ -172,9 +172,28 @@ func withSameOrigin(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// JSON endpoints: enforce Host header is localhost
+		// JSON endpoints: the Host header has to name loopback EXACTLY.
+		//
+		// This was a prefix test, and a prefix test is not a host test:
+		// `strings.HasPrefix(host, "localhost")` accepts
+		// "localhost.evil.example". That is the whole DNS-rebinding attack.
+		// An attacker registers such a name, serves a page from it, lets the
+		// record rebind to 127.0.0.1, and the page is then SAME-ORIGIN with
+		// this server. A same-origin GET carries no Origin header, so the
+		// check below never fires, and /api/devices, /api/notices and
+		// /api/state answer GET — handing any web page the customer visits
+		// their device list, mesh IPs and subscription state.
+		//
+		// Exact matching closes it: "localhost" cannot be pointed anywhere
+		// (the OS resolves it), and "127.0.0.1" is a literal address that
+		// never goes near DNS. Any other name that resolves to loopback now
+		// fails here, before anything reads state.
 		host := r.Host
-		if !(strings.HasPrefix(host, "127.0.0.1") || strings.HasPrefix(host, "localhost")) {
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

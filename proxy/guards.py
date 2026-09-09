@@ -21,7 +21,10 @@ The rules, and why each one is here:
   ports         80 and 443. Blocks the proxy being used to port-scan.
   size / time   Capped, so one request cannot tie up the service.
   content type  Documents and images. Not archives or executables, which are
-                what a malware distributor wants a clean domain for.
+                what a malware distributor wants a clean domain for. Checked
+                on EVERY response, not only successful ones: an origin that
+                attaches its payload to a 404 is the obvious way round a
+                check that only runs on 2xx, and for a while it worked.
   credentials   No cookies or auth headers are forwarded upstream, and no
                 Set-Cookie is passed back to the visitor.
 """
