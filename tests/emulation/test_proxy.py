@@ -118,9 +118,27 @@ def wait_port(port, timeout=20):
     return False
 
 
+class Internal(BaseHTTPRequestHandler):
+    """Stands in for whatever the SSRF was aiming at.
+
+    On a real VPS this is 169.254.169.254 and the body is cloud credentials.
+    Here it is a second loopback address on the same port, which is what lets
+    the DNS answer change the destination without changing the URL.
+    """
+    def log_message(self, *a): pass
+    def do_GET(self):
+        b = b"<html><body>INTERNAL-SECRET-REACHED</body></html>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers(); self.wfile.write(b)
+
+
 TMP = H.tempdir("0trust-proxy-")
 srv = ThreadingHTTPServer(("127.0.0.1", ORIGIN_PORT), Origin)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
+internal = ThreadingHTTPServer(("127.0.0.2", ORIGIN_PORT), Internal)
+threading.Thread(target=internal.serve_forever, daemon=True).start()
 
 # Boot the proxy with resolve_public allowing only our loopback origin.
 shim = os.path.join(TMP, "run_proxy.py")
@@ -132,9 +150,25 @@ _real = guards.resolve_public
 def patched(host, port):
     if host in ("127.0.0.1", "localhost") and port == {ORIGIN_PORT}:
         return ["127.0.0.1"]
+    # The guard approves flip.test at the SAFE address...
+    if host == "flip.test" and port == {ORIGIN_PORT}:
+        return ["127.0.0.1"]
     return _real(host, port)
 guards.resolve_public = patched
 guards.ALLOWED_PORTS = guards.ALLOWED_PORTS + ({ORIGIN_PORT},)
+
+# ...and by the time anything resolves the name again, it answers with the
+# internal one. A short TTL on an attacker-controlled domain does exactly
+# this; here it is one function so the race is deterministic rather than a
+# matter of timing.
+import socket as _sock
+_real_gai = _sock.getaddrinfo
+def _flip_gai(host, port, *a, **kw):
+    if host == "flip.test":
+        return [(_sock.AF_INET, _sock.SOCK_STREAM, 6, "",
+                 ("127.0.0.2", int(port)))]
+    return _real_gai(host, port, *a, **kw)
+_sock.getaddrinfo = _flip_gai
 import server
 server.check_url.__globals__["resolve_public"] = patched
 import uvicorn
@@ -224,6 +258,29 @@ try:
     check("direct metadata fetch refused", st == 400, (st, body9[:200]))
     st, body10, _ = get("/surf?url=file%3A%2F%2F%2Fetc%2Fpasswd")
     check("file scheme refused", st == 400, (st, body10[:200]))
+
+    print("\n[5a] the address that was vetted is the address we connect to")
+    # resolve_public() vetted the addresses and threw them away: the URL then
+    # went to urllib, which resolved the name a SECOND time. An attacker
+    # controlling DNS for their own domain only has to serve a short TTL that
+    # alternates — public for our check, 169.254.169.254 for the fetch. That
+    # is the textbook SSRF bypass, and on a cloud VPS the second address is
+    # the metadata service.
+    #
+    # flip.test is approved at 127.0.0.1 and resolves to 127.0.0.2, where a
+    # second server is listening on the same port. If the fetch lands there,
+    # the guard vetted one host and talked to another.
+    st, body, _ = get(f"/surf?url=http%3A%2F%2Fflip.test%3A{ORIGIN_PORT}%2F")
+    check("the fetch does not follow the changed DNS answer",
+          "INTERNAL-SECRET-REACHED" not in body,
+          "the proxy connected to the address DNS gave it AFTER the check — "
+          "this is the SSRF the whole guard module exists to prevent")
+    # The safe origin's own content, not just "a page came back" — the
+    # first version of this looked for the proxy's own chrome, which is
+    # present whichever server answered, so it passed while the check above
+    # it was failing.
+    check("and it reaches the address the guard approved",
+          "Hello from the origin" in body, body[:200])
 
     print("\n[5b] the rails hold on an error response too")
     # An error response is still a response. fetch() checked the content type

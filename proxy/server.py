@@ -37,7 +37,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from guards import (
     ALLOWED_METHODS, FETCH_TIMEOUT, MAX_BODY_BYTES, MAX_REDIRECTS,
-    Blocked, check_url, content_type_allowed,
+    Blocked, check_url, content_type_allowed, pinned_opener, vet,
 )
 from rewrite import rewrite_css, rewrite_html
 
@@ -166,10 +166,16 @@ def fetch(url: str, method: str = "GET") -> tuple[str, bytes, str, int]:
     Fetch a vetted URL, following redirects manually with a guard check on
     each hop. Returns (final_url, body, content_type, status).
     """
-    opener = urllib.request.build_opener(_NoRedirect)
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        current = check_url(current, BLOCKLIST)
+        # vet() returns the addresses it approved, and the opener is built to
+        # connect to one of them. check_url() alone resolved the name, vetted
+        # it, and then let urllib resolve it a second time — so a domain
+        # serving a short TTL could answer publicly for the check and
+        # 169.254.169.254 for the fetch. Vetting an address and then
+        # connecting to whatever DNS says next is not vetting.
+        current, addrs = vet(current, BLOCKLIST)
+        opener = pinned_opener(addrs[0], _NoRedirect)
         req = urllib.request.Request(
             current, method=method,
             headers={

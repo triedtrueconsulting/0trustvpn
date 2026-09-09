@@ -15,9 +15,11 @@ The rules, and why each one is here:
   method        GET and HEAD only. Nothing that writes, so the proxy cannot be
                 used to post spam, submit forms, or drive an API.
   destination   Public unicast addresses only. Every resolved IP is checked,
-                and the check is repeated after each redirect, because a
-                hostname that resolved publicly the first time can resolve to
-                127.0.0.1 the second (DNS rebinding).
+                the check is repeated after each redirect, and the address
+                that passed is the address we CONNECT to — see pinned_opener.
+                Vetting a name and then handing the name to a fetcher that
+                resolves it again is not vetting: the answer can change in
+                between, which is the whole DNS-rebinding SSRF.
   ports         80 and 443. Blocks the proxy being used to port-scan.
   size / time   Capped, so one request cannot tie up the service.
   content type  Documents and images. Not archives or executables, which are
@@ -31,8 +33,10 @@ The rules, and why each one is here:
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import socket
+import urllib.request
 from urllib.parse import urlsplit
 
 ALLOWED_SCHEMES = ("http", "https")
@@ -152,6 +156,79 @@ def check_url(raw: str, blocklist: tuple[str, ...] = ()) -> str:
     # Raises if the host resolves anywhere non-public.
     resolve_public(host, port)
     return raw
+
+
+# ---------------------------------------------------------------------------
+# Connection pinning
+# ---------------------------------------------------------------------------
+#
+# resolve_public() vetted the addresses and then threw them away: the caller
+# handed the URL to urllib, which resolved the hostname AGAIN. Between those
+# two lookups the answer can change, and an attacker who controls DNS for
+# their own domain only has to serve a short TTL that alternates — a public
+# address for our check, 169.254.169.254 for the fetch. That is the textbook
+# SSRF bypass, and on a cloud VPS the second address is the metadata service.
+#
+# This module's own summary already said a name that resolved publicly once
+# can resolve to loopback the next time; it applied that to redirects and not
+# to the single request in front of it.
+#
+# So the address we vetted is the address we connect to. The hostname is kept
+# for the Host header and, on TLS, for server_hostname — so certificate
+# validation is still against the NAME, and pinning cannot be used to talk to
+# one host while trusting another's certificate.
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    pinned_ip = None
+
+    def connect(self):
+        self.sock = socket.create_connection(
+            (self.pinned_ip, self.port), self.timeout, self.source_address)
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    pinned_ip = None
+
+    def connect(self):
+        sock = socket.create_connection(
+            (self.pinned_ip, self.port), self.timeout, self.source_address)
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+            sock = self.sock
+        # server_hostname is the name, never the pinned address.
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+def pinned_opener(ip: str, *extra_handlers) -> urllib.request.OpenerDirector:
+    """An opener whose connections go to `ip` whatever DNS says next."""
+    http_cls = type("PinnedHTTP", (_PinnedHTTPConnection,), {"pinned_ip": ip})
+    https_cls = type("PinnedHTTPS", (_PinnedHTTPSConnection,), {"pinned_ip": ip})
+
+    class _H(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(http_cls, req)
+
+    class _HS(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(https_cls, req, context=self._context)
+
+    return urllib.request.build_opener(_H(), _HS(), *extra_handlers)
+
+
+def vet(raw: str, blocklist: tuple[str, ...] = ()) -> tuple[str, list[str]]:
+    """check_url, but handing back the addresses it approved.
+
+    Callers that then fetch the URL must connect to one of these rather than
+    resolving the name again — see pinned_opener above.
+    """
+    url = check_url(raw, blocklist)
+    parts = urlsplit(url)
+    port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
+    return url, resolve_public(parts.hostname.lower().rstrip("."), port)
 
 
 def content_type_allowed(content_type: str) -> bool:
