@@ -70,6 +70,21 @@ DEVICE_RETAIN_DAYS = int(os.environ.get("ZTV_DEVICE_RETAIN_DAYS", "7"))
 # covers clock skew and a generous ZTV_TRIAL_CHALLENGE_TTL.
 TRIAL_NONCE_RETAIN_SECS = int(os.environ.get("ZTV_TRIAL_NONCE_RETAIN_SECS", str(86400)))
 
+# How long an EXPIRED account row survives before it is deleted outright.
+#
+# privacy.html §8 promises this in as many words — "expired records are purged
+# by an automated sweeper" — and docs/AUDIT.md §3.1 gives the retention of the
+# token hash, the expiry and the status as "lifetime of subscription". Neither
+# was true: the only DELETE FROM accounts here was the abandoned-signup one
+# below, so a customer who let their subscription lapse kept a row forever.
+# Two documents and the code disagreeing, on a retention promise.
+#
+# 30 days because that is the refund window in terms.html §4, which is what
+# privacy.html §8 ties the purge to ("plus the refund window"). Anything paid
+# for recently has an expires_at in the future and is nowhere near this.
+ACCOUNT_RETAIN_SECS = int(
+    os.environ.get("ZTV_ACCOUNT_RETAIN_DAYS", "30")) * 86400
+
 log = logging.getLogger("sweep")
 logging.basicConfig(
     level=logging.INFO,
@@ -341,6 +356,51 @@ def main():
     n_abandoned = cur.rowcount
     if n_abandoned:
         log.info("removed %d abandoned signups", n_abandoned)
+
+    # ---- 6b. Purge accounts that expired long enough ago ----
+    #
+    # The retention boundary this file says it is. An account is deleted once
+    # it has been expired for longer than the refund window: after that there
+    # is nothing left to enforce, nothing to refund against, and the row is
+    # just a record that somebody once held a subscription.
+    #
+    # Dependents go first, explicitly, even though every one of these FKs
+    # carries ON DELETE CASCADE. Bug class #8 in CLAUDE.md is exactly this:
+    # a database created before a CASCADE was added raises FOREIGN KEY
+    # constraint failed, the exception takes down the REST of the sweep, and
+    # account expiry and device release silently stop running. The node
+    # deletion above does the same thing for the same reason.
+    #
+    # Banned accounts are purged too. The policy makes no exception for them,
+    # and keeping the hash of a token whose holder can mint a fresh one for
+    # free buys nothing — deleting the row stops that token working just as
+    # a ban did.
+    purge_cutoff = now - ACCOUNT_RETAIN_SECS
+    doomed = [r["id"] for r in conn.execute(
+        """SELECT id FROM accounts
+            WHERE expires_at > 0 AND expires_at < ?
+              AND status != 'pending_payment'""",
+        (purge_cutoff,))]
+    if doomed:
+        marks = ",".join("?" * len(doomed))
+        conn.execute(
+            f"""DELETE FROM hop_pairs WHERE device_id IN
+                (SELECT id FROM devices WHERE account_id IN ({marks}))""",
+            doomed)
+        conn.execute(
+            f"""DELETE FROM device_nodes WHERE device_id IN
+                (SELECT id FROM devices WHERE account_id IN ({marks}))""",
+            doomed)
+        conn.execute(f"DELETE FROM devices WHERE account_id IN ({marks})", doomed)
+        conn.execute(f"DELETE FROM notice_reads WHERE account_id IN ({marks})",
+                     doomed)
+        conn.execute(f"DELETE FROM notices WHERE account_id IN ({marks})", doomed)
+        conn.execute(f"DELETE FROM invoices WHERE account_id IN ({marks})", doomed)
+        cur = conn.execute(f"DELETE FROM accounts WHERE id IN ({marks})", doomed)
+        # Counts only. ops_events never holds an account id — see the note at
+        # the top of api/ops_alerts.py.
+        log.info("purged %d accounts expired more than %d days",
+                 cur.rowcount, ACCOUNT_RETAIN_SECS // 86400)
 
     # ---- 7. Prune spent trial stamps ----
     # A redeemed nonce exists to stop the same solved proof-of-work minting a

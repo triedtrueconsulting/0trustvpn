@@ -200,6 +200,75 @@ try:
           f"service={ps.get('service')} regions={states}")
 
     # ================= 6. SWEEPER =================
+    print("\n[retention] an expired account is actually deleted, eventually")
+    # privacy.html §8: "expired records are purged by an automated sweeper".
+    # docs/AUDIT.md §3.1 gives the token hash, expiry and status a retention
+    # of "lifetime of subscription". Neither was true — the only
+    # DELETE FROM accounts in sweep.py was the abandoned-signup one, so a
+    # customer who let their subscription lapse kept a row indefinitely. Two
+    # documents and the code disagreeing, on a retention promise, which is
+    # the failure this whole product is built to not have.
+    import sqlite3 as _sq3
+    rc = _sq3.connect(DB); rc.row_factory = _sq3.Row
+    rc.execute("PRAGMA foreign_keys=ON")
+
+    def mkacct(hashval, expires_at, status="expired", plan="paid"):
+        cur = rc.execute(
+            """INSERT INTO accounts (token_hash, created_at, expires_at,
+                                     status, plan)
+               VALUES (?,?,?,?,?)""",
+            (hashval, int(time.time()) - 400 * 86400, expires_at, status, plan))
+        return cur.lastrowid
+
+    now_i = int(time.time())
+    retain = 30 * 86400
+    old_id = mkacct("retention-long-expired", now_i - retain - 86400)
+    recent_id = mkacct("retention-just-expired", now_i - 86400)
+    live_id = mkacct("retention-still-live", now_i + 30 * 86400, "active")
+    # An expired account with a device and an invoice, so the cascade is
+    # exercised rather than assumed.
+    with_deps = mkacct("retention-with-deps", now_i - retain - 86400)
+    rc.execute("""INSERT INTO devices (account_id, pubkey, device_name, mesh_ip,
+                                       created_at, last_seen)
+                  VALUES (?,?,?,?,?,?)""",
+               (with_deps, "retention-test-pubkey", "laptop", "10.99.0.9",
+                now_i - 400 * 86400, now_i - 400 * 86400))
+    rc.execute("""INSERT INTO invoices (id, account_id, months, amount_usd,
+                                        currency, status, created_at)
+                  VALUES (?,?,?,?,?,?,?)""",
+               ("retention-test-invoice", with_deps, 1, 5.0, "USD",
+                "settled", now_i - 400 * 86400))
+    rc.commit(); rc.close()
+
+    sw = subprocess.run([sys.executable, os.path.join(H.REPO, "api", "sweep.py")],
+                        capture_output=True, text=True, timeout=120,
+                        env={**os.environ, "ZTV_DB_PATH": DB})
+    check("the sweeper ran cleanly with accounts to purge",
+          sw.returncode == 0, sw.stderr[-400:])
+
+    rc = _sq3.connect(DB); rc.row_factory = _sq3.Row
+    def alive(aid):
+        return rc.execute("SELECT 1 FROM accounts WHERE id = ?",
+                          (aid,)).fetchone() is not None
+
+    check("an account expired past the refund window is gone",
+          not alive(old_id),
+          "privacy.html §8 says these are purged; the row was still there")
+    check("one that expired yesterday is kept — the refund window has not run",
+          alive(recent_id),
+          "terms.html §4 gives customers 30 days to ask for their money back")
+    check("a live subscription is untouched", alive(live_id))
+    check("and the one with dependents went too", not alive(with_deps))
+    check("its device went with it",
+          rc.execute("SELECT 1 FROM devices WHERE pubkey = ?",
+                     ("retention-test-pubkey",)).fetchone() is None,
+          "a device row outliving its account is a customer record we said "
+          "we deleted")
+    check("and so did its invoice",
+          rc.execute("SELECT 1 FROM invoices WHERE id = ?",
+                     ("retention-test-invoice",)).fetchone() is None)
+    rc.close()
+
     print("\n[alerts] the disk alarm can fire more than once in a lifetime")
     # ops_alerts had no test of any kind, and it is the module that decides
     # whether the operator hears about an outage. Its rule is "transitions,

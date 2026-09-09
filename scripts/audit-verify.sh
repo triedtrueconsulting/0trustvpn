@@ -406,6 +406,27 @@ check db-no-stale-trial-nonces "No trial nonces retained past 24h" -- bash -c "
     [[ \"\$stale\" == '0' ]] || { echo \"\$stale trial nonces kept past 24h\"; exit 1; }
 "
 
+# privacy.html §8 says expired account records are purged after the refund
+# window, and docs/AUDIT.md §3.1 gives the token hash, expiry and status a
+# retention of "lifetime of subscription". Both were false: sweep.py deleted
+# abandoned signups and nothing else, so a lapsed customer's row lived
+# forever. The claims were checkable and nothing was checking them.
+check db-no-stale-expired-accounts "Expired accounts purged after the refund window" -- bash -c "
+    [[ -f '$DB_PATH' ]] || exit 77
+    sqlite3 '$DB_PATH' 'SELECT 1 FROM accounts LIMIT 1;' >/dev/null 2>&1 || exit 0
+    days=\${ZTV_ACCOUNT_RETAIN_DAYS:-30}
+    stale=\$(sqlite3 '$DB_PATH' \"
+        SELECT COUNT(*) FROM accounts
+        WHERE expires_at > 0
+          AND status != 'pending_payment'
+          AND expires_at < strftime('%s','now') - (\$days * 86400 + 86400);
+    \")
+    [[ \"\$stale\" == '0' ]] || {
+        echo \"\$stale accounts still on disk more than \$days days after expiry — privacy.html section 8 says these are purged\"
+        exit 1
+    }
+"
+
 section "§4. WEB-TIER (nginx) LOGS (retention)"
 
 check nginx-log-retention "Access log retention ≤ 7 days" -- bash -c "
