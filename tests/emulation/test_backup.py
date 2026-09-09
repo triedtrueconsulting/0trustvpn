@@ -43,9 +43,19 @@ import main as api_main; api_main.init_db()
 H.seed_nodes(DB)
 H.boot(DB, workers=2)
 
+# A stand-in for /etc/0trust/api.env. Pointed at a fixture rather than the
+# real file: this box may have one from an install run, and a test that reads
+# a live credentials file is a test that can leak one.
+ENV_FILE = os.path.join(TMP, "api.env")
+ENV_BODY = ("NODE_API_PSK=psk-that-must-survive\n"
+            "BTCPAY_WEBHOOK_SECRET=webhook-that-must-survive\n"
+            "ZTV_TRIAL_SECRET=trial-that-must-survive\n")
+open(ENV_FILE, "w").write(ENV_BODY)
+
 BACKUP_ENV = {**os.environ,
               "ZTV_DB_PATH": DB,
               "ZTV_BACKUP_DIR": BACKUP_DIR,
+              "ZTV_ENV_PATH": ENV_FILE,
               "ZTV_AGE_RECIPIENTS": RECIPIENTS}
 
 
@@ -87,8 +97,36 @@ try:
           (r.stdout[-500:] + r.stderr[-500:]))
 
     dailies = sorted(os.listdir(os.path.join(BACKUP_DIR, "daily")))
-    check("one encrypted daily written", len(dailies) == 1, dailies)
-    archive = os.path.join(BACKUP_DIR, "daily", dailies[0]) if dailies else None
+    dbs = [f for f in dailies if f.endswith(".db.age")]
+    envs = [f for f in dailies if f.endswith(".env.age")]
+    check("one encrypted database written", len(dbs) == 1, dailies)
+    archive = os.path.join(BACKUP_DIR, "daily", dbs[0]) if dbs else None
+
+    # The database alone does not bring the service back. docs/DR.md step 6
+    # restores api.env, and it used to tell the operator to keep their own
+    # copy off-host — a manual step, forever, on the one path where manual
+    # steps fail. Without it the restored control plane cannot authenticate
+    # a node (NODE_API_PSK) or verify a payment webhook
+    # (BTCPAY_WEBHOOK_SECRET): the database comes back and the service does
+    # not.
+    check("and the environment file beside it", len(envs) == 1, dailies)
+    if envs:
+        env_arc = os.path.join(BACKUP_DIR, "daily", envs[0])
+        head = open(env_arc, "rb").read(32)
+        check("the env backup is encrypted too",
+              head.startswith(b"age-encryption.org"),
+              "these are the service's secrets; a cleartext copy of them in "
+              "the backup directory is worse than not having one")
+        out = os.path.join(TMP, "env-restored")
+        r2 = run(["age", "-d", "-i", KEY, "-o", out, env_arc])
+        check("it decrypts with the backup key", r2.returncode == 0, r2.stderr)
+        if os.path.exists(out):
+            body = open(out).read()
+            check("and every secret came back",
+                  all(k in body for k in ("psk-that-must-survive",
+                                          "webhook-that-must-survive",
+                                          "trial-that-must-survive")),
+                  body[:200])
 
     if archive:
         head = open(archive, "rb").read(32)
@@ -117,6 +155,18 @@ try:
     check("and still leaves no cleartext snapshot", not leftovers,
           f"{leftovers} — an unencrypted copy of the customer database")
 
+    print("\n[3b] a backup with no environment file says so")
+    # Silently backing up half of what a restore needs is the failure this
+    # whole change is about. If the file is not where we looked, the run has
+    # to say which secrets are missing from the set.
+    r = run(["./scripts/backup.sh"],
+            env={**BACKUP_ENV, "ZTV_ENV_PATH": os.path.join(TMP, "nope.env")})
+    check("the run still succeeds", r.returncode == 0, r.stderr[-300:])
+    out = (r.stdout + r.stderr).lower()
+    check("and warns that the backup is incomplete",
+          "warning" in out and "not take payments" in out,
+          r.stdout[-400:])
+
     print("\n[4] rotation keeps what it says it keeps")
     # Nine more runs; the script promises 7 dailies. Timestamps are
     # second-resolution, so space them out enough to get distinct names.
@@ -124,9 +174,17 @@ try:
         time.sleep(1.05)
         run(["./scripts/backup.sh"])
     dailies = os.listdir(os.path.join(BACKUP_DIR, "daily"))
-    check("daily rotation keeps 7", len(dailies) == 7,
-          f"{len(dailies)} dailies — rotation is not pruning")
-    newest = sorted(dailies)[-1]
+    dbs = sorted(f for f in dailies if f.endswith(".db.age"))
+    envs = sorted(f for f in dailies if f.endswith(".env.age"))
+    # Per ARTIFACT, not per file. Rotation counted files, and once a second
+    # artifact appeared per run that would silently have halved every window:
+    # seven files is three and a half days, not seven — a regression that
+    # shows up as "the backup I wanted is gone" and never as an error.
+    check("daily rotation keeps 7 databases", len(dbs) == 7,
+          f"{len(dbs)} of {len(dailies)} files")
+    check("and 7 environment files", len(envs) == 7,
+          f"{len(envs)} of {len(dailies)} files")
+    newest = dbs[-1]
     archive = os.path.join(BACKUP_DIR, "daily", newest)
 
     print("\n[5] the restore from DR.md, step for step")

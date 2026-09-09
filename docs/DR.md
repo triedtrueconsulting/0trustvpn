@@ -41,10 +41,17 @@ sudo install -o 0trust -g 0trust -m 600 \
              /tmp/0trust-restore.db /var/lib/0trust/0trust.db
 shred -u /tmp/0trust-restore.db
 
-# 6. Restore api.env (BTCPay key, node PSK, etc).
-#    Keep an encrypted copy of /etc/0trust/api.env off-host alongside the DB.
+# 6. Restore api.env (BTCPay key, node PSK, trial secret).
+#
+#    This used to say "keep an encrypted copy off-host yourself" — a manual
+#    step, forever, on the one path where manual steps fail. scripts/backup.sh
+#    now writes it beside the database on every run, encrypted to the same
+#    recipients and rotated on the same schedule, so it is in the backup set
+#    you already have. Without it the restored control plane cannot
+#    authenticate its nodes and cannot verify a payment webhook: the database
+#    comes back and the service does not.
 sudo age -d -i /root/.age/0trust-backup.key \
-              /path/to/api.env.age \
+              /var/lib/0trust/backups/daily/0trust-env-<timestamp>.env.age \
               > /etc/0trust/api.env
 sudo chmod 600 /etc/0trust/api.env
 
@@ -180,9 +187,17 @@ sudo /opt/0trust-src/btcpay/scripts/test-integration.sh
 ## What to keep off-host
 
 The minimum recovery set, age-encrypted to a key on your hardened
-workstation (NOT on any production host):
+workstation (NOT on any production host).
 
-- `/etc/0trust/api.env` (BTCPay key, NODE_API_PSK, BTCPay webhook secret)
+The first two are produced by `scripts/backup.sh` on every run and pushed
+off-site together if `ZTV_OFFSITE` is set — you do not assemble them by hand.
+The rest you keep yourself, because nothing on the server ever holds them.
+
+- `/etc/0trust/api.env` (BTCPay key, NODE_API_PSK, BTCPay webhook secret) —
+  **backed up automatically** as `0trust-env-<timestamp>.env.age`. It used to
+  be a manual step here and nothing produced it, so a restore brought the
+  database back into a control plane that could not authenticate a node or
+  verify a payment webhook.
 - Daily SQLite backup (`0trust-<ts>.db.age` — produced by `scripts/backup.sh`)
 - The xpub recovery seed (paper, 2 locations) — recovers wallet
 - BTCPay backups (per `btcpay/runbook.md`)
