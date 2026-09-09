@@ -108,8 +108,17 @@ ok "PGP signature valid (key: $signer_full)"
 
 # Check it's the EXPECTED key
 if [[ "$EXPECTED_KEY" != "DEADBEEF"* ]]; then
-    # Compare last 40 chars (full fingerprint) — accept partial matches if pinned shorter
-    if [[ "${signer_full: -${#EXPECTED_KEY}}" != "$EXPECTED_KEY" ]]; then
+    # A full 40-character fingerprint, not a key id. Short ids are forgeable:
+    # a matching 32-bit id takes seconds to grind and a 64-bit one is within
+    # reach, so comparing a suffix of whatever length happens to be pinned
+    # means the strength of this check is whatever the person editing this
+    # line felt like typing. There is one right length.
+    if [[ ! "$EXPECTED_KEY" =~ ^[A-Fa-f0-9]{40}$ ]]; then
+        fail "EXPECTED_KEY in this script is not a 40-character fingerprint.
+  A short key id can be forged; only the full fingerprint identifies a key.
+  Get it from https://0trustvpn.com/.well-known/security.txt."
+    fi
+    if [[ "${signer_full^^}" != "${EXPECTED_KEY^^}" ]]; then
         fail "signed by UNEXPECTED key
 
   Expected: $EXPECTED_KEY
@@ -142,14 +151,61 @@ if [[ -n "$TARGET" ]]; then
 DO NOT RUN this binary — it differs from what the operator signed."
     fi
 else
-    # Whole release
-    if ! sha256sum -c SHA256SUMS --strict --quiet 2>/dev/null; then
-        # Fall through to verbose to show the failing file
-        sha256sum -c SHA256SUMS
-        fail "one or more files don't match SHA256SUMS"
+    # Whatever is actually here.
+    #
+    # This was `sha256sum -c SHA256SUMS`, which checks every file the list
+    # names — and a customer downloads ONE binary, for their own platform.
+    # So the documented default ("verify ./0trust-*") reported
+    # "one or more files don't match SHA256SUMS" on an ordinary, untampered
+    # download, five missing files being the only reason. That message reads
+    # as tampering. A verifier that cries wolf on the normal case is a
+    # verifier people stop running, which costs more than it ever protected.
+    #
+    # Absent and altered are different findings and are reported differently.
+    checked=0; missing=0
+    while read -r want name; do
+        [[ -n "$want" && -n "$name" ]] || continue
+        name=${name#\*}                      # sha256sum's binary-mode marker
+        if [[ ! -f "$name" ]]; then
+            missing=$((missing + 1)); continue
+        fi
+        got=$(sha256sum "$name" | awk '{print $1}')
+        if [[ "$got" != "$want" ]]; then
+            fail "checksum MISMATCH for $name
+  expected: $want
+  got:      $got
+DO NOT RUN this file — it differs from what the operator signed."
+        fi
+        checked=$((checked + 1))
+    done < SHA256SUMS
+
+    if [[ $checked -eq 0 ]]; then
+        fail "none of the $missing files in SHA256SUMS are in $(pwd).
+  Download the binary you want into this directory and run this again."
     fi
-    ok "all $(grep -c . SHA256SUMS) files match SHA256SUMS"
+    ok "$checked file(s) match SHA256SUMS"
+    if [[ $missing -gt 0 ]]; then
+        # Said plainly, and not as a warning: not downloading the other five
+        # platforms is the normal thing to do.
+        printf '    %s\n' "($missing other file(s) in SHA256SUMS are not in this directory — \
+that is expected if you downloaded one platform's binary)"
+    fi
 fi
 
 echo ""
+# The identity check is check 3 of the three this script says it performs.
+# When EXPECTED_KEY is still the placeholder it cannot run — and this script
+# printed the same unconditional "VERIFIED. Safe to run." either way, which
+# is a check that did not happen being reported as one that passed. The
+# signature being valid says the file was not altered after signing; it says
+# nothing about who signed it.
+if [[ "$EXPECTED_KEY" == "DEADBEEF"* ]]; then
+    warn "NOT FULLY VERIFIED."
+    warn "The checksums match and the signature is valid, but this script has"
+    warn "no fingerprint pinned, so it cannot tell you the signer is 0trust."
+    warn "Compare ${signer_full} against:"
+    warn "  https://0trustvpn.com/.well-known/security.txt"
+    warn "  and one source that is not that website."
+    exit 2
+fi
 ok "VERIFIED.  Safe to run."

@@ -154,12 +154,88 @@ if r.returncode == 0:
 
     print("\n[4] verify-release.sh, the way a customer runs it")
     v = run(["./scripts/verify-release.sh", "--release-dir", RELEASE_DIR], cwd=WORK)
-    check("the release verifies", v.returncode == 0,
-          (v.stdout[-800:] + v.stderr[-800:]))
-    check("and says so", "VERIFIED" in v.stdout, v.stdout[-300:])
-    check("it counts every artifact, not just the binaries",
-          f"all {len(listed)} files match" in v.stdout,
-          v.stdout[-300:])
+    check("every artifact's checksum matches",
+          f"{len(listed)} file(s) match" in v.stdout,
+          v.stdout[-400:] + v.stderr[-400:])
+    check("no artifact is reported missing when they are all here",
+          "not in this directory" not in v.stdout, v.stdout[-300:])
+    # Exit 2, not 0, while EXPECTED_KEY is a placeholder — see [6].
+    check("it does not report success it did not establish",
+          v.returncode == 2,
+          f"rc={v.returncode}: with no fingerprint pinned, check 3 of the "
+          f"three this script advertises did not run")
+
+    print("\n[4b] the customer who downloaded ONE binary")
+    # The realistic case, and the documented default ("verify ./0trust-*").
+    # sha256sum -c checks every file the manifest names, so five absent
+    # platforms produced "one or more files don't match SHA256SUMS" — which
+    # reads as tampering, on an untampered download. A verifier that cries
+    # wolf on the normal case is one people stop running.
+    partial = os.path.join(WORK, "partial")
+    os.makedirs(partial, exist_ok=True)
+    for f in ("SHA256SUMS", "SHA256SUMS.asc", "pubkey.asc"):
+        shutil.copy(os.path.join(RELEASE_DIR, f), partial)
+    names = sorted(listed)
+    one = next((f for f in names if f.startswith("0trust-linux-amd64")), names[0])
+    shutil.copy(os.path.join(RELEASE_DIR, one), partial)
+
+    v = run(["./scripts/verify-release.sh", "--release-dir", partial], cwd=WORK)
+    check("the one binary that IS there is checked",
+          "1 file(s) match" in v.stdout, v.stdout[-400:] + v.stderr[-400:])
+    check("and the absent ones are named as absent, not as a mismatch",
+          "not in this directory" in v.stdout and "MISMATCH" not in v.stdout
+          and "don't match" not in v.stdout,
+          f"an ordinary download must not read as tampering:\n"
+          f"{v.stdout[-500:]}{v.stderr[-300:]}")
+
+    print("\n[4e] the download page shows output this script can produce")
+    # download.html walks the customer through downloading ONE binary and then
+    # showed "[✓] all files match SHA256SUMS" — a line that session could never
+    # produce, because sha256sum -c failed on the five platforms they did not
+    # download. The page documented a run that could not happen, which is the
+    # same claim-vs-reality failure as any other, on the page that asks people
+    # to check our work.
+    dl = open(os.path.join(H.REPO, "web", "download.html")).read()
+    for _line in ("1 file(s) match SHA256SUMS",
+                  "not in this directory"):
+        check(f"download.html quotes a line the script really prints: {_line!r}",
+              _line in dl,
+              "the page shows output the verifier does not produce")
+    check("and no longer claims 'all files match' after a one-binary download",
+          "all files match SHA256SUMS" not in dl,
+          "that line cannot appear when only one of the artifacts is present")
+    # The other direction: the strings the page quotes have to come out of the
+    # script, not just look plausible.
+    vsrc = open(os.path.join(H.REPO, "scripts", "verify-release.sh")).read()
+    for _line in ("file(s) match SHA256SUMS", "not in this directory",
+                  "DO NOT RUN", "VERIFIED.  Safe to run."):
+        check(f"verify-release.sh can actually print {_line!r}",
+              _line in vsrc,
+              "download.html quotes it; if the script cannot say it, one of "
+              "the two is wrong")
+
+    print("\n[4c] a tampered binary in a partial download is still caught")
+    victim = os.path.join(partial, one)
+    keep = open(victim, "rb").read()
+    open(victim, "wb").write(keep + b"\x00tampered")
+    v = run(["./scripts/verify-release.sh", "--release-dir", partial], cwd=WORK)
+    check("it fails", v.returncode != 0, v.stdout[-300:])
+    check("and names the file and says not to run it",
+          one in (v.stdout + v.stderr) and "DO NOT RUN" in (v.stdout + v.stderr),
+          (v.stdout + v.stderr)[-400:])
+    open(victim, "wb").write(keep)
+
+    print("\n[4d] a directory with none of the listed files")
+    empty = os.path.join(WORK, "nothing")
+    os.makedirs(empty, exist_ok=True)
+    for f in ("SHA256SUMS", "SHA256SUMS.asc", "pubkey.asc"):
+        shutil.copy(os.path.join(RELEASE_DIR, f), empty)
+    v = run(["./scripts/verify-release.sh", "--release-dir", empty], cwd=WORK)
+    check("verifying nothing is a failure, not a pass",
+          v.returncode != 0,
+          "zero files checked must never report VERIFIED")
+    check("and it says what to do", "Download the binary" in v.stderr,
+          v.stderr[-300:])
 
     print("\n[5] a tampered artifact is caught")
     victim = next((f for f in offered if f.endswith(".deb")), None) or offered[0]
@@ -176,11 +252,22 @@ if r.returncode == 0:
     # repo, so the script warns rather than fails — assert it at least says so
     # out loud, because a silent pass here would be the worst outcome.
     v = run(["./scripts/verify-release.sh", "--release-dir", RELEASE_DIR], cwd=WORK)
-    pinned = "EXPECTED_KEY placeholder" not in v.stderr
+    blob = v.stdout + v.stderr
     check("the verifier is explicit about its unpinned key",
-          pinned or "placeholder still in this script" in v.stderr,
-          "it neither pins a fingerprint nor warns that it does not — a "
+          "placeholder" in blob or "cannot tell you the signer" in blob,
+          "it neither pins a fingerprint nor says that it does not — a "
           "customer would think the key had been checked")
+    # The part that was wrong: it warned on stderr and then printed
+    # "VERIFIED. Safe to run." and exited 0. A check that could not run,
+    # reported as one that passed — and the green line is the one a customer
+    # reads. The signature being valid says the file was not altered after
+    # signing; it says nothing about who signed it.
+    check("and does not print an unqualified VERIFIED alongside that warning",
+          "Safe to run" not in blob,
+          "the last line a customer sees said the release was safe while the "
+          "identity of the signer had not been established")
+    check("nor exits 0, so a wrapper cannot read it as verified",
+          v.returncode == 2, f"rc={v.returncode}")
 
 print("\n[9] pinning the real fingerprints, without inventing one")
 # Four placeholders across three files plus the verifier, and they are NOT the

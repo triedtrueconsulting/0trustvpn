@@ -474,8 +474,17 @@ code {
 <pre><span class="prompt">$</span> ../verify-release.sh
 <span class="comment"># [✓] PGP signature valid (key: DEADBEEF...REPLACE-ME)</span>
 <span class="comment"># [✓] key fingerprint matches expected: DEADBEEF...REPLACE-ME</span>
-<span class="comment"># [✓] all files match SHA256SUMS</span>
+<span class="comment"># [✓] 1 file(s) match SHA256SUMS</span>
+<span class="comment">#     (other files in SHA256SUMS are not in this directory — that</span>
+<span class="comment">#      is expected if you downloaded one platform's binary)</span>
 <span class="comment"># [✓] VERIFIED.  Safe to run.</span></pre>
+    <p class="callout">
+      The step above downloads one binary, so the script checks one and tells
+      you the rest are absent. That is not a warning about your download —
+      the other platforms' files are simply not there. A file that IS present
+      and does not match says <code>MISMATCH</code> and <code>DO NOT RUN</code>,
+      which is a different thing entirely.
+    </p>
   </div>
 
   <h2>Our release-signing key</h2>

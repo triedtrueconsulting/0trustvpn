@@ -431,6 +431,93 @@ try:
     # request through the running proxy cannot show, because these addresses do
     # not route anywhere from here.
     # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # What a page can still do to move the visitor off the proxy.
+    #
+    # rewrite.py's docstring: every URL has to be pointed back at us, "or the
+    # visitor's browser goes straight to the origin and the 'you are browsing
+    # through 0trust' claim becomes false — which for this product is worse than
+    # the feature being absent."
+    #
+    # <meta http-equiv="refresh"> did exactly that and walked straight through.
+    # No CSP directive stops it: form-action covers forms, frame-ancestors covers
+    # framing, and top-level navigation is restricted by nothing that ships. The
+    # origin got a direct connection from the visitor, with their address, under
+    # our banner.
+    #
+    # Two smaller ones in the same place. The code said it made "every link open
+    # in the same tab so the banner stays put" and only added rel, so
+    # target="_blank" opened a bannerless tab; and an existing rel was not
+    # removed, so a page carrying rel="opener" emitted two rel attributes and the
+    # browser takes the first — the page's.
+    # ---------------------------------------------------------------------------
+    print("\n[rewrite] a page cannot navigate the visitor off the proxy")
+    sys.path.insert(0, os.path.join(H.REPO, "proxy"))
+    import rewrite as _rw
+
+    _B, _P = "https://origin.example/dir/page", "/surf"
+
+    def _out(src):
+        return _rw.rewrite_html(src, _B, _P, "").strip()
+
+    _r = _out('<head><meta http-equiv="refresh" '
+              'content="0;url=https://origin.example/next"></head><body>x</body>')
+    check("a meta refresh is pointed back through the proxy",
+          "/surf?url=" in _r and "content=\"0;url=https://origin.example/next\"" not in _r,
+          f"the visitor's browser leaves for the origin on its own: {_r[:200]}")
+    check("and the original target survives inside the proxied URL",
+          "origin.example%2Fnext" in _r, _r[:200])
+
+    _r = _out('<head><meta http-equiv="refresh" content="5; url=/elsewhere">'
+              '</head><body>x</body>')
+    check("a relative refresh target is absolutised against the page first",
+          "origin.example%2Felsewhere" in _r, _r[:200])
+
+    _r = _out('<head><meta http-equiv="refresh" content="30"></head><body>x</body>')
+    check("a refresh with no url is left alone — it reloads a page already ours",
+          'content="30"' in _r, _r[:200])
+
+    for _src, _why in (
+            ('<head><meta charset="utf-8"></head><body>x</body>', "charset"),
+            ('<head><meta http-equiv="content-type" '
+             'content="text/html; charset=utf-8"></head><body>x</body>',
+             "a different http-equiv"),
+            ('<head><meta name="description" content="0; url=x"></head><body>y</body>',
+             "content that only looks like a refresh"),
+    ):
+        _r = _out(_src)
+        check(f"an unrelated meta is untouched: {_why}",
+              "/surf?url=" not in _r,
+              f"rewriting this changes what the page means: {_r[:200]}")
+
+    _r = _out('<body><a href="/x" target="_blank">go</a></body>')
+    check("target is dropped, so the link opens in the tab with the banner in it",
+          "target=" not in _r, _r[:200])
+
+    _r = _out('<body><a href="/x" rel="opener nofollow">go</a></body>')
+    check("the page's own rel is replaced, not appended to",
+          _r.count("rel=") == 1 and "noopener noreferrer" in _r,
+          f"two rel attributes means the browser takes the page's: {_r[:200]}")
+
+    # The regression the first version of that fix shipped: rel dropped globally
+    # takes it off <link> too, and a <link> with no rel is ignored — every proxied
+    # page renders unstyled. The drop has to be per-tag.
+    for _rel in ("stylesheet", "icon", "canonical", "alternate"):
+        _r = _out(f'<head><link rel="{_rel}" href="/s"></head><body>x</body>')
+        check(f'<link rel="{_rel}"> keeps its rel',
+              f'rel="{_rel}"' in _r,
+              f"a link with no rel is ignored by the browser: {_r[:160]}")
+
+    _r = _out('<body><form action="/f" target="_blank"></form></body>')
+    check("a form's target is dropped too", "target=" not in _r, _r[:200])
+
+    # @import without url() resolves against the ORIGIN. The CSP blocks the fetch,
+    # so this is the stylesheet not loading rather than the visitor being seen —
+    # but it should load.
+    _r = _out('<body><style>@import "s.css"; @import url(t.css);</style></body>')
+    check("a bare @import is proxied, like the url() form beside it",
+          _r.count("/surf?url=") == 2, _r[:250])
+
     print("\n[ssrf] a private address inside an IPv6 one is still private")
     import ipaddress as _ipa
     # guards is imported inside the proxy subprocess, not here.

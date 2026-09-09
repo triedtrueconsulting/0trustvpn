@@ -36,7 +36,51 @@ DROP_TAGS = {"script", "noscript", "object", "embed", "applet"}
 DROP_ATTR_PREFIX = ("on",)          # onclick, onload, ...
 DROP_ATTRS = {"integrity", "nonce", "crossorigin", "ping", "srcset"}
 
+# Dropped only on the tags where they mean navigation, NOT everywhere.
+#
+# The code claimed to "make every link open in the same tab so the banner
+# stays put" and only added rel — target="_blank" sailed straight through and
+# the link opened a fresh tab with no banner in it. An existing rel was worse:
+# it was not removed, so a page carrying rel="opener" emitted TWO rel
+# attributes and the browser takes the first, which is the page's, defeating
+# the noopener the code thought it had applied.
+#
+# Per-tag because rel is not only a link relation on <a>: dropping it globally
+# takes it off <link rel="stylesheet"> too, and a <link> with no rel is
+# ignored — every proxied page renders unstyled. That is what the first
+# version of this did, which is a fair reminder that a fix aimed at one tag
+# does not belong in a set that applies to all of them.
+DROP_ATTRS_BY_TAG = {
+    "a": {"target", "rel"},
+    "area": {"target", "rel"},
+    "form": {"target"},
+    "base": {"target"},
+}
+
 CSS_URL_RE = re.compile(r"""url\(\s*(['"]?)([^'")]+)\1\s*\)""", re.I)
+
+# @import without url(): `@import "x.css";` or `@import 'x.css' screen;`.
+# The url() form is already covered above. Left alone, the browser resolves it
+# against the ORIGIN. The CSP (`style-src 'self'`) blocks that fetch, so this
+# is a rendering fix rather than a leak — the stylesheet simply never loaded.
+CSS_IMPORT_RE = re.compile(r"""(@import\s+)(['"])([^'"]+)\2""", re.I)
+
+# <meta http-equiv="refresh" content="0; url=...">
+#
+# This walked straight through the rewriter, and it is the one thing in a page
+# that can move the visitor's browser off the proxy on its own. No CSP
+# directive stops a meta refresh — form-action covers forms and
+# frame-ancestors covers framing, but top-level navigation is not restricted
+# by anything that ships — so the origin got a direct connection from the
+# visitor, with their address, while our banner said they were browsing
+# through us. This module's own docstring calls that outcome worse than the
+# feature being absent.
+#
+# Rewritten rather than dropped: a page that redirects is doing something
+# legitimate most of the time, and dropping it breaks the page instead of
+# fixing the leak.
+META_REFRESH_RE = re.compile(r"""^(\s*[\d.]*\s*;\s*url\s*=\s*)(['"]?)(.*?)\2\s*$""",
+                             re.I | re.S)
 
 
 def proxied(url: str, base: str, prefix: str) -> str:
@@ -57,10 +101,31 @@ def proxied(url: str, base: str, prefix: str) -> str:
 
 
 def rewrite_css(text: str, base: str, prefix: str) -> str:
-    return CSS_URL_RE.sub(
+    text = CSS_URL_RE.sub(
         lambda m: f"url({m.group(1)}{proxied(m.group(2), base, prefix)}{m.group(1)})",
         text,
     )
+    return CSS_IMPORT_RE.sub(
+        lambda m: f"{m.group(1)}{m.group(2)}"
+                  f"{proxied(m.group(3), base, prefix)}{m.group(2)}",
+        text,
+    )
+
+
+def rewrite_meta_refresh(content: str, base: str, prefix: str) -> str:
+    """Point a meta refresh's target back at the proxy, or leave it alone.
+
+    `content` is "<seconds>" or "<seconds>; url=<target>". Only the second
+    form navigates anywhere; the first reloads the current page, which is
+    already ours.
+    """
+    m = META_REFRESH_RE.match(content or "")
+    if not m:
+        return content
+    target = m.group(3).strip()
+    if not target:
+        return content
+    return f"{m.group(1)}{m.group(2)}{proxied(target, base, prefix)}{m.group(2)}"
 
 
 class _Rewriter(html.parser.HTMLParser):
@@ -81,9 +146,15 @@ class _Rewriter(html.parser.HTMLParser):
 
     def _attrs(self, tag: str, attrs) -> str:
         parts = []
+        # A meta refresh is the one attribute whose meaning depends on another
+        # attribute of the same tag, so the tag is inspected before the loop.
+        is_refresh = tag == "meta" and any(
+            k.lower() == "http-equiv" and (v or "").strip().lower() == "refresh"
+            for k, v in attrs)
         for k, v in attrs:
             kl = k.lower()
-            if kl.startswith(DROP_ATTR_PREFIX) or kl in DROP_ATTRS:
+            if (kl.startswith(DROP_ATTR_PREFIX) or kl in DROP_ATTRS
+                    or kl in DROP_ATTRS_BY_TAG.get(tag, ())):
                 continue
             if v is None:
                 parts.append(f" {k}")
@@ -92,9 +163,12 @@ class _Rewriter(html.parser.HTMLParser):
                 v = proxied(v, self.base, self.prefix)
             elif kl == "style":
                 v = rewrite_css(v, self.base, self.prefix)
+            elif is_refresh and kl == "content":
+                v = rewrite_meta_refresh(v, self.base, self.prefix)
             parts.append(f' {k}="{html_escape(v)}"')
-        # Make every link open in the same tab so the banner stays put, and
-        # deny the target page access to window.opener.
+        # target and rel were dropped above, so these are the only ones: the
+        # link opens in this tab, where the banner is, and the destination
+        # gets no window.opener.
         if tag == "a":
             parts.append(' rel="noopener noreferrer"')
         return "".join(parts)

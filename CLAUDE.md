@@ -362,6 +362,29 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   public unicast destinations re-checked on every redirect, size and time caps,
   content-type allowlist. Read it before touching anything under `proxy/`, and
   keep `test_proxy_guards` passing with nothing patched.
+  **`_is_public` names the tunnelled forms explicitly** — IPv4-mapped, 6to4,
+  Teredo and NAT64 — rather than resting on `ipaddress`'s own classification.
+  `2002:a9fe:a9fe::` is the cloud metadata service in a 6to4 wrapper; all four
+  were refused already, but by a standard-library judgement call that has been
+  revised before and that nothing here pinned.
+- **The CSP contains a proxied page's subresources; it does NOT contain its
+  navigation.** `default-src 'self'` forces every image, stylesheet and font
+  back through us, `form-action 'self'` covers forms and `frame-ancestors`
+  covers framing — but no directive that ships restricts a top-level
+  navigation, so `<meta http-equiv="refresh" content="0;url=…">` walked the
+  visitor's browser straight to the origin, with their address, under our
+  banner. `rewrite.py` rewrites the refresh target through the proxy rather
+  than dropping the tag, since a page that redirects is usually doing
+  something legitimate. Anything else a page can use to navigate itself
+  belongs in that file, not in the CSP.
+  **`target` and `rel` are dropped per-tag, never globally.** The rewriter
+  claimed to make "every link open in the same tab so the banner stays put"
+  and only added `rel`, so `target="_blank"` opened a bannerless tab; and it
+  appended `rel` without removing the page's, so `rel="opener"` won on the
+  browser's first-wins rule. Dropping both globally to fix that takes `rel`
+  off `<link rel="stylesheet">` as well, and a `<link>` with no `rel` is
+  ignored — every proxied page renders unstyled. `DROP_ATTRS_BY_TAG` is the
+  distinction; `test_proxy.py` covers the fix and the regression.
 - **`install.sh --mode test` puts the whole product on one VPS**, VPN included:
   three WireGuard interfaces (`wg0/wg1/wg2` = zur/rey/buc, udp 51820-51822),
   three meshd instances via `0trust-meshd@.service`, real keys in `mesh_nodes`,
