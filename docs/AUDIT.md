@@ -674,6 +674,35 @@ is fixed; a backup cannot contain data the schema doesn't store.
 | A Monero remote node (operator's choice) | Blocks for the view-only wallet to scan | That an IP is scanning the chain. It cannot see the wallet's keys, its balance, or which outputs are the operator's. Configured on `monero-wallet-rpc` itself (`--daemon-address`), not by the control plane. |
 | Hosting provider | (operator's choice) | Network metadata visible at the IP layer; no application data. |
 | cdnjs.cloudflare.com | n/a | RESOLVED — the landing page now self-hosts vendored JS from `/vendor/`. See `scripts/vendor-third-party.sh`. |
+| Web analytics | **none** | There is no analytics provider, no tag manager and no pixel, on any page including `/surf`. This is not an omission to be filled in later; see below. |
+
+### 9.1 Measurement, and what it deliberately cannot see
+
+An auditor should expect a commercial service to measure its funnel, and
+should ask what that measurement collects. The answer here is that the
+operations dashboard counts rows the service already holds, and nothing else:
+
+| Figure | Counted from | New data collected |
+|--------|--------------|--------------------|
+| Trials started / converted | `accounts.trial_started_at`, `accounts.plan` | none |
+| Paid without a trial | the same two columns | none |
+| Invoices created / settled | `invoices.status` | none |
+
+Both tables are documented in §3 and §6 and exist to deliver what a customer
+paid for. `accounts.trial_started_at` survives conversion, which is what makes
+trial-to-paid conversion knowable without adding a column — or a cookie.
+
+What the operator therefore **cannot** answer, and has no mechanism to
+answer: how many people visited any page, where they came from, what they
+clicked, or whether a given visitor ever returned. Measuring that needs
+either a third-party script or a per-visitor identifier, and the service has
+neither. privacy.html §5 states this to customers in the same terms.
+
+The honest limitation for an auditor to record: this arrangement is enforced
+by there being no code that does otherwise, not by a technical control. The
+checks that would notice one appearing are `no third parties` in
+`tests/emulation/test_site.py`, which fails on any off-origin script,
+stylesheet, image, icon or preconnect on any page, and the CSP.
 
 ---
 
