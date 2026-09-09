@@ -1075,14 +1075,20 @@ def update_settings(req: SettingsUpdate, admin: dict = Depends(csrf_guard)):
     dashboard says one thing and the API does another.
     """
     import payments
-    with _db(write=True) as conn:
-        changed = st.set_many(conn, req.values, admin["username"])
-        if changed:
+    try:
+        with _db(write=True) as conn:
+            changed = st.set_many(conn, req.values, admin["username"])
             # Log which keys moved, never their values: half of these are
             # payment credentials and the audit log is not the place for them.
-            audit(conn, admin, "settings.update", ",".join(sorted(changed)),
-                  f"{len(changed)} setting(s) changed")
-        st.apply_to_environ(conn)
+            if changed:
+                audit(conn, admin, "settings.update", ",".join(sorted(changed)),
+                      f"{len(changed)} setting(s) changed")
+            st.apply_to_environ(conn)
+    except st.SettingError as e:
+        # The operator typed something the setting cannot hold. Say which
+        # field and why, and write nothing — set_many validates the whole
+        # batch before touching the table.
+        raise HTTPException(400, str(e))
     payments.reset_provider()
     return {"ok": True, "changed": sorted(changed)}
 

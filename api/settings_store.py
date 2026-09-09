@@ -176,6 +176,103 @@ def get_all(conn) -> dict[str, str]:
     return {k: (get(conn, k) or "") for k in SETTING_SPECS}
 
 
+# Sane ranges for the numeric settings. Every SETTING_SPECS entry already
+# declared a "type" and nothing enforced it, so whatever an operator typed
+# into a dashboard field went into the database and then into os.environ
+# verbatim — and the values are read back with a bare int(). A slip in a form
+# became a 500 on whichever path read it next.
+#
+# The bounds are not arbitrary: a trial of 0 days is not a trial, a
+# proof-of-work of 0 bits is no proof of work, and one above ~26 bits is
+# minutes of phone CPU, which is a denial of service against your own funnel.
+INT_BOUNDS = {
+    "ZTV_TRIAL_DAYS":         (1, 365),
+    "ZTV_TRIAL_MAX_DEVICES":  (1, 64),
+    "ZTV_TRIAL_POW_BITS":     (8, 26),
+    "ZTV_BTC_CONFIRMATIONS":  (1, 20),
+    "ZTV_ZEC_CONFIRMATIONS":  (1, 20),
+    "XMR_CONFIRMATIONS":      (1, 60),
+}
+
+
+class SettingError(ValueError):
+    """A value the operator typed that we will not store."""
+
+
+def validate(key: str, value: str) -> str:
+    """Check one value against the type its spec declares. Returns it, or
+    raises SettingError with a message meant for the person who typed it."""
+    spec = SETTING_SPECS.get(key)
+    if spec is None:
+        return value
+    if value == "":
+        return value                      # clearing a setting is always fine
+    kind = spec.get("type")
+    label = spec.get("label", key)
+    if kind == "int":
+        try:
+            n = int(value)
+        except ValueError:
+            raise SettingError(f"{label}: '{value}' is not a whole number")
+        lo, hi = INT_BOUNDS.get(key, (0, 2 ** 31 - 1))
+        if not (lo <= n <= hi):
+            raise SettingError(f"{label}: must be between {lo} and {hi}")
+        return str(n)
+    if kind == "bool":
+        v = value.strip().lower()
+        if v not in ("0", "1", "true", "false", "yes", "no", "on", "off"):
+            raise SettingError(f"{label}: use 1 or 0")
+        return "1" if v in ("1", "true", "yes", "on") else "0"
+    if kind == "url":
+        if not value.startswith(("http://", "https://")):
+            raise SettingError(f"{label}: must start with http:// or https://")
+    return value
+
+
+def get_int(conn, key: str, default: int) -> int:
+    """A numeric setting, read from the DATABASE at the moment it is used.
+
+    Not a module constant, and not os.environ. The constants that used to
+    hold these were bound at import — before apply_to_environ() had read the
+    database — so a value set in the dashboard was never used at all, not on
+    the next request and not after a restart either. And os.environ is
+    per-process: the service runs two uvicorn workers, so a settings write
+    reaches one of them and the other keeps answering with the old number.
+    Half the customers seeing one trial length and half another is worse than
+    everyone seeing a stale one. The database is the only copy both workers
+    share.
+    """
+    row = None
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?",
+                           (key,)).fetchone()
+    except Exception:
+        pass
+    raw = (row["value"] if row is not None else "") or os.environ.get(key, "")
+    try:
+        n = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    lo, hi = INT_BOUNDS.get(key, (0, 2 ** 31 - 1))
+    return n if lo <= n <= hi else default
+
+
+def get_bool(conn, key: str, default: bool) -> bool:
+    row = None
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?",
+                           (key,)).fetchone()
+    except Exception:
+        pass
+    raw = (row["value"] if row is not None else "") or os.environ.get(key, "")
+    v = str(raw).strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
 def set_many(conn, values: dict, username: str) -> list[str]:
     """
     Write settings. Returns the keys actually changed, so the caller can log
@@ -186,13 +283,22 @@ def set_many(conn, values: dict, username: str) -> list[str]:
     secret with bullet characters.
     """
     now = int(time.time())
-    changed = []
+
+    # Validate the WHOLE batch before writing any of it. Raises SettingError,
+    # which the route turns into a 400. Doing it inside the write loop would
+    # leave a form half-saved when the third field is the bad one, and the
+    # operator with no idea which half took.
+    clean = {}
     for key, raw in values.items():
         if key not in SETTING_SPECS:
             continue                      # allowlist; silently ignore the rest
         value = "" if raw is None else str(raw).strip()
         if is_secret(key) and value.startswith(_MASK):
             continue
+        clean[key] = validate(key, value)
+
+    changed = []
+    for key, value in clean.items():
         current = conn.execute(
             "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         if current is not None and current["value"] == value:

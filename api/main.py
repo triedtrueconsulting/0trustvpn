@@ -75,14 +75,44 @@ MAX_DEVICES_PER_ACCOUNT = int(os.environ.get("ZTV_MAX_DEVICES", "8"))
 # --- Free trial -------------------------------------------------------------
 # One week, no payment, no identity. Trials are the whole top of the funnel:
 # the web proxy hands visitors a grant, they redeem it for a working tunnel.
-TRIAL_ENABLED = os.environ.get("ZTV_TRIAL_ENABLED", "1") == "1"
-TRIAL_DAYS = int(os.environ.get("ZTV_TRIAL_DAYS", "7"))
-TRIAL_MAX_DEVICES = int(os.environ.get("ZTV_TRIAL_MAX_DEVICES", "2"))
+# The DEFAULTS. Not the values in use — read those with the accessors below.
+#
+# These were the values in use, bound here at import, and that made every one
+# of them inert: the module is imported before the lifespan calls
+# settings.apply_to_environ(), so a number set in the dashboard was never
+# picked up. Not on the next request, and not after a restart either. The
+# form saved, the audit log recorded it, and nothing behaved differently.
+#
+# Reading os.environ at call time would fix the restart case and break a
+# different way: the service runs two uvicorn workers, a settings write
+# reaches one of them, and half the customers would then see one trial length
+# and half the other. The database is the only copy both workers share, so
+# that is what the accessors read.
+TRIAL_ENABLED_DEFAULT = os.environ.get("ZTV_TRIAL_ENABLED", "1") == "1"
+TRIAL_DAYS_DEFAULT = int(os.environ.get("ZTV_TRIAL_DAYS", "7"))
+TRIAL_MAX_DEVICES_DEFAULT = int(os.environ.get("ZTV_TRIAL_MAX_DEVICES", "2"))
 # Trials cost us bandwidth and there is no identity to rate-limit against, so
 # redemption costs CPU instead: a hashcash-style stamp the browser grinds.
 # 20 bits is about a second of JS on a phone and makes bulk minting expensive
 # without touching a captcha or an email address.
-TRIAL_POW_BITS = int(os.environ.get("ZTV_TRIAL_POW_BITS", "20"))
+TRIAL_POW_BITS_DEFAULT = int(os.environ.get("ZTV_TRIAL_POW_BITS", "20"))
+
+
+def trial_enabled(conn) -> bool:
+    return settings.get_bool(conn, "ZTV_TRIAL_ENABLED", TRIAL_ENABLED_DEFAULT)
+
+
+def trial_days(conn) -> int:
+    return settings.get_int(conn, "ZTV_TRIAL_DAYS", TRIAL_DAYS_DEFAULT)
+
+
+def trial_max_devices(conn) -> int:
+    return settings.get_int(conn, "ZTV_TRIAL_MAX_DEVICES",
+                            TRIAL_MAX_DEVICES_DEFAULT)
+
+
+def trial_pow_bits(conn) -> int:
+    return settings.get_int(conn, "ZTV_TRIAL_POW_BITS", TRIAL_POW_BITS_DEFAULT)
 TRIAL_CHALLENGE_TTL = int(os.environ.get("ZTV_TRIAL_CHALLENGE_TTL", "900"))
 # Signs trial challenges so we can verify one we issued without storing it.
 TRIAL_SECRET = os.environ.get("ZTV_TRIAL_SECRET", "")
@@ -717,9 +747,14 @@ class WGRegisterResponse(BaseModel):
 # AUTH DEPENDENCY
 # ============================================================================
 
-def _device_cap(plan: str) -> int:
-    """Trials get fewer slots — enough for a laptop and a phone."""
-    return TRIAL_MAX_DEVICES if plan == "trial" else MAX_DEVICES_PER_ACCOUNT
+def _device_cap(conn, plan: str) -> int:
+    """Trials get fewer slots — enough for a laptop and a phone.
+
+    Takes the connection because the trial cap is a setting an operator can
+    change, and a value cached at import is a value the dashboard cannot
+    move — see the note on TRIAL_*_DEFAULT."""
+    return (trial_max_devices(conn) if plan == "trial"
+            else MAX_DEVICES_PER_ACCOUNT)
 
 
 def require_account(x_account_token: str = Header(...)) -> dict:
@@ -900,12 +935,19 @@ def public_config() -> dict:
     cannot disagree with the control plane, or with each other.
     """
     prov = payments.provider_name()
+    # From the database, so that what this publishes is what the service will
+    # actually do — and so both uvicorn workers publish the same number after
+    # an operator changes it. Every page renders the offer from here.
+    with db() as conn:
+        t_enabled = trial_enabled(conn)
+        t_days = trial_days(conn)
+        t_devices = trial_max_devices(conn)
     return {
         "trial": {
-            "enabled": TRIAL_ENABLED,
-            "days": TRIAL_DAYS,
-            "label": duration_label(TRIAL_DAYS),
-            "max_devices": TRIAL_MAX_DEVICES,
+            "enabled": t_enabled,
+            "days": t_days,
+            "label": duration_label(t_days),
+            "max_devices": t_devices,
         },
         "max_devices": MAX_DEVICES_PER_ACCOUNT,
         "currencies": list(payments.currencies_for(prov)),
@@ -1132,12 +1174,14 @@ def _pow_ok(nonce: str, solution: str, bits: int) -> bool:
 @app.get("/api/v1/trial/challenge", response_model=TrialChallenge)
 def trial_challenge():
     """Hand out a proof-of-work challenge for a free trial."""
-    if not TRIAL_ENABLED:
-        raise HTTPException(404, "Trials are not available")
+    with db() as conn:
+        if not trial_enabled(conn):
+            raise HTTPException(404, "Trials are not available")
+        bits = trial_pow_bits(conn)
     nonce = secrets.token_hex(16)
     expires_at = int(time.time()) + TRIAL_CHALLENGE_TTL
     return TrialChallenge(
-        nonce=nonce, bits=TRIAL_POW_BITS, expires_at=expires_at,
+        nonce=nonce, bits=bits, expires_at=expires_at,
         signature=_sign_challenge(nonce, expires_at),
     )
 
@@ -1148,8 +1192,12 @@ def redeem_trial(req: TrialRedeemRequest):
     Redeem a solved challenge for a trial account. No payment, no email, no
     identity — same anonymous token a paying customer gets, time-limited.
     """
-    if not TRIAL_ENABLED:
-        raise HTTPException(404, "Trials are not available")
+    with db() as conn:
+        if not trial_enabled(conn):
+            raise HTTPException(404, "Trials are not available")
+        pow_bits = trial_pow_bits(conn)
+        days = trial_days(conn)
+        max_devices = trial_max_devices(conn)
 
     now = int(time.time())
     if req.expires_at < now:
@@ -1159,11 +1207,11 @@ def redeem_trial(req: TrialRedeemRequest):
     if not hmac.compare_digest(_sign_challenge(req.nonce, req.expires_at),
                                req.signature):
         raise HTTPException(400, "Challenge signature invalid")
-    if not _pow_ok(req.nonce, req.solution, TRIAL_POW_BITS):
+    if not _pow_ok(req.nonce, req.solution, pow_bits):
         raise HTTPException(400, "Proof of work does not meet the difficulty")
 
     token = generate_token()
-    expires = now + TRIAL_DAYS * 86400
+    expires = now + days * 86400
 
     with db(write=True) as conn:
         # Burning the nonce is what makes one stamp worth one account. The
@@ -1188,7 +1236,7 @@ def redeem_trial(req: TrialRedeemRequest):
                      (cur.lastrowid, req.nonce))
 
     return TrialResponse(token=token, plan="trial", expires_at=expires,
-                         days=TRIAL_DAYS, max_devices=TRIAL_MAX_DEVICES)
+                         days=days, max_devices=max_devices)
 
 
 @app.get("/api/v1/account/status", response_model=AccountStatusResponse)
@@ -1220,7 +1268,7 @@ def account_status(account: dict = Depends(require_account)):
         days_remaining=max(0, -((now - expires) // 86400)) if expires else None,
         device_count=device_count,
         plan=plan,
-        max_devices=_device_cap(plan),
+        max_devices=_device_cap(conn, plan),
         notices=unread,
     )
 
@@ -1902,7 +1950,8 @@ def wg_register(
                 "SELECT COUNT(*) AS n FROM devices WHERE account_id = ?",
                 (account["id"],),
             ).fetchone()["n"]
-            cap = _device_cap(account["plan"] if "plan" in account.keys() else "paid")
+            cap = _device_cap(
+                conn, account["plan"] if "plan" in account.keys() else "paid")
             if n_devices >= cap:
                 hint = (
                     " Upgrade to a paid plan for more."

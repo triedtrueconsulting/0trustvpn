@@ -85,6 +85,83 @@ try:
     check("lists the seeded nodes", len(ov.get("nodes", [])) == 3, ov.get("nodes"))
     check("reports the active payment provider", ov.get("provider"), ov)
 
+    print("\n[settings] a setting the dashboard owns actually takes effect")
+    # CLAUDE.md's invariant: "an operator changing the setting in the
+    # dashboard never leaves a page advertising the old offer." The trial
+    # settings are the ones that claim is about, and they are bound as module
+    # constants at IMPORT — before settings.apply_to_environ() has read the
+    # database. So the value from the dashboard was never used: not on the
+    # next request, and not after a restart either, because the constant is
+    # computed from the process environment before the lifespan runs. The
+    # form saved, the audit log recorded the change, and nothing anywhere
+    # behaved differently.
+    st, cfg0 = H.call("GET", "/api/v1/config")
+    before = (cfg0.get("trial") or {}).get("days")
+    check("the config publishes a trial length", isinstance(before, int), cfg0)
+
+    want = 3 if before != 3 else 5
+    st, r = adm("POST", "/settings", {"values": {"ZTV_TRIAL_DAYS": str(want)}})
+    check("the dashboard accepts the change", st == 200, r)
+    check("and reports it changed", "ZTV_TRIAL_DAYS" in (r.get("changed") or []), r)
+
+    st, cfg1 = H.call("GET", "/api/v1/config")
+    after = (cfg1.get("trial") or {}).get("days")
+    check(f"the API now publishes {want} days, not {before}",
+          after == want,
+          f"still {after} — the dashboard field is inert, and every page "
+          f"renders the offer from this value")
+
+    # The phrasing has to move with the number, since that string is what
+    # the landing page, the trial page and the /surf banner actually print.
+    # Asserting the digit appears in it would be wrong: duration_label says
+    # numbers the way a person would, so 3 is "three days" and 7 is "one
+    # week". What matters is that it is not still describing the old offer.
+    label_before = (cfg0.get("trial") or {}).get("label", "")
+    label_after = (cfg1.get("trial") or {}).get("label", "")
+    check("and the phrase moved with it",
+          label_after and label_after != label_before,
+          f"{label_before!r} -> {label_after!r}")
+
+    # A trial redeemed now must get the new length, not the old one.
+    import hashlib as _h2
+    def _solve2(nonce, bits):
+        i = 0
+        while True:
+            d = _h2.sha256(f"{nonce}:{i}".encode()).digest()
+            if int.from_bytes(d[:4], "big") >> (32 - bits) == 0:
+                return str(i)
+            i += 1
+    st, ch = H.call("GET", "/api/v1/trial/challenge")
+    st, tr = H.call("POST", "/api/v1/trial", {
+        "nonce": ch["nonce"], "expires_at": ch["expires_at"],
+        "signature": ch["signature"],
+        "solution": _solve2(ch["nonce"], ch["bits"]), "source": "settings-test"})
+    if st == 200:
+        granted = round((tr["expires_at"] - int(time.time())) / 86400)
+        check(f"a trial granted now lasts {want} days", granted == want,
+              f"granted {granted} — the page advertises one number and the "
+              f"account gets another")
+
+    # Put it back so nothing downstream inherits the change.
+    adm("POST", "/settings", {"values": {"ZTV_TRIAL_DAYS": str(before)}})
+
+    print("\n[settings-bad] a typo in a numeric field cannot wedge the service")
+    # SETTING_SPECS declares a type for every key and set_many ignored it, so
+    # whatever an operator typed went into os.environ verbatim. The values are
+    # read back with a bare int(), which turns a slip in a dashboard form into
+    # a 500 on the path that reads it.
+    st, r = adm("POST", "/settings", {"values": {"ZTV_TRIAL_DAYS": "seven"}})
+    check("a non-numeric value is refused", st >= 400,
+          f"accepted it: {r}")
+    st, cfg2 = H.call("GET", "/api/v1/config")
+    check("and the service still answers", st == 200, cfg2)
+    check("with the previous value intact",
+          (cfg2.get("trial") or {}).get("days") == before,
+          f"{(cfg2.get('trial') or {}).get('days')} vs {before}")
+
+    st, r = adm("POST", "/settings", {"values": {"ZTV_TRIAL_POW_BITS": "-4"}})
+    check("an out-of-range value is refused too", st >= 400, r)
+
     print("\n[4b] the conversion funnel, measured by converting one")
     # The operator has to be able to answer "does the trial sell anything?"
     # without a tracking script, because privacy.html §5 says there is not
