@@ -771,6 +771,7 @@ document. If one fails, the claim above it is the one that needs answering.
 |-------|--------------------|
 | `db-no-abandoned-signups` | No unpaid signups retained past 7 days |
 | `db-no-stale-trial-nonces` | No trial nonces retained past 24h |
+| `db-no-stale-expired-accounts` | Expired accounts purged after the refund window |
 
 **§4. WEB-TIER**
 

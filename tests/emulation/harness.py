@@ -33,19 +33,44 @@ def tempdir(prefix: str) -> str:
     return path
 
 
+# Every port this process has already handed out. See pick_port.
+_issued_ports: set[int] = set()
+
+
 def pick_port() -> int:
     """
     An unused port, chosen by the kernel.
 
     Fixed ports made modules interfere: whatever was still listening from an
     adjacent module answered the next one's requests, and the suite failed
-    intermittently in a way that looked like a product bug. Asking for :0 and
-    reading back what we got removes the class entirely.
+    intermittently in a way that looked like a product bug.
+
+    Asking for :0 does NOT remove that class on its own, which is what the
+    previous version of this docstring claimed. The probe socket is closed
+    before the port is returned, so the kernel is free to offer the very same
+    port to the next call — API_PORT and BTCPAY_PORT below are allocated one
+    after the other and could come back equal — and it can also offer one
+    that a server in an adjacent module is still listening on, because that
+    module's process has not finished exiting. Both were seen: the suite went
+    red with "OSError: [Errno 98] Address already in use" from test_site,
+    which is a flake in the harness reported as a failure of the product.
+
+    So: never repeat a port within this process, and never return one that
+    something is currently answering on.
     """
-    with socket.socket() as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    for _ in range(200):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        if port in _issued_ports:
+            continue
+        with socket.socket() as probe:
+            probe.settimeout(0.2)
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                continue      # somebody is still listening there
+        _issued_ports.add(port)
+        return port
+    raise RuntimeError("could not find a free port after 200 attempts")
 
 
 API_PORT     = pick_port()
