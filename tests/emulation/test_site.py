@@ -432,26 +432,26 @@ try:
     print("\n[6] the trial page's promises match the API's")
     _, trial = get("/trial")
     check("trial page's served fallback states the real duration",
-          f'data-trial="days">{api_main.TRIAL_DAYS}<' in trial,
-          f"TRIAL_DAYS={api_main.TRIAL_DAYS}")
+          f'data-trial="days">{api_main.TRIAL_DAYS_DEFAULT}<' in trial,
+          f"TRIAL_DAYS={api_main.TRIAL_DAYS_DEFAULT}")
     st, cfg = H.call("GET", "/api/v1/config")
     check("the API publishes the offer for pages to render", st == 200, cfg)
     check("published trial length matches the control plane",
-          cfg["trial"]["days"] == api_main.TRIAL_DAYS, cfg)
+          cfg["trial"]["days"] == api_main.TRIAL_DAYS_DEFAULT, cfg)
     check("published trial label is phrased for copy",
-          cfg["trial"]["label"] == api_main.duration_label(api_main.TRIAL_DAYS), cfg)
+          cfg["trial"]["label"] == api_main.duration_label(api_main.TRIAL_DAYS_DEFAULT), cfg)
     # The trial's pitch used to say the expiry was the only difference from a
     # paid account. The device cap is lower too, and a customer only found
     # that out after minting the token. Both numbers are now in the pitch, and
     # both are rendered from /config — so the served fallbacks have to be the
     # real ones for the moment before the fetch lands.
     check("published trial device cap matches the control plane",
-          cfg["trial"]["max_devices"] == api_main.TRIAL_MAX_DEVICES, cfg)
+          cfg["trial"]["max_devices"] == api_main.TRIAL_MAX_DEVICES_DEFAULT, cfg)
     check("published paid device cap matches the control plane",
           cfg["max_devices"] == api_main.MAX_DEVICES_PER_ACCOUNT, cfg)
     check("trial page's served fallback states the real trial device cap",
-          f'data-trial="devs">{api_main.TRIAL_MAX_DEVICES}<' in trial,
-          f"TRIAL_MAX_DEVICES={api_main.TRIAL_MAX_DEVICES}")
+          f'data-trial="devs">{api_main.TRIAL_MAX_DEVICES_DEFAULT}<' in trial,
+          f"TRIAL_MAX_DEVICES={api_main.TRIAL_MAX_DEVICES_DEFAULT}")
     check("trial page's served fallback states the real paid device cap",
           f'data-paid="devs">{api_main.MAX_DEVICES_PER_ACCOUNT}<' in trial,
           f"MAX_DEVICES_PER_ACCOUNT={api_main.MAX_DEVICES_PER_ACCOUNT}")
@@ -460,8 +460,8 @@ try:
           [l.strip() for l in trial.splitlines() if "just expires" in l][:2])
     _, home = get("/")
     check("landing page's served fallback states the real duration",
-          f'data-trial="days">{api_main.TRIAL_DAYS}<' in home,
-          f"TRIAL_DAYS={api_main.TRIAL_DAYS}")
+          f'data-trial="days">{api_main.TRIAL_DAYS_DEFAULT}<' in home,
+          f"TRIAL_DAYS={api_main.TRIAL_DAYS_DEFAULT}")
     check("trial page says no email", "No email" in trial)
     check("trial page distinguishes itself from /surf", "surf" in trial.lower())
 

@@ -43,7 +43,7 @@ try:
     check("trial redeemed", st == 200, f"{st} {tr}")
     token = tr.get("token")
     check("plan is trial", tr.get("plan") == "trial", tr)
-    days = api_main.TRIAL_DAYS
+    days = api_main.TRIAL_DAYS_DEFAULT
     check(f"{days} days granted",
           days - 1 <= (tr["expires_at"] - int(time.time())) // 86400 <= days, tr)
 

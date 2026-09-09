@@ -38,8 +38,9 @@ def api_constants():
     block = re.search(r"^PRICING\s*=\s*\{(.*?)\}", src, re.S | re.M).group(1)
     pricing = {int(m): float(p) for m, p in
                re.findall(r"(\d+)\s*:\s*([\d.]+)", block)}
-    days = int(re.search(r'TRIAL_DAYS\s*=\s*int\(os\.environ\.get\(\s*"[^"]+"\s*,\s*"(\d+)"',
-                         src).group(1))
+    days = int(re.search(
+        r'TRIAL_DAYS_DEFAULT\s*=\s*int\(os\.environ\.get\(\s*"[^"]+"\s*,\s*"(\d+)"',
+        src).group(1))
     return pricing, days
 
 
@@ -232,20 +233,31 @@ def graphs():
 
     # The trial is an offer in its own right, and it is the one an answer
     # engine is most likely to be asked about ("is there a free VPN trial
-    # without a card"). Its length is TRIAL_DAYS, not a literal.
+    # without a card").
+    # Note what this offer does NOT say: how many days.
+    #
+    # The number is generated from api/main.py's default, and an operator can
+    # change the trial length in the dashboard at any time — the pages render
+    # the live value from /api/v1/config, but this block is baked into the
+    # HTML and cannot follow. A stale "7-day free trial" in structured data
+    # is worse than none: an answer engine quotes it back as a fact about the
+    # product, next to a page saying three. Same rule as the currency copy —
+    # do not write into schema anything a deployment can change underneath it.
     out["trial.html"].append({
         "@type": "Offer",
         "@id": f"{SITE}/trial#offer",
-        "name": f"{trial_days}-day free trial",
+        "name": "Free trial",
         "price": "0",
         "priceCurrency": "USD",
         "availability": "https://schema.org/InStock",
         "url": f"{SITE}/trial",
         "itemOffered": {"@id": f"{SITE}/#product"},
         "description":
-            f"A {trial_days}-day trial of 0trustvpn that takes no email "
-            "address, no payment card and no personal details. The browser "
-            "solves a proof-of-work and receives an anonymous account token.",
+            "A free trial of 0trustvpn that takes no email address, no "
+            "payment card and no personal details. The browser solves a "
+            "proof-of-work and receives an anonymous account token. The "
+            "current length is published at /api/v1/config and shown on the "
+            "page itself.",
         "eligibleCustomerType": "https://schema.org/Enthusiast",
     })
     return out

@@ -107,7 +107,7 @@ try:
         txt = " ".join(page.inner_text("#trial-card").split())
         check("trial copy says no email or card",
               "No email, no card" in txt, txt[:200])
-        label = api_main.duration_label(api_main.TRIAL_DAYS)
+        label = api_main.duration_label(api_main.TRIAL_DAYS_DEFAULT)
         check(f"trial copy states the configured length ({label})",
               label in txt, txt[:200])
 
