@@ -298,6 +298,17 @@ private struct AccountCard: View {
             KV("devices", "\(state.status?.deviceCount ?? state.devices.count) / \(state.deviceCap)",
                mono: true)
 
+            // Where to renew. This app deliberately opens no invoice of its
+            // own: a purchase flow for a subscription inside a store app has
+            // App Store billing consequences that are the operator's decision,
+            // not this code's. What it must not do is count down to zero and
+            // leave the customer to guess — the service's own expiry notice
+            // names this address, so the app says the same thing.
+            Text("Renew at 0trustvpn.com with this same token — paid time "
+                 + "stacks on whatever is left, and nothing needs reinstalling.")
+                .font(.caption)
+                .foregroundColor(.ztInkDim)
+
             HStack(spacing: 12) {
                 Button("Manage devices") { showDevices = true }
                     .buttonStyle(GhostButtonStyle())

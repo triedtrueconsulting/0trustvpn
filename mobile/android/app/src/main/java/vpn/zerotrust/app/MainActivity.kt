@@ -618,6 +618,20 @@ private fun AccountCard(ui: UiState) {
             kv("Devices", if (acct.maxDevices > 0)
                               "${acct.deviceCount} / ${acct.maxDevices}"
                           else "${acct.deviceCount}")
+
+            // Where to renew. The desktop client can open an invoice itself
+            // (`0trust topup`); this app deliberately does not, because a
+            // purchase flow for a subscription inside a store app is a
+            // decision with App Store and Play billing consequences that
+            // belong to the operator, not to this code. What it must not do
+            // is show a countdown to zero and leave the customer to work out
+            // what to do about it — the service's own expiry notice names
+            // this address, so the app says the same thing.
+            Text(
+                "Renew at 0trustvpn.com with this same token — paid time " +
+                "stacks on whatever is left, and nothing needs reinstalling.",
+                color = ZT_InkDim, fontSize = 12.sp,
+            )
         }
     }
 }
