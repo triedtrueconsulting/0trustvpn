@@ -527,6 +527,42 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   Launcher label, Start Menu entry and ARP display name all say 0trustvpn;
   the executable, package files and release artifacts are named 0trust.
 
+- **The installer ASKS for what it was not given, and never on a non-TTY.**
+  `scripts/install.sh` with no flags walks the operator through mode, then
+  only the questions that follow from it; every question is still a flag so a
+  second deployment is silent. A prompted answer runs through the SAME
+  validators as a flag — one definition of a valid value. **It must never
+  prompt without a terminal**: cloud-init, CI and `curl | bash` have none, and
+  a `read` there takes an empty answer or blocks the boot forever, so those
+  get the flag-path error plus a line saying why nothing was asked.
+  `ZTV_INTERACTIVE=always` is the seam the emulation suite drives it through;
+  `--non-interactive` forces the flag path. Two bugs came out of writing that
+  test and both are the kind to watch for again: the `INTERACTIVE` assignment
+  sat below the flag loop so `--non-interactive` was inert, and `read` at EOF
+  re-asked a required question forever — **an installer that hangs**. EOF is
+  not an empty answer; any read loop needs that distinction.
+- **Backups are asked for at install time, and OFF is said out loud.** The
+  database is the only record of what each customer paid for — a token cannot
+  rebuild an expiry — and the timer used to ship installed-and-disabled with
+  nothing ever asking for a key. `--backup-key age1…` (or the question) writes
+  `/etc/0trust/backup-recipients.txt` and enables the timer; no key leaves it
+  off and SAYS SO. Only the PUBLIC half ever reaches the server, and pasting
+  an `AGE-SECRET-KEY-…` is refused with the reason: whoever seizes the box
+  must not be able to read the backups it made. Never enable the timer
+  without a recipient — a unit that fails every night looks like backups
+  exist, which is worse than none.
+- **Renewal exists on every surface that shows the warning.** `sweep.py` told
+  every expiring customer to run `0trust topup`; the command did not exist,
+  and a test asserted the notice CONTAINED the string, so it watched the words
+  and not whether they meant anything. The CLI has `topup` now and the GUI has
+  an Extend subscription panel. `--status` is a separate path in both:
+  checking on a payment must never open a second invoice. Prices come from
+  `/api/v1/config`'s `pricing` (from `PRICING`) — a price written into a
+  client is bug class #11 with money attached. **An expired account can still
+  top up** (`require_account`, not `require_active_account`) or the customer
+  is locked out of the one action that fixes their account; routing stays
+  refused until payment actually settles.
+
 ## Build & validation commands
 
 ```bash

@@ -63,6 +63,10 @@
 #   --skip-preflight         skip the host checks (disk, ports, DNS,
 #                            WireGuard support) that run before anything
 #                            is changed
+#   --backup-key <age1...>   (production) encrypt nightly backups to this age
+#                            PUBLIC key and enable the timer. Without it the
+#                            backup unit stays installed and disabled, as it
+#                            always has — there is no key to encrypt to.
 #   --non-interactive        never ask questions; fail on a missing value
 #                            instead. Implied whenever stdin is not a terminal,
 #                            so cloud-init and CI already behave this way.
@@ -150,6 +154,9 @@ harden_sshd() {
 
 CONTROL_URL="" PROVISION_TOKEN="" REGION="" NODE_ROLE="both" WG_PORT="51820"
 OBFS_PORT="0" WG_PORT_GIVEN=0
+# An age PUBLIC key (age1…) to encrypt nightly backups to. Empty leaves the
+# backup timer installed and disabled, which is what it has always been.
+BACKUP_RECIPIENT=""
 SWAP_SIZE=""
 
 WALLET_BTC="${WALLET_BTC:-}"
@@ -191,6 +198,7 @@ while [[ $# -gt 0 ]]; do
         --no-ssh-hardening) DO_SSH=0; shift ;;
         --no-vpn) DO_VPN=0; shift ;;
         --wallet) WALLET_BTC="${2:-}"; shift 2 ;;
+        --backup-key) BACKUP_RECIPIENT="${2:-}"; shift 2 ;;
         --control-url) CONTROL_URL="${2:-}"; shift 2 ;;
         --provision-token) PROVISION_TOKEN="${2:-}"; shift 2 ;;
         --region) REGION="${2:-}"; shift 2 ;;
@@ -381,6 +389,22 @@ v_swap() {
     return 1
 }
 
+# An age recipient is a public key and safe to paste. The PRIVATE half must
+# never reach this machine: the entire point of encrypting the backups is that
+# whoever takes this server cannot read them.
+v_age() {
+    [[ "$1" == "skip" ]] && return 0
+    [[ "$1" =~ ^age1[0-9a-z]{58}$ ]] && return 0
+    if [[ "$1" == AGE-SECRET-KEY-* ]]; then
+        printf '%s    that is the PRIVATE key. Paste the public one (age1…) —\n' "$RED"
+        printf '    the secret half must never be on this server, or the backups\n'
+        printf '    are readable by anyone who takes it.%s\n' "$NC"
+        return 1
+    fi
+    printf '%s    an age public key looks like age1 followed by 58 characters%s\n' "$RED" "$NC"
+    return 1
+}
+
 # The wallet is checked by the real thing — validate_wallet, including the
 # pin in scripts/wallet.pin — in a subshell so a refusal re-asks instead of
 # exiting the installer.
@@ -451,6 +475,22 @@ collect_production() {
      Never paste a private key or a seed phrase here.
      \"later\" installs fine — signup stays free-trial only until you set it."
         [[ "$WALLET_BTC" == "later" ]] && WALLET_BTC=""
+    fi
+
+    if [[ -z "$BACKUP_RECIPIENT" ]]; then
+        printf '\n%s  --- backups ---%s\n' "$GRN" "$NC"
+        ask BACKUP_RECIPIENT "age public key to encrypt nightly backups to, or \"skip\"" \
+            "skip" v_age \
+"Without one the backup timer stays installed and switched OFF, which is
+     where it has always been left — and the database holds every account's
+     subscription expiry. A token alone cannot rebuild that, so losing this
+     box without a backup means every paying customer loses what they bought.
+     Generate the key on YOUR machine, not here:
+       age-keygen -o 0trust-backup.key      # keep this file safe and offline
+       grep 'public key' 0trust-backup.key  # paste that age1... value below
+     Only the public half goes on this server. That is deliberate: whoever
+     takes the server must not be able to read the backups it made."
+        [[ "$BACKUP_RECIPIENT" == "skip" ]] && BACKUP_RECIPIENT=""
     fi
 
     printf '\n%s  --- this machine ---%s\n' "$GRN" "$NC"
@@ -534,6 +574,9 @@ confirm_plan() {
       production)
         printf '    domain        %s\n' "$DOMAIN"
         printf '    cert email    %s\n' "$EMAIL"
+        printf '    backups       %s\n' \
+               "$([[ -n "$BACKUP_RECIPIENT" ]] && echo "nightly, encrypted to ${BACKUP_RECIPIENT:0:12}…" \
+                                               || echo "OFF — nothing is backed up")"
         printf '    payments      %s\n' \
                "$([[ -n "$WALLET_BTC" ]] && echo "watch (BTC, address per invoice)" \
                                          || echo "not configured — free trial only")"
@@ -1275,11 +1318,39 @@ if [[ $DRY_RUN -eq 0 ]]; then
     done
     systemctl daemon-reload
 fi
-# The backup timer is installed but deliberately NOT enabled: it encrypts to an
-# age recipient that does not exist yet, so enabling it here would just produce
-# a failing unit every night. docs/DR.md covers generating the key and turning
-# it on.
-ok "api, sweep timer, proxy, backup (installed, not enabled)"
+# Backups run only when there is a key to encrypt them to. Enabling the timer
+# without one produces a unit that fails every night, which is worse than off:
+# it looks like backups exist.
+if [[ -n "$BACKUP_RECIPIENT" ]]; then
+    if [[ $DRY_RUN -eq 0 ]]; then
+        install -d -m 0750 "$ETC"
+        printf '%s\n' "$BACKUP_RECIPIENT" > "$ETC/backup-recipients.txt"
+        chmod 0644 "$ETC/backup-recipients.txt"   # a public key; not a secret
+        command -v age >/dev/null 2>&1 || apt-get install -y -qq age >/dev/null 2>&1 || true
+        systemctl enable --now 0trust-backup.timer >/dev/null 2>&1 || true
+    fi
+    if [[ $DRY_RUN -eq 1 ]]; then
+        note "would enable 0trust-backup.timer, encrypting to $BACKUP_RECIPIENT"
+    elif ! command -v age >/dev/null 2>&1; then
+        # Say it now. The alternative is finding out at 3am when the first
+        # run fails, on the one thing whose failure is invisible until it is
+        # too late to matter.
+        note "age is not installed, so the backup timer would fail every night —
+       apt-get install age, then: systemctl enable --now 0trust-backup.timer"
+    elif systemctl is-enabled 0trust-backup.timer >/dev/null 2>&1; then
+        ok "nightly encrypted backups ON, to ${BACKUP_RECIPIENT:0:12}…"
+    else
+        note "the backup timer would not enable — systemctl status 0trust-backup.timer"
+    fi
+else
+    # Unchanged from before, and said out loud rather than left as a silence
+    # in the log. The database holds every account's expiry; a token cannot
+    # rebuild it.
+    note "backups are OFF — no age key was given. Nothing is backed up, and"
+    note "the database is the only record of what each customer has paid for."
+    note "See docs/DR.md, or re-run with --backup-key age1..."
+fi
+ok "api, sweep timer, proxy, backup"
 
 # ----------------------------------------------------------------------------
 log "Deploying the website"

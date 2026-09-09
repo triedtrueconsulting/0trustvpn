@@ -280,6 +280,42 @@ try:
     check("opening an invoice does not extend the account before payment",
           exp_before == exp_after, f"{exp_before} -> {exp_after}")
 
+    # THE ONE THAT DECIDES WHETHER A LAPSED CUSTOMER COMES BACK. An expired
+    # account must still be able to pay. The endpoint takes require_account,
+    # not require_active_account, and if that ever changes the customer is
+    # locked out of the only action that would fix their account — with the
+    # expiry notice still telling them to take it.
+    conn = sqlite3.connect(DB)
+    conn.execute("UPDATE accounts SET expires_at = ?, status = 'expired' "
+                 "WHERE token_hash = ?",
+                 (int(__import__("time").time()) - 86400,
+                  __import__("hashlib").sha256(
+                      token.replace("-", "").upper().encode()).hexdigest()))
+    conn.commit(); conn.close()
+
+    rc, out = cli("status")
+    check("the account now reads as expired", "expired" in out.lower(), out[-300:])
+    rc, out = cli("topup", "1")
+    check("an EXPIRED customer can still open an invoice to come back",
+          rc == 0 and "invoice" in out.lower(),
+          out[-500:] + "\n  if this fails the customer is locked out of the "
+          "one action that would fix their account, while the expiry notice "
+          "goes on telling them to take it")
+
+    # And an invoice is not a payment: routing must still be refused. Listing
+    # devices is NOT the thing to assert on — that stays available on purpose,
+    # so a lapsed customer can still see and free up their device slots. What
+    # must be refused is being given a tunnel, which is require_active_account
+    # rather than require_account.
+    st, body = H.call("POST", "/api/v1/wg/register",
+                      {"pubkey": H.genkey(), "device_name": "after-expiry",
+                       "region": "zur"},
+                      headers={"X-Account-Token": token})
+    check("an unpaid invoice does not restore routing", st == 402, (st, body))
+    rc, out = cli("devices")
+    check("but a lapsed customer can still manage their devices", rc == 0,
+          out[-300:] + "\n  they may need to free a slot before paying")
+
     # The help has to name it, or nobody finds it from the terminal.
     rc, out = cli("help")
     check("help documents topup", "topup" in out, out[-400:])

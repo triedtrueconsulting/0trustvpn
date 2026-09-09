@@ -946,6 +946,40 @@ try:
           "nothing was changed" in out and "Installing packages" not in out,
           out[-400:])
 
+    # Backups. The database is the only record of what each customer paid
+    # for, and the timer shipped installed-and-disabled because there was no
+    # key to encrypt to and nothing ever asked for one.
+    AGEPUB = "age1zvkyg2lqzraa2lnjvqej32nkuu0ues2s82hzrye869xeexvn73equnujwj"
+    r = interactive(["production", "vpn.example.com", "ops@example.com",
+                     "later", AGEPUB, "none", "y", "y", "y"])
+    out = r.stdout + r.stderr
+    check("a backup key is asked for", "age public key" in out, out[-500:])
+    check("and giving one turns nightly backups on",
+          "nightly, encrypted to" in out and "would enable 0trust-backup.timer" in out,
+          out[-600:])
+
+    # Pasting the SECRET half must be refused, loudly. Whoever takes the
+    # server must not be able to read the backups it made, and a private key
+    # sitting in /etc is exactly that.
+    r = interactive(["production", "vpn.example.com", "ops@example.com", "later",
+                     "AGE-SECRET-KEY-1QQQQ", "skip", "none", "y", "y", "y"])
+    out = r.stdout + r.stderr
+    check("pasting the age PRIVATE key is refused and explained",
+          "that is the PRIVATE key" in out, out[-500:])
+    check("and skipping says plainly that nothing is backed up",
+          "backups       OFF" in out, out[-500:])
+    # The summary line is not the behaviour. What matters is that no key
+    # means no ENABLED timer: a unit that fails every night looks like
+    # backups exist, which is worse than none at all. The first version of
+    # this check read only the summary and stayed green when the timer was
+    # enabled regardless.
+    check("and no key means the timer is NOT enabled",
+          "would enable 0trust-backup.timer" not in out,
+          out[-600:] + "\n  a nightly-failing unit is worse than off")
+    check("with the reason said out loud in the log, not left as a silence",
+          "backups are OFF" in out and "only record of what each customer" in out,
+          out[-500:])
+
     # A flag already given must not be asked for again.
     r = interactive(["ztvp-abcdefghijklmnop", "", "", "", "y", "y", "y"],
                     "--mode", "node", "--control-url", "https://cp.example.com",
