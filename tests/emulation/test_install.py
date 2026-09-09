@@ -1030,6 +1030,66 @@ http {{
                    + _glob.glob(os.path.join(H.REPO, "canary", "systemd",
                                              "*.service")))
     check("systemd units found", bool(units))
+
+    # And the unit FILE itself has to be installed, not just the script it
+    # runs. That distinction is the whole of this bug: the canary scripts
+    # were placed at $PREFIX/canary/scripts (a hole found and fixed once
+    # already), and the timer that runs them was never copied to
+    # /etc/systemd/system at all — because the loop that installs units read
+    # systemd/ and the canary's units live under canary/systemd/. So the
+    # freshness alarm had never run on any deployment: the check above passed
+    # the whole time, because it only ever asked about ExecStart.
+    #
+    # That alarm is what tells an operator they missed a signing deadline, on
+    # the one document written to be relied on when it stops appearing.
+    all_units = sorted(
+        _glob.glob(os.path.join(H.REPO, "systemd", "*.service"))
+        + _glob.glob(os.path.join(H.REPO, "systemd", "*.timer"))
+        + _glob.glob(os.path.join(H.REPO, "canary", "systemd", "*.service"))
+        + _glob.glob(os.path.join(H.REPO, "canary", "systemd", "*.timer")))
+    def _code(text):
+        """Shell with whole-line comments removed.
+
+        The first version of this searched the raw file, and install.sh
+        happens to NAME 0trust-canary-check.service in a comment explaining
+        the previous bug in that unit. So deleting the line that installs it
+        left the check green — a check matching its own explanatory prose,
+        inside a check written to catch a unit nobody installs."""
+        return "\n".join(l for l in text.splitlines()
+                          if not l.lstrip().startswith("#"))
+
+    def _placing_lines(text):
+        """Only the lines that actually put a unit somewhere.
+
+        `systemctl enable --now 0trust-canary-check.timer` names a unit
+        without installing it, and matching the whole file meant the timer
+        passed on that line alone while its install had been deleted. A unit
+        is installed by an `install` command, or by being listed in the
+        `for unit in ...` loop that runs one; nothing else counts."""
+        out = []
+        for line in _code(text).splitlines():
+            st = line.strip()
+            # The verbs that actually place a file in this tree: install,
+            # `run install` (the dry-run wrapper), and cp in
+            # bootstrap-node.sh. Continuation lines come along with them.
+            placing = (st.startswith("install ") or st.startswith("run install ")
+                       or st.startswith("cp ") or st.startswith("for unit in"))
+            if placing or (out and out[-1].endswith("\\")):
+                out.append(st)
+        return "\n".join(out)
+
+    installer_code = _placing_lines(installer)
+    node_bootstrap = ""
+    nb = os.path.join(H.REPO, "scripts", "bootstrap-node.sh")
+    if os.path.exists(nb):
+        node_bootstrap = _placing_lines(open(nb).read())
+    for unit_path in all_units:
+        unit = os.path.basename(unit_path)
+        placed = unit in installer_code or unit in node_bootstrap
+        check(f"something installs {unit}", placed,
+              f"{unit} exists in the tree and no deploy step copies it to "
+              f"/etc/systemd/system — it can never run")
+
     for unit_path in units:
         unit = os.path.basename(unit_path)
         text = open(unit_path).read()

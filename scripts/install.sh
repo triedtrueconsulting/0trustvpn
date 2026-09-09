@@ -1358,7 +1358,38 @@ if [[ $DRY_RUN -eq 0 ]]; then
                 0trust-proxy.service 0trust-backup.service 0trust-backup.timer; do
         install -m 0644 "$REPO_DIR/systemd/$unit" "/etc/systemd/system/$unit"
     done
+    # The canary's freshness check. Its units live under canary/, not
+    # systemd/, and this loop only ever read systemd/ — so the scripts were
+    # placed at $PREFIX/canary/scripts (that hole was found and fixed once
+    # already) and the timer that runs them was never installed at all. The
+    # alarm has therefore never run on any deployment.
+    #
+    # It is the alarm that tells an operator they missed a signing deadline,
+    # on the one document in this product written to be relied on when it
+    # STOPS appearing. A canary that goes stale by accident reads to the
+    # world as a duress signal; the whole point of the check is that nobody
+    # finds out that way.
+    for unit in 0trust-canary-check.service 0trust-canary-check.timer; do
+        install -m 0644 "$REPO_DIR/canary/systemd/$unit" \
+            "/etc/systemd/system/$unit"
+    done
     systemctl daemon-reload
+fi
+
+# Enabled only once a canary exists, for the same reason the backup timer
+# waits for a key: check.sh exits 1 with a CRITICAL wall broadcast when the
+# file is absent, so enabling it on a box that has not launched yet trades
+# "no alarm" for "an alarm that cries wolf every night". Said out loud either
+# way — a check nobody turned on is the state this whole fix is about.
+if [[ $DRY_RUN -eq 0 ]]; then
+    if [[ -f "$WEBROOT/canary.txt" ]]; then
+        systemctl enable --now 0trust-canary-check.timer >/dev/null 2>&1 || true
+        ok "canary freshness check enabled (daily)"
+    else
+        note "canary freshness check installed but NOT enabled — no canary has"
+        note "been published yet. After the first ./canary/scripts/generate.sh:"
+        note "  systemctl enable --now 0trust-canary-check.timer"
+    fi
 fi
 # Backups run only when there is a key to encrypt them to. Enabling the timer
 # without one produces a unit that fails every night, which is worse than off:
