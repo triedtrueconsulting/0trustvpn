@@ -566,6 +566,21 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   intent filter — a second declaration silently makes Always-on VPN
   impossible to enable. `ZeroTrustVpnService` is a plain foreground service
   that owns the notification.
+- **A URL with an already-encoded segment is JOINED, never re-appended.**
+  `DELETE /api/v1/devices/{pubkey}` carries a base64 key: it routinely holds
+  `/` and `+`, and every one of them ends in `=`, so the segment is
+  percent-encoded before it goes in the path. Whatever joins it to the base
+  must not encode it again. The iOS client used
+  `base.appendingPathComponent(path)`, which escapes the component it is
+  handed — a `%3D` comes back out as `%253D`, the server matches no device,
+  and the one call an account at its device cap needs returns 404. Nothing has
+  ever compiled that app, so it would have surfaced as a stuck customer.
+  Android concatenates and says why; iOS now does the same
+  (`URL(string: joinBase + path)`, with the trailing slash trimmed off the
+  base). `test_ios.py` asserts both clients build it the same way, reading the
+  sources with comments STRIPPED — the first version of that check read the
+  paragraph explaining why `appendingPathComponent` is not used and passed.
+
 - **The mobile device keypair is generated once and persisted — both apps.**
   iOS keeps it in the keychain (`DeviceIdentity.loadOrCreate`), Android in
   encrypted preferences. Registration

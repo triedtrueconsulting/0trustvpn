@@ -20,6 +20,7 @@ enum APIError: Error, LocalizedError {
     case notLoggedIn
     case http(status: Int, body: String)
     case transport(Error)
+    case badURL(String)
 
     var errorDescription: String? {
         switch self {
@@ -36,6 +37,8 @@ enum APIError: Error, LocalizedError {
             }
         case .transport(let e):
             return "Could not reach the control plane: \(e.localizedDescription)"
+        case .badURL(let u):
+            return "That control-plane address cannot be used: \(u)"
         }
     }
 }
@@ -260,9 +263,36 @@ actor APIClient {
 
     // MARK: Transport
 
+    /// The base with any trailing "/" removed, so joining a path that starts
+    /// with "/" cannot produce a double slash. A configured base of
+    /// "https://0trustvpn.com/" is an ordinary thing for someone to type.
+    private var joinBase: String {
+        var s = base.absoluteString
+        while s.hasSuffix("/") { s.removeLast() }
+        return s
+    }
+
     private func request(_ method: String, _ path: String,
                          token: String?, body: [String: Any]?) throws -> URLRequest {
-        var req = URLRequest(url: base.appendingPathComponent(path))
+        // Concatenated, not appendingPathComponent.
+        //
+        // deleteDevice hands this a path whose last segment is ALREADY
+        // percent-encoded — a WireGuard key is base64 and routinely contains
+        // '/' and '+', and every one of them ends in '='. appendingPathComponent
+        // escapes what it is given, so a '%3D' that reaches it can come back
+        // out as '%253D' and the server matches no device: the delete 404s and
+        // the customer cannot free a slot against an 8-device cap. Whether
+        // Foundation re-escapes an existing sequence is a detail of CFURL that
+        // this app should not be resting on either way, and nothing here has
+        // ever been compiled, let alone run, so it would not be caught.
+        //
+        // The Android client concatenates for exactly this reason and says so
+        // (ApiClient.kt, deleteDevice). One construction, one meaning, on both
+        // platforms.
+        guard let url = URL(string: joinBase + path) else {
+            throw APIError.badURL(joinBase + path)
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         if let token, !token.isEmpty {
             req.setValue(token, forHTTPHeaderField: "X-Account-Token")

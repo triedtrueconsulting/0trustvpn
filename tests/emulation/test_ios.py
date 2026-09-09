@@ -521,6 +521,52 @@ try:
           "it is the longest lead item and it ships last, which is exactly "
           "how it gets started last")
 
+    # ----------------------------------------------------------------------
+    # The device-delete URL, on both mobile clients.
+    #
+    # DELETE /api/v1/devices/{pubkey} carries a base64 key: it routinely holds
+    # '/' and '+', and every one of them ends in '='. So the segment is
+    # percent-encoded, and whatever joins it to the base must not encode it
+    # AGAIN. iOS used base.appendingPathComponent(path), which escapes what it
+    # is handed — a '%3D' can come back as '%253D', the server matches no
+    # device, and the delete 404s. That is the one call an account at its
+    # device cap needs to work, and nothing has ever compiled this app, let
+    # alone run it, so it would not have surfaced until a customer was stuck.
+    #
+    # Android concatenates and says why (ApiClient.kt). Same construction on
+    # both, asserted here because neither can be executed from this suite.
+    # ----------------------------------------------------------------------
+    print("\n[url] the delete path is joined the same way on iOS and Android")
+    swift_src = open(os.path.join(H.REPO, "mobile", "ios", "0trust", "Shared",
+                                  "APIClient.swift")).read()
+    # Comments stripped. Without this the check below read the paragraph
+    # EXPLAINING why appendingPathComponent is not used and reported the
+    # opposite of the truth — CLAUDE.md's bug class #17, hit twice now while
+    # writing checks against it, which is a fair measure of how easy it is.
+    swift = "\n".join(ln for ln in swift_src.splitlines()
+                      if not ln.lstrip().startswith("//"))
+    kotlin = open(os.path.join(
+        H.REPO, "mobile", "android", "app", "src", "main", "java", "vpn",
+        "zerotrust", "app", "ApiClient.kt")).read()
+
+    check("iOS percent-encodes the pubkey before it goes in the path",
+          "addingPercentEncoding" in swift,
+          "a raw '/' in a key would split the path segment")
+    check("Android does too",
+          "URLEncoder.encode" in kotlin)
+    check("iOS does not re-join with appendingPathComponent",
+          "appendingPathComponent" not in swift,
+          "it escapes the component it is given, so the already-encoded "
+          "pubkey is encoded a second time and the delete matches nothing")
+    check("iOS builds the request URL from the base and the path directly",
+          "URL(string: joinBase + path)" in swift,
+          "one construction with one meaning, the same as Android's")
+    check("and a base with a trailing slash cannot produce a double slash",
+          "while s.hasSuffix(\"/\") { s.removeLast() }" in swift,
+          "https://0trustvpn.com/ is an ordinary thing to type")
+    check("Android joins by concatenation, unchanged",
+          'baseUrl + "/api/v1/devices/" + encoded' in kotlin)
+
 finally:
     H.shutdown()
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
