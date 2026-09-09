@@ -166,7 +166,14 @@ xcodebuild -exportArchive \
   -exportOptionsPlist "$PLIST" \
   -exportPath build/export
 
-ipa="$(find build/export -name '*.ipa' | head -1)"
+# `find ... | head -1` looks harmless and is not, under the `set -euo
+# pipefail` at the top of this file: head exits after the first line, find
+# takes SIGPIPE on its next write, pipefail propagates that failure and set -e
+# ends the script — here, immediately after a ten-minute archive and export
+# that actually succeeded. Whether it fires is a scheduling race, so it would
+# have worked on the machine it was written on. -print -quit makes find stop
+# by itself, with nothing to signal.
+ipa="$(find build/export -name '*.ipa' -print -quit)"
 [[ -n "$ipa" ]] || die "export produced no .ipa — read the log above"
 ok "exported $ipa"
 
