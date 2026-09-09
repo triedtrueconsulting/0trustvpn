@@ -396,9 +396,12 @@ a:focus-visible, button:focus-visible, input:focus-visible {
     <p>
       Not every server runs it. If you turn it on and land on one that does
       not, the client says so and connects you normally rather than pretending.
-      The Android app has the same switch. The iPhone app does not — the
-      system component that carries the tunnel there leaves us nowhere to put
-      it, and we would rather say that than ship a switch that does nothing.
+      The Android app has the same switch. On iPhone there is nothing to
+      switch: there is no 0trustvpn app for iOS, and the official WireGuard
+      app you use instead speaks WireGuard and only WireGuard. When we do
+      ship one it will not carry this either &mdash; the system component
+      that moves the packets there leaves us nowhere to put the relay &mdash;
+      and we would rather say that now than ship a switch that does nothing.
     </p>
   </div>
 

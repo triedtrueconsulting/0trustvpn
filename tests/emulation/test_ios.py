@@ -347,6 +347,175 @@ try:
     check("the QR-export path is still offered for iOS",
           "WireGuard" in visible and "QR" in visible.upper())
 
+    # And the same rule across every public page, not just this one. The
+    # drift arrives as an aside rather than a heading — both of these were
+    # live, and neither reads as a claim until you look for one:
+    #
+    #   "Available for Linux, macOS, Windows, iOS and Android."
+    #   "The Android app has the same switch. The iPhone app does not ..."
+    #
+    # The first lists iOS as a platform the client runs on. The second tells
+    # the reader there is an iPhone app by describing what it lacks. So the
+    # rule is not "iOS is mentioned near WireGuard" — the first sentence
+    # mentions WireGuard immediately afterwards and would sail past that.
+    # It is: iOS never appears in a list of platforms we ship a client for,
+    # and every sentence naming it also names the route that does work.
+    OTHERS = ("Linux", "macOS", "Windows", "Android")
+    WORKS = ("WireGuard", "0trust export", "QR", "no 0trustvpn app for iOS",
+             "config")
+    BLOCK = r"</?(?:p|div|li|ul|ol|section|h[1-6]|td|tr|th|br|blockquote)\b[^>]*>"
+
+    def claims(html):
+        """Each text unit, one per block element, split into sentences.
+
+        Blocks are separated first and inline tags (code, strong, em, a) are
+        not, because both directions matter: collapsing the whole document
+        into one string runs the mockup chrome together with the prose and
+        invents platform lists that nobody wrote, while splitting at every
+        tag chops `<strong>iOS:</strong> use <code>0trust export</code>` into
+        a fragment that names iOS and nothing else. Headings are dropped —
+        a two-word label is not where a claim lives, and the outright bans
+        above already cover the ones that would be.
+        """
+        html = re.sub(r"(?is)<h[1-6]\b[^>]*>.*?</h[1-6]>", " ", html)
+        for unit in re.split(BLOCK, html):
+            unit = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", unit)).strip()
+            for sent in re.split(r"(?<=[.!?]) ", unit):
+                if sent.strip():
+                    yield sent.strip()
+
+    for page in sorted(glob.glob(os.path.join(H.REPO, "web", "*.html"))):
+        listed, unexplained = [], []
+        for sent in claims(open(page, encoding="utf-8").read()):
+            if not re.search(r"(?<![A-Za-z])(iOS|iPhone|iPad)(?![A-Za-z])", sent):
+                continue
+            if sum(o in sent for o in OTHERS) >= 2:
+                listed.append(sent[:200])
+            elif not any(k in sent for k in WORKS):
+                unexplained.append(sent[:200])
+        name = os.path.basename(page)
+        check(f"{name} does not list iOS as a platform we ship a client for",
+              not listed, listed[:1])
+        check(f"{name} names iOS only beside the route that works",
+              not unexplained, unexplained[:1])
+
+    print("\n[11] there is a build, not a set of instructions to click through")
+    # The Windows MSI has build.ps1 and Android has Gradle. iOS had "open
+    # Xcode", which is not a release process — it drifts, and nothing notices.
+    build = os.path.join(IOS, "build.sh")
+    check("a command-line build exists", os.path.exists(build))
+    bt = open(build).read()
+    check("and it refuses to pretend it can run off a Mac",
+          'uname -s' in bt and "Darwin" in bt,
+          "xcodebuild, the iOS SDK and codesign exist nowhere else")
+    check("it is honest that nobody has run it",
+          "NOTHING HAS EVER RUN THIS" in bt,
+          "same standard the app sources and the README hold themselves to: "
+          "this is written from documentation, not from a green run")
+    # App Store Connect refuses a repeated build number and tells you by
+    # email after the upload, so the script has to demand one up front.
+    check("it requires an explicit build number", "--build is required" in bt)
+    check("and a version that looks like one",
+          r"^[0-9]+\.[0-9]+\.[0-9]+$" in bt)
+
+    # The sharp difference from Windows, and the one most likely to be
+    # misremembered later: shipping unsigned is a CHOICE there and does not
+    # exist here at any price.
+    # Flowed prose in a comment block wraps mid-sentence and every
+    # continuation line starts with "# ", so match against the text with the
+    # comment markers and line breaks taken out — otherwise this passes or
+    # fails on where the paragraph happened to wrap.
+    prose = re.sub(r"\s+", " ", re.sub(r"(?m)^\s*#\s?", "", bt))
+    check("it says why iOS gets no unsigned path",
+          "will not install an unsigned application" in prose,
+          prose[:600])
+
+    # An .ipa must never join releases/: Apple re-signs what it distributes,
+    # so a published hash of these bytes matches nothing a customer can get,
+    # and verify-release.sh would be telling people to check the uncheckable.
+    check("the .ipa is kept out of the signed release",
+          "does NOT go into releases/" in bt)
+    rel = open(os.path.join(H.REPO, "scripts", "release.sh")).read()
+    check("and release.sh does not collect one", ".ipa" not in rel)
+
+    # Version: four literals in three files had to move together. They resolve
+    # from build settings now, which is what makes --version reach the bundle.
+    for name, path in (("app", "App/Info.plist"), ("tunnel", "Tunnel/Info.plist")):
+        pl = plistlib.load(open(os.path.join(SRCDIR, path), "rb"))
+        check(f"the {name} version comes from the build settings",
+              pl.get("CFBundleShortVersionString") == "$(MARKETING_VERSION)"
+              and pl.get("CFBundleVersion") == "$(CURRENT_PROJECT_VERSION)",
+              f"{pl.get('CFBundleShortVersionString')} / {pl.get('CFBundleVersion')} "
+              "— a literal here makes build.sh --version decorative")
+    spec_text2 = open(os.path.join(IOS, "project.yml")).read()
+    # xcodegen WRITES the file at info.path. Without these properties it would
+    # write one with no NSExtension block, and an extension that does not
+    # declare the packet-tunnel point is never asked to start one.
+    check("project.yml keeps the tunnel's extension point too",
+          "com.apple.networkextension.packet-tunnel" in spec_text2,
+          "xcodegen generate regenerates Tunnel/Info.plist; if the spec does "
+          "not carry NSExtension, generating destroys it")
+
+    print("\n[12] the faces the app asks for are the faces it ships")
+    # Font.custom takes a PostScript name and substitutes the system font when
+    # it does not resolve — no error, no log line, just an app that looks
+    # wrong. Nothing else in the battery would see it.
+    res = os.path.join(SRCDIR, "Resources")
+    ttfs = sorted(glob.glob(os.path.join(res, "*.ttf")))
+    check("the faces are committed, not an operator to-do", len(ttfs) >= 5,
+          f"found {len(ttfs)} in {res}")
+    asked = set(re.findall(r'custom\(\s*"([^"]+)"', SRC.get("App/Theme.swift", "")))
+    check("Theme.swift asks for at least one", bool(asked))
+
+    def ps_name(path):
+        import struct
+        d = open(path, "rb").read()
+        num = struct.unpack(">H", d[4:6])[0]
+        tabs = {d[12+16*i:16+16*i].decode("latin1"):
+                struct.unpack(">II", d[20+16*i:28+16*i]) for i in range(num)}
+        o, _ = tabs["name"]
+        _, count, so = struct.unpack(">HHH", d[o:o+6])
+        for i in range(count):
+            pid, _, _, nid, ln, off = struct.unpack(">HHHHHH", d[o+6+12*i:o+18+12*i])
+            if nid == 6:
+                raw = d[o+so+off:o+so+off+ln]
+                return raw.decode("utf-16-be") if pid == 3 else raw.decode("latin1")
+        return ""
+
+    have = {ps_name(f): os.path.basename(f) for f in ttfs}
+    check("every face the code asks for is present, by PostScript name",
+          asked <= set(have), f"missing {sorted(asked - set(have))}; have {sorted(have)}")
+    check("and each file is named the same as its internal name",
+          all(have[n] == n + ".ttf" for n in have),
+          {n: have[n] for n in have if have[n] != n + ".ttf"})
+    registered = set(app_plist.get("UIAppFonts", []))
+    check("and iOS is told to register each one",
+          {have[n] for n in have} <= registered,
+          f"not in UIAppFonts: {sorted({have[n] for n in have} - registered)}")
+    check("the licences are recorded with them",
+          os.path.exists(os.path.join(res, "FONTS.md")),
+          "all three families are OFL 1.1 and redistributing them says so")
+
+    print("\n[13] the Apple lead time is on the launch playbook")
+    # Enrolment, the D-U-N-S number and the entitlement request are weeks of
+    # waiting on other people, and none of it appeared on the playbook at all
+    # — so the earliest anyone would have discovered it is the day they
+    # wanted to ship.
+    launch = open(os.path.join(H.REPO, "docs", "LAUNCH.md")).read()
+    low = launch.lower()
+    for want, why in (
+        ("developer program", "the $99/yr membership"),
+        ("d-u-n-s", "organisation enrolment needs one, and it takes days by itself"),
+        ("packet-tunnel-provider", "the entitlement is not self-serve"),
+        ("5.4", "Guideline 5.4 requires an organisation, not an individual"),
+    ):
+        check(f"the playbook names {why}", want in low,
+              f"{want!r} absent from LAUNCH.md")
+    check("and puts it on Day 1 rather than the day you ship",
+          "Start the Apple clock" in launch,
+          "it is the longest lead item and it ships last, which is exactly "
+          "how it gets started last")
+
 finally:
     H.shutdown()
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")

@@ -12,10 +12,26 @@ Everything below about what is verified, and what is not, is meant literally.
 ## Building it
 
 ```bash
-brew install xcodegen
 cd mobile/ios
-xcodegen generate          # writes 0trust.xcodeproj from project.yml
-open 0trust.xcodeproj
+./build.sh --check                                    # runs anywhere, no Mac
+brew install xcodegen                                 # on the Mac
+./build.sh --version 0.1.0 --build 1 --team <TEAMID>
+```
+
+`build.sh --check` is worth running before you rent or borrow a Mac: it
+verifies the bundled faces and the source structure, and it is the same first
+step the real build takes. Everything after it needs macOS, and the script
+says so rather than failing obscurely.
+
+`--export app-store` adds the export step; without it you get an `.xcarchive`
+to open in Xcode's Organizer. Signing is not optional and there is nothing to
+buy separately — see the header of `build.sh` for why iOS gets no equivalent
+of the deliberately-unsigned Windows MSI.
+
+To work in the IDE instead:
+
+```bash
+xcodegen generate && open 0trust.xcodeproj
 ```
 
 The `.xcodeproj` is generated and deliberately not committed: a `project.pbxproj`
@@ -25,16 +41,28 @@ information.
 
 Then, in Xcode:
 
-1. Set your team on both targets (`0trust` and `0trustTunnel`).
+1. Set your team on both targets (`0trust` and `0trustTunnel`), or pass
+   `--team` to `build.sh`.
 2. Confirm the App Group `group.vpn.zerotrust.app` exists on the Developer
    portal and is enabled on both targets. If the two disagree the app writes a
    config the extension cannot read, and `startTunnel` fails with "no
    configuration".
-3. Drop the five font files into `0trust/Resources/` (Instrument Serif,
-   JetBrains Mono Regular/Medium/Bold, IBM Plex Sans). They are listed in
-   `UIAppFonts`; without them the type falls back to system faces and the app
-   simply looks wrong rather than breaking.
-4. Build to a **device**. The Network Extension does not run in the Simulator.
+3. Build to a **device**. The Network Extension does not run in the Simulator,
+   so a clean Simulator build proves nothing about the hard part.
+
+### The fonts
+
+They are committed, in `0trust/Resources/`, rather than being a step you have
+to remember. `Font.custom` takes a PostScript name and **does not fail when
+one does not resolve** — it substitutes the system font. A missing file
+therefore produces an app that builds, launches and connects, and just looks
+wrong, with nothing reporting a problem.
+
+`./fetch-fonts.sh` regenerates them from upstream and names each file after
+the PostScript name read out of the file itself, so what `UIAppFonts`
+registers and what `Theme.swift` asks for cannot drift apart. `--check`
+verifies that with no network, and `build.sh` runs it first. All three
+families are OFL 1.1; `0trust/Resources/FONTS.md` has the details.
 
 ## What Apple requires before this can ship
 
@@ -82,6 +110,10 @@ Checked automatically on every push, by `tests/emulation/test_ios.py` against a
 Checked by `syntax-check.sh`: delimiters balance, no placeholder
 (`fatalError`/`TODO`) survives, every framework a file uses is imported.
 
+Checked by `fetch-fonts.sh --check`: every face `Theme.swift` asks for is a
+file that is present, named by its own PostScript name, and registered in
+`UIAppFonts` — the mismatch that would otherwise ship silently.
+
 **Not checked by anything here: whether it compiles.** No Swift toolchain, no
 Apple SDKs. `xcodegen generate && xcodebuild` on a Mac is the real gate, and it
 has not been run. Expect to fix compile errors on the first build.
@@ -104,6 +136,10 @@ project.yml                     XcodeGen spec — the buildable definition
 0trust/Tunnel/                  the packet-tunnel extension
   PacketTunnelProvider.swift    WireGuardKit adapter
   Info.plist, Tunnel.entitlements
+0trust/Resources/               the five bundled faces, and their licences
+build.sh                        archive + export; --check runs without a Mac
+fetch-fonts.sh                  refresh the faces; --check verifies them
+syntax-check.sh                 structural check over the Swift sources
 ```
 
 `Shared/` is in both targets on purpose: the extension is started by iOS on

@@ -91,7 +91,7 @@ USER ──▶│ 0trust.  │ ───────────▶   │  Contr
 │   └── runbook.md            Operations playbook
 ├── mobile/
 │   ├── android/              Complete Kotlin/Compose app (wireguard-android)
-│   └── ios/                  Skeleton — out of scope for v0.1 (QR-export path)
+│   └── ios/                  SwiftUI app + WireGuardKit packet tunnel; never compiled
 ├── support/                  PGP-based support workflow
 │   ├── scripts/generate-key.sh    Generate support PGP key + WKD layout
 │   └── templates/auto-reply.txt   Auto-responder text
@@ -449,12 +449,24 @@ three jurisdictions baked in, auto-connect on boot, Material 3 dark
 theme matching the web design system. See `mobile/android/README.md`
 for build/sign/F-Droid/Play submission.
 
-**iOS deliberately out of scope.** The QR-export path works for iOS
-users with the official WireGuard app from the App Store. Building a
-branded iOS app requires the Apple Developer Program ($99/yr), explicit
-Apple approval of the Network Extension entitlement, and App Store
-review for VPN apps — all of which are real money and weeks of process.
-Revisit after launch when revenue justifies it.
+**iOS: the app is written, and nothing has compiled it.** `mobile/ios/`
+is a complete SwiftUI client with its own WireGuardKit packet-tunnel
+extension, generated from `project.yml` by XcodeGen and built by
+`mobile/ios/build.sh`. There is no Swift toolchain in the environment
+it was written in and SwiftUI and NetworkExtension have no Linux SDK,
+so the first `xcodebuild` on a Mac is the real gate — expect to fix
+compile errors there. `build.sh --check` runs the parts that do not
+need a Mac.
+
+What stands between that and the App Store is not engineering: the
+Apple Developer Program ($99/yr, organisation enrolment, which needs a
+D-U-N-S number), Apple's approval of the `packet-tunnel-provider`
+entitlement — not self-serve, weeks, and refusable — and App Review
+under Guideline 5.4. Those are on the Day 1 list in `docs/LAUNCH.md`
+precisely because they are the longest lead item and they ship last.
+Until they land, the QR-export path into the official WireGuard app is
+the supported way onto iOS, and `web/download.html` says so rather than
+advertising an app nobody can install.
 
 ### 7. Warrant canary (`canary/`)
 

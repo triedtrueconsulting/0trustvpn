@@ -284,7 +284,7 @@ code {
     </div>
   </div>
 
-  <h2 id="android-sideload">Android will warn you too, and it is the same story.</h2>
+  <h2 id="android-sideload">Android: installing the APK</h2>
   <p class="callout">
     The <code>.apk</code> above installs directly, without going through Google
     Play. Android calls that installing from an unknown source: the first time
@@ -376,13 +376,21 @@ code {
     wrapper, and neither prints anything of its own.
   </p>
 
-  <h2>iOS &amp; Android</h2>
+  <h2>iPhone and iPad</h2>
   <p class="callout">
-    Native apps are in development. Until then, use <code>0trust export</code>
-    from the desktop binary to generate a QR code, then scan it from the
-    official <strong>WireGuard</strong> app on the App Store or Play Store
-    (or <a href="https://f-droid.org/en/packages/com.wireguard.android/">F-Droid</a>).
-    The desktop GUI has the same flow under <em>Add mobile device</em>.
+    <strong>There is no 0trustvpn app for iOS yet</strong>, and we would
+    rather say that than list one that does not exist. Apple requires a
+    special entitlement for apps that carry a VPN tunnel; it is not
+    self-serve, and until it is granted we cannot ship one.
+  </p>
+  <p class="callout">
+    iOS works today by a different route, with no obstacles at all: use
+    <code>0trust export</code> from the desktop client to produce a QR code
+    and scan it from the official <strong>WireGuard</strong> app on the App
+    Store. The desktop window has the same thing under
+    <em>Add mobile device</em>. You get the same tunnel, to the same node,
+    with the same keys — what you do not get is our interface around it, so
+    the region and multi-hop choices are made on the desktop when you export.
   </p>
 
   <h2>Verify before you run</h2>

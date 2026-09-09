@@ -54,7 +54,10 @@ mobile/android/                   Complete Kotlin/Compose app (wireguard-android
 mobile/ios/                       SwiftUI app + WireGuardKit packet-tunnel
                                   extension. project.yml (XcodeGen) generates
                                   the .xcodeproj; syntax-check.sh is a
-                                  STRUCTURAL check, not a compile.
+                                  STRUCTURAL check, not a compile. build.sh
+                                  archives and exports (--check runs off a Mac);
+                                  fetch-fonts.sh keeps the bundled faces and
+                                  the names Theme.swift asks for in step.
 installer/windows/                WiX v4 MSI (0trust.wxs), build.ps1,
                                   resources/make-icon.py -> the committed .ico
 installer/linux/deb/              build.sh → .deb (amd64+arm64), TESTED working
@@ -234,11 +237,32 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   **nothing has ever compiled it**: there is no Swift toolchain in the build
   environment and SwiftUI/NetworkExtension have no Linux SDK. Treat the first
   `xcodegen generate && xcodebuild` on a Mac as the real gate and expect to fix
-  compile errors there. Shipping it still needs the Apple Developer Program,
-  the `packet-tunnel-provider` entitlement (a request to Apple, weeks, can be
+  compile errors there. `mobile/ios/build.sh` is the release path (archive,
+  export, and a `--check` mode that runs the Mac-independent parts anywhere);
+  it carries the same "nobody has run this" warning for the same reason.
+  Shipping it still needs the Apple Developer Program, the
+  `packet-tunnel-provider` entitlement (a request to Apple, weeks, can be
   refused) and App Review. Until then QR-export into the official WireGuard app
   remains the supported iOS path, and the download page must not promise an
   iOS app that cannot be installed.
+  **There is no unsigned option on iOS**, which is the opposite of the Windows
+  decision — the MSI ships unsigned on purpose, and an iOS build that is not
+  signed by a paid team does not install at all. Never write a sideload
+  fallback into iOS copy. The `.ipa` also stays out of `releases/` and
+  SHA256SUMS: Apple re-signs what it distributes, so a published hash would
+  match nothing a customer can download.
+  **The five brand faces are committed under `0trust/Resources/`**, not left
+  as an operator step. `Font.custom` takes a PostScript name and substitutes
+  the system font when one does not resolve — no error, no log line — so a
+  rename in `Theme.swift`, a face missing from `UIAppFonts`, or a file whose
+  internal name is not its filename all ship an app that builds, connects and
+  looks wrong. `fetch-fonts.sh` names each file after the name read out of the
+  file itself and `--check` (wired into validate.sh as `ios-fonts`) proves the
+  three lists agree. Note also that `xcodegen generate` WRITES the Info.plist
+  at each target's `info.path`, so the tunnel's `NSExtension` block has to be
+  in `project.yml` as well as in the committed plist — without it, generating
+  the project destroys the declaration that makes the extension a packet
+  tunnel, and the app sits at "connecting" with nothing naming the cause.
 - **Design system:** warm-dark palette
   `--bg #0c0c0a  --ink #f4ede0  --amber #d4a574  --terra #c44536  --moss #7d8f5a  --line #2a2820`.
   Fonts: Instrument Serif (headings), JetBrains Mono (technical/labels),

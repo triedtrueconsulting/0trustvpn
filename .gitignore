@@ -29,6 +29,16 @@ mobile/android/.gradle/
 mobile/android/local.properties
 mobile/android/captures/
 
+# ─── iOS build artifacts ───
+# The .xcodeproj is GENERATED from project.yml by `xcodegen generate`. A
+# committed project.pbxproj conflicts on every branch and hides what changed;
+# project.yml is the reviewable source of the same information.
+mobile/ios/0trust.xcodeproj/
+mobile/ios/build/
+mobile/ios/DerivedData/
+mobile/ios/*.xcworkspace/
+**/xcuserdata/
+
 # ─── Installer outputs ───
 installer/linux/deb/out/
 installer/linux/appimage/out/

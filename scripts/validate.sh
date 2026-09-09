@@ -249,6 +249,14 @@ if bad:
 check swift-structure "Swift sources are structurally sound" -- \
     ./mobile/ios/syntax-check.sh
 
+# Font.custom does not fail on an unresolvable PostScript name — it quietly
+# substitutes the system font. So a rename in Theme.swift, a face missing from
+# UIAppFonts, or a file whose internal name is not what it is called on disk
+# all ship an app that builds, launches and connects and simply looks wrong.
+# This is the only thing that would catch it before a human noticed.
+check ios-fonts "bundled iOS faces are the ones the app asks for" -- \
+    ./mobile/ios/fetch-fonts.sh --check
+
 check json-parse "every .json parses" -- "$PY" -c '
 import json, os, sys
 bad = []

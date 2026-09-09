@@ -65,6 +65,44 @@ anything that looks like the server, and prints the exact edits afterwards:
       anything else.** Four of those keys cannot be replaced without telling
       every customer the old ones are dead.
 
+### Start the Apple clock — do this on Day 1 even though the app ships last
+
+Nothing here is engineering and none of it can be hurried, which is exactly
+why it belongs on the first day rather than the day you want to ship. The
+critical path is **weeks**, most of it spent waiting on other people, and
+every item below blocks the one under it.
+
+- [ ] **Enrol in the Apple Developer Program** — $99/yr. Enrol as the
+      **organisation**, not as an individual: App Review Guideline 5.4
+      requires a VPN app to be published by an organisation, and an
+      individual account cannot be converted after the fact without
+      re-submitting. Organisation enrolment needs a **D-U-N-S number** for
+      `0trust GmbH`; if the company does not have one, requesting it is free
+      and takes up to five business days on its own. This is the item that
+      ties the iOS app to the Handelsregister registration on Day 1 — the
+      legal name Apple verifies has to be the registered one.
+- [ ] **Request the Network Extension entitlement**
+      (`com.apple.developer.networking.networkextension`, `packet-tunnel-provider`).
+      It is **not self-serve**. You file a request describing what the app
+      does and wait; approval is measured in weeks and **can be refused**.
+      Until it is granted, the app cannot be built for distribution at all —
+      not to TestFlight, not to a device outside your own team.
+- [ ] **Register the App Group `group.vpn.zerotrust.app`** on the developer
+      portal and enable it on both `vpn.zerotrust.app` and
+      `vpn.zerotrust.app.tunnel`. If the two disagree, the app writes a
+      config the extension cannot read and `startTunnel` fails with "no
+      configuration" — which reads as a broken VPN, not as a provisioning
+      mistake.
+- [ ] **Nothing to buy, and nothing to decide, on signing.** Unlike the
+      Windows MSI — which ships unsigned on purpose because a certificate
+      costs money — iOS has no unsigned path at any price. The membership is
+      the signature and App Review is the only route to the public. Do not
+      plan a sideload fallback; there is not one.
+- [ ] **Until all of the above lands, the download page must keep saying
+      there is no iOS app.** It does today. Do not soften it in anticipation:
+      an App Store badge that 404s is the one kind of drift customers see
+      first.
+
 - [ ] **Bitcoin xpub** — the extended PUBLIC key of the wallet that receives
       payments. It is deliberately **not** committed anywhere in this repo: an
       xpub exposes the wallet's whole balance and transaction history to
@@ -450,6 +488,28 @@ RELEASE_SIGNER_KEY=<release-fpr> ./scripts/release.sh 0.1.0
 - [ ] Update the download page with the correct fingerprint (replace `DEADBEEF...`)
 - [ ] Test the public download flow end-to-end from a separate machine
 
+### iOS, if and only if the entitlement came through
+
+The `.ipa` is **not** part of the release above and never will be: Apple
+re-signs and re-packages what it distributes, so a SHA256SUMS entry for these
+bytes would match nothing any customer can download. It is built and uploaded
+separately.
+
+```bash
+cd mobile/ios
+./build.sh --check                                   # runs anywhere, do it first
+./build.sh --version 0.1.0 --build 1 --team <TEAMID> --export app-store
+```
+
+- [ ] Build to a **physical device** first and connect for real. The packet
+      tunnel does not run in the Simulator, so a clean Simulator build proves
+      nothing about the only hard part of this app.
+- [ ] Upload, then TestFlight to yourself before submitting.
+- [ ] In App Review's questions, expect: what is logged, who operates the
+      servers, and why the app collects no identity. `docs/AUDIT.md` is the
+      answer to all three — do not improvise one.
+- [ ] Only after it is live on the App Store, update `web/download.html`.
+
 ---
 
 ## Days 8-10 — Soft launch
@@ -511,11 +571,15 @@ RELEASE_SIGNER_KEY=<release-fpr> ./scripts/release.sh 0.1.0
 | BTCPay VPS (lite) | — | €8 |
 | Mesh nodes (3 × €4) | — | €12 |
 | Email (ProtonMail Business) | — | €11 |
+| Apple Developer Program (only if you ship the iOS app) | — | €8 (~$99/yr) |
 | Cure53 / Assured AB audit | €10k-30k once | — |
 | Operator time | (your call) | ~10 hr/week |
 
-Year 1 infrastructure: **€432**. Audit: **€10k-30k** (negotiable; can be
-delayed until you have revenue).
+Year 1 infrastructure: **€432**, or **€528** with the Apple membership.
+Audit: **€10k-30k** (negotiable; can be delayed until you have revenue).
+Nothing on this list is a code-signing certificate: the Windows MSI ships
+unsigned on purpose, the Android keystore is self-signed and free, and on
+iOS the membership above is the signature.
 
 Break-even at €8/month per customer (which is in the typical range for
 a privacy VPN): **~55 customers** covers infrastructure. **3000+ customers**
