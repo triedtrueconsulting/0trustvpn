@@ -80,6 +80,15 @@ func main() {
 			}
 		}
 		err = cmdConnect(region, exitRegion, killSwitch, obfuscate)
+	case "topup":
+		// --status takes an invoice id and only reports; it must never open
+		// a second invoice, which is what a customer checking on a payment
+		// would otherwise get.
+		if len(args) >= 2 && args[0] == "--status" {
+			err = cmdTopupStatus(args[1])
+		} else {
+			err = cmdTopup(args)
+		}
 	case "rotate":
 		err = cmdRotate()
 	case "devices":
@@ -146,6 +155,11 @@ COMMANDS
         [--no-obfuscate]         Turn that back off — the default
                                    region:  entry region (default: zur)
                                    --exit:  enable multi-hop; exit region
+  topup [months]                 Extend the subscription — 1, 3 or 12 months
+        [--currency BTC]           Pay in a specific coin, if this deployment
+                                     offers more than one
+        [--wait]                   Watch until the payment confirms
+        [--status <invoice>]       Check an invoice you already opened
   rotate                         Rotate to a fresh entry/exit pair
                                    (only meaningful for multi-hop)
   devices                        List devices registered on this account
@@ -164,6 +178,7 @@ COMMANDS
   version                        Print version
 
 EXAMPLES
+  0trust topup 3                      extend by three months
   0trust connect zur                  single-hop in Switzerland
   0trust connect zur --exit buc       multi-hop: zur entry → buc exit
   0trust rotate                       refresh the multi-hop pair

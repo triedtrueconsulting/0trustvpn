@@ -9,7 +9,7 @@ tests, so this is where its wiring gets proven.
 
 Skips (77) without Playwright or a browser.
 """
-import glob, os, re, shutil, signal, socket, subprocess, sys, time
+import glob, os, re, shutil, signal, socket, sqlite3, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -457,6 +457,57 @@ try:
               page.inner_text("#notices"))
         check("and the banner hides itself again",
               not page.is_visible("#notices"))
+
+        print("\n[6c] the customer can act on the renewal notice")
+        # [6a] proved the warning ARRIVES. It said "top up", and the window
+        # offered no way to. A notice a customer cannot act on from the
+        # surface it appears on is half a feature.
+        page.click("#topup-btn")
+        page.wait_for_selector("#topup-panel:not(.hidden)", timeout=15000)
+        terms = page.inner_text("#topup-terms")
+        # inner_text returns what is RENDERED, and the stylesheet uppercases
+        # buttons — so this compares case-insensitively rather than against
+        # the case in the source.
+        check("the terms on offer are shown",
+              "month" in terms.lower() and "$" in terms, terms)
+        # They must come from PRICING, not from a constant in the page. Read
+        # the live config and require every term to appear.
+        import json as _json, urllib.request as _u
+        cfg = _json.loads(_u.urlopen(H.API + "/api/v1/config", timeout=10).read())
+        pricing = cfg.get("pricing") or []
+        check("the control plane publishes its pricing", bool(pricing), cfg.keys())
+        missing = [p for p in pricing
+                   if f"${p['usd']:g}" not in terms.replace(".00", "")]
+        check("every term the API sells is offered, at the API's price",
+              not missing,
+              f"{missing} absent from {terms!r} — a price written into a "
+              "client is bug class #11, and here it is money")
+
+        n_before = int(sqlite3.connect(DB).execute(
+            "SELECT COUNT(*) FROM invoices").fetchone()[0])
+        page.click("#topup-terms button")
+        page.wait_for_selector("#topup-detail:not(.hidden)", timeout=20000)
+        addr = page.input_value("#topup-address")
+        check("an address to pay is shown", len(addr) > 10, addr)
+        check("with the amount to send", "$" in page.inner_text("#topup-amount"),
+              page.inner_text("#topup-amount"))
+        n_after = int(sqlite3.connect(DB).execute(
+            "SELECT COUNT(*) FROM invoices").fetchone()[0])
+        check("exactly one invoice was opened", n_after == n_before + 1,
+              f"{n_before} -> {n_after}")
+
+        # Closing must not cancel a payment in flight, and the panel must say
+        # so — somebody who sent coins and closed the window has still paid.
+        check("the panel says closing does not cancel the payment",
+              "does not cancel" in page.inner_text("#topup-note"),
+              page.inner_text("#topup-note"))
+        page.click("#topup-close")
+        page.wait_for_timeout(500)
+        check("closing hides the panel", not page.is_visible("#topup-panel"))
+        n_end = int(sqlite3.connect(DB).execute(
+            "SELECT COUNT(*) FROM invoices").fetchone()[0])
+        check("and opens no further invoice", n_end == n_after,
+              f"{n_after} -> {n_end}")
 
         print("\n[6b] every dialog is actually a dialog")
         # The Devices dialog was marked up as .modal-box and the stylesheet

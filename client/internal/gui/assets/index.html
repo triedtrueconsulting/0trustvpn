@@ -42,6 +42,7 @@
       <p id="trial-err" class="error hidden"></p>
       <p class="hint">Already paid? <a href="https://0trustvpn.com" target="_blank">0trustvpn.com →</a></p>
     </div>
+
   </section>
 
   <!-- LOGGED-IN VIEW -->
@@ -116,11 +117,32 @@
       </div>
       <p class="hint" id="ob-hint"></p>
       <div class="btn-row">
+        <button id="topup-btn" class="btn-ghost">Extend subscription</button>
         <button id="devices-btn" class="btn-ghost">Manage devices</button>
         <button id="export-btn" class="btn-ghost">Add mobile device</button>
         <button id="logout-btn" class="btn-ghost danger">Sign out</button>
       </div>
     </div>
+
+  <div id="topup-panel" class="card hidden">
+    <h3>Extend your subscription</h3>
+    <p class="hint">Months you add stack on top of what you have — nothing is
+      lost by paying early.</p>
+    <div class="btn-row" id="topup-terms"></div>
+    <div id="topup-detail" class="hidden">
+      <p class="hint" id="topup-amount"></p>
+      <label class="k">Send to</label>
+      <input id="topup-address" class="mono" readonly>
+      <p class="hint" id="topup-note">Send the exact amount. Your account
+        extends on confirmation — there is nothing to click afterwards, and
+        closing this window does not cancel it.</p>
+      <p class="hint mono" id="topup-status"></p>
+    </div>
+    <p id="topup-err" class="error hidden"></p>
+    <div class="btn-row">
+      <button id="topup-close" class="btn-ghost">Close</button>
+    </div>
+  </div>
 
   </section>
 

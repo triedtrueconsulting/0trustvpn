@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Drive the REAL compiled 0trust binary against the live stack."""
-import json, os, shutil, sqlite3, subprocess, sys
+import json, os, re, shutil, sqlite3, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -231,6 +231,59 @@ try:
     print("\n[9] error paths")
     rc, out = cli("login", stdin="AAAA-BBBB-CCCC-DDDD\n")
     check("bogus token rejected at login", rc != 0 or "401" in out or "Invalid" in out, out)
+    print("\n[10] topup — the command the service tells every customer to run")
+    # The bogus-token login above left this client logged out; log the real
+    # account back in before asking it to pay for anything.
+    rc, out = cli("login", stdin=token + "\n")
+    check("logged back in for the payment checks", rc == 0, out[-200:])
+    # api/sweep.py's renewal warning and expiry notice both say
+    # `0trust topup`, and web/trial.html advertises it. The command did not
+    # exist. Every customer approaching expiry was given one instruction, at
+    # the moment they were trying to hand over money, and it was wrong.
+    rc, out = cli("topup")
+    check("topup with no months explains rather than erroring blankly",
+          "how many months" in out, out[-300:])
+
+    rc, out = cli("topup", "1")
+    check("topup opens an invoice", rc == 0 and "invoice" in out.lower(),
+          out[-500:])
+    check("and prints an amount that matches PRICING",
+          "$5.00" in out, out[-400:] + "\n  the CLI must not quote a price the "
+          "API does not charge")
+    check("it shows the current expiry so a customer can see months STACK",
+          "stack on top" in out, out[-400:])
+    m = re.search(r"invoice (\S+) —", out)
+    check("the invoice id is printed so it can be checked later", bool(m), out[-300:])
+    check("and an address to pay is shown, not just a URL",
+          "address" in out.lower(), out[-500:])
+
+    if m:
+        inv = m.group(1)
+        rc, out2 = cli("topup", "--status", inv)
+        check("--status reports that invoice", rc == 0 and inv in out2, out2[-300:])
+        # The sharp one: a customer checking on a payment must not open a
+        # SECOND invoice by doing so.
+        before = int(sqlite3.connect(DB).execute(
+            "SELECT COUNT(*) FROM invoices").fetchone()[0])
+        cli("topup", "--status", inv)
+        after = int(sqlite3.connect(DB).execute(
+            "SELECT COUNT(*) FROM invoices").fetchone()[0])
+        check("checking status does NOT open another invoice", before == after,
+              f"{before} -> {after}")
+
+    # An unpaid top-up must not extend anything.
+    exp_before = sqlite3.connect(DB).execute(
+        "SELECT expires_at FROM accounts ORDER BY id DESC LIMIT 1").fetchone()[0]
+    cli("topup", "12")
+    exp_after = sqlite3.connect(DB).execute(
+        "SELECT expires_at FROM accounts ORDER BY id DESC LIMIT 1").fetchone()[0]
+    check("opening an invoice does not extend the account before payment",
+          exp_before == exp_after, f"{exp_before} -> {exp_after}")
+
+    # The help has to name it, or nobody finds it from the terminal.
+    rc, out = cli("help")
+    check("help documents topup", "topup" in out, out[-400:])
+
 finally:
     H.shutdown()
     tail = f", {len(SKIP)} skipped" if SKIP else ""

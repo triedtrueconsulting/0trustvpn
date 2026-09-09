@@ -544,6 +544,111 @@ $('devices-close').addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Extend subscription
+// ---------------------------------------------------------------------------
+//
+// The renewal warning reaches the customer here — this window is the only
+// place a notice is shown on desktop — and until now there was nothing to do
+// about it from here. The terms and prices are read from /api/config, never
+// written into this file: the same constant copied into four clients is how
+// the device cap came to be wrong in three of them.
+
+let topupPoll = null;
+
+function stopTopupPoll() {
+  if (topupPoll) { clearInterval(topupPoll); topupPoll = null; }
+}
+
+$('topup-btn').addEventListener('click', async () => {
+  const panel = $('topup-panel'), terms = $('topup-terms');
+  $('topup-err').classList.add('hidden');
+  $('topup-detail').classList.add('hidden');
+  terms.textContent = '';
+  panel.classList.remove('hidden');
+
+  let pricing = [];
+  try {
+    const cfg = await (await fetch('/api/config')).json();
+    pricing = (cfg && cfg.pricing) || [];
+  } catch (e) { /* handled below */ }
+
+  if (!pricing.length) {
+    // No invented fallback. A wrong price here is a customer sending the
+    // wrong amount, and the invoice is what decides it anyway.
+    $('topup-err').textContent =
+      'Could not reach the control plane for current prices. Try again, ' +
+      'or renew on the website with the same account token.';
+    $('topup-err').classList.remove('hidden');
+    return;
+  }
+  for (const t of pricing) {
+    const b = document.createElement('button');
+    b.className = 'btn-ghost';
+    b.textContent = `${t.months} month${t.months === 1 ? '' : 's'} — $${t.usd}`;
+    b.addEventListener('click', () => openInvoice(t.months, b));
+    terms.appendChild(b);
+  }
+});
+
+async function openInvoice(months, btn) {
+  const err = $('topup-err'), detail = $('topup-detail');
+  err.classList.add('hidden');
+  // Disable every term while one is in flight. Two clicks here is two
+  // invoices, and the customer pays whichever they happen to send to.
+  const all = [...$('topup-terms').querySelectorAll('button')];
+  all.forEach(b => b.disabled = true);
+  btn.textContent = 'opening…';
+  try {
+    const r = await api('/api/topup', {
+      method: 'POST', body: JSON.stringify({ months }),
+    });
+    const m = (r.methods && r.methods[0]) || null;
+    $('topup-amount').textContent = m && m.amount
+      ? `Send ${m.amount} ${m.currency}  ($${r.amount_usd} for ${months} month${months === 1 ? '' : 's'})`
+      : `$${r.amount_usd} for ${months} month${months === 1 ? '' : 's'}`;
+    if (m && m.address) {
+      $('topup-address').value = m.address;
+      $('topup-address').classList.remove('hidden');
+    } else if (r.checkout_url) {
+      $('topup-address').value = r.checkout_url;
+    } else {
+      throw new Error('this deployment returned no way to pay');
+    }
+    detail.classList.remove('hidden');
+    $('topup-status').textContent = 'waiting for payment…';
+    stopTopupPoll();
+    topupPoll = setInterval(() => pollInvoice(r.invoice_id), 20000);
+    pollInvoice(r.invoice_id);
+  } catch (e) {
+    err.textContent = e.message;
+    err.classList.remove('hidden');
+  } finally {
+    all.forEach(b => b.disabled = false);
+    btn.textContent = `${months} month${months === 1 ? '' : 's'}`;
+  }
+}
+
+async function pollInvoice(id) {
+  try {
+    const s = await (await fetch(
+      '/api/topup/status?invoice=' + encodeURIComponent(id))).json();
+    const settled = /settled|paid|complete/i.test(s.status || '');
+    $('topup-status').textContent = settled
+      ? 'paid — your account has been extended'
+      : (s.required
+          ? `${s.status} (${s.confirmations}/${s.required} confirmations)`
+          : String(s.status || 'waiting'));
+    if (settled) { stopTopupPoll(); await refresh(); }
+  } catch (e) { /* transient; the next tick tries again */ }
+}
+
+$('topup-close').addEventListener('click', () => {
+  // Stopping the poll does NOT cancel the invoice, and the panel says so.
+  stopTopupPoll();
+  $('topup-panel').classList.add('hidden');
+});
+
+// ---------------------------------------------------------------------------
 // DPI protection (obfuscation)
 // ---------------------------------------------------------------------------
 

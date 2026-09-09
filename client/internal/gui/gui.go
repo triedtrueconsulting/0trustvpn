@@ -107,6 +107,8 @@ func Serve(openBrowser bool) error {
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/killswitch", handleKillSwitch)
 	mux.HandleFunc("/api/obfuscate", handleObfuscate)
+	mux.HandleFunc("/api/topup", handleTopup)
+	mux.HandleFunc("/api/topup/status", handleTopupStatus)
 
 	srv := &http.Server{
 		Addr:         ListenAddr,
@@ -935,6 +937,85 @@ func handleKillSwitch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"ok": true, "kill_switch": st.KillSwitch,
 		"applies": "next connect",
+	})
+}
+
+// handleTopup opens an invoice that extends the account.
+//
+// Every surface showed the renewal warning and none of them could act on it:
+// the notice said to run `0trust topup`, which did not exist, and the window
+// offered nothing at all. A customer who saw "your subscription ends in three
+// days" in this app had no way to do anything about it from here.
+func handleTopup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, "POST only")
+		return
+	}
+	var body struct {
+		Months   int    `json:"months"`
+		Currency string `json:"currency"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		writeErr(w, 400, "malformed request")
+		return
+	}
+	st, err := config.Load()
+	if err != nil || st.Token == "" {
+		writeErr(w, 401, "not logged in")
+		return
+	}
+	c := api.New(st.APIBase, st.Token)
+	inv, err := c.Topup(api.TopupReq{Months: body.Months, Currency: body.Currency})
+	if err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	// The invoice exists either way; a failure to render the payment details
+	// must not read as a failure to create it, or the customer opens another.
+	methods, mErr := c.PaymentMethods(inv.InvoiceID)
+	out := map[string]any{
+		"ok": true, "invoice_id": inv.InvoiceID,
+		"amount_usd": inv.AmountUSD, "checkout_url": inv.CheckoutURL,
+	}
+	if mErr == nil {
+		out["methods"] = methods.Methods
+		if methods.CheckoutURL != "" {
+			out["checkout_url"] = methods.CheckoutURL
+		}
+	} else {
+		out["methods_error"] = mErr.Error()
+	}
+	invalidateStatus()
+	writeJSON(w, 200, out)
+}
+
+// handleTopupStatus polls one invoice. Separate from handleTopup so that
+// checking on a payment cannot open a second one — the mistake is easy to
+// make and costs the customer real money to unmake.
+func handleTopupStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("invoice")
+	if id == "" {
+		writeErr(w, 400, "invoice required")
+		return
+	}
+	st, err := config.Load()
+	if err != nil || st.Token == "" {
+		writeErr(w, 401, "not logged in")
+		return
+	}
+	s, err := api.New(st.APIBase, st.Token).PaymentStatus(id)
+	if err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	// A settled invoice changes the account's expiry, and the status card
+	// caches for a minute — drop it so the page shows the new date.
+	if strings.EqualFold(s.Status, "settled") || strings.EqualFold(s.Status, "paid") {
+		invalidateStatus()
+	}
+	writeJSON(w, 200, map[string]any{
+		"status": s.Status, "confirmations": s.Confirmations,
+		"required": s.Required,
 	})
 }
 

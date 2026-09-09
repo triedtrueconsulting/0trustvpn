@@ -902,6 +902,14 @@ def public_config() -> dict:
         # depth this deployment chooses.
         "confirmations": payments.confirmations_for(prov),
         "takes_cards": payments.is_card_provider(prov),
+        # The terms on offer and what each costs, straight from PRICING.
+        # Published because a client that renders a price has to get it from
+        # somewhere, and the alternative is the same constant written down in
+        # the CLI, the desktop window and two apps — bug class #11, which has
+        # already shipped three times with the device cap. The landing page
+        # still carries its own copy in data-price attributes for the
+        # no-JavaScript case, and test_site.py ties those to PRICING.
+        "pricing": [{"months": m, "usd": PRICING[m]} for m in sorted(PRICING)],
         "mesh_network": MESH_NETWORK,
         # Whether ANY live node actually runs the obfuscation relay. Read
         # from mesh_nodes, not from a setting, so a page cannot advertise a

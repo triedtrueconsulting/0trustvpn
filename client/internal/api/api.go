@@ -211,6 +211,75 @@ type Device struct {
 	ExitNode   string `json:"exit_node"`
 }
 
+// TopupReq opens another invoice against the account this client holds.
+type TopupReq struct {
+	Months int `json:"months"`
+	// Empty asks the control plane for its default coin. Naming one this
+	// deployment cannot issue an address for is refused server-side rather
+	// than sending the customer to an address that does not exist.
+	Currency string `json:"currency,omitempty"`
+}
+
+// TopupResp is the same shape as signup, minus the token: a top-up never
+// mints one, because the caller already holds theirs and the control plane
+// does not store it in a form it could echo back.
+type TopupResp struct {
+	InvoiceID   string  `json:"invoice_id"`
+	CheckoutURL string  `json:"checkout_url"`
+	AmountUSD   float64 `json:"amount_usd"`
+}
+
+// PayMethod is one way to pay an invoice.
+type PayMethod struct {
+	Currency string `json:"currency"`
+	Address  string `json:"address"`
+	Amount   string `json:"amount"`
+	// URI is the wallet-app link. Worth preferring over the bare address:
+	// it carries the amount, and the amount is the half a customer gets
+	// wrong when retyping.
+	URI string `json:"uri"`
+}
+
+type PayMethods struct {
+	Methods     []PayMethod `json:"methods"`
+	CheckoutURL string      `json:"checkout_url"`
+}
+
+// PayStatus is the invoice's settlement state.
+type PayStatus struct {
+	Status        string `json:"status"`
+	Confirmations int    `json:"confirmations"`
+	Required      int    `json:"required"`
+}
+
+// Topup opens an invoice that extends this account.
+func (c *Client) Topup(req TopupReq) (*TopupResp, error) {
+	var out TopupResp
+	if err := c.do("POST", "/api/v1/account/topup", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PaymentMethods lists how to pay an invoice. No auth: the invoice id is the
+// only secret needed, which is why nothing may log the path it appears in.
+func (c *Client) PaymentMethods(invoiceID string) (*PayMethods, error) {
+	var out PayMethods
+	if err := c.do("GET", "/api/v1/payment/"+invoiceID+"/methods", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PaymentStatus polls an invoice.
+func (c *Client) PaymentStatus(invoiceID string) (*PayStatus, error) {
+	var out PayStatus
+	if err := c.do("GET", "/api/v1/payment/"+invoiceID+"/status", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) Devices() ([]Device, error) {
 	var d []Device
 	return d, c.do("GET", "/api/v1/devices", nil, &d)
