@@ -21,6 +21,10 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [ValidateSet("x64", "arm64")][string[]]$Arch = @("x64"),
     [string]$SignWith = "",
+    # Acknowledge that shipping unsigned is the intent, not an oversight.
+    # Without it an unsigned build still ends in a red warning, because for
+    # most people reaching that line it IS an oversight.
+    [switch]$UnsignedOnPurpose,
     [string]$TimestampUrl = "http://timestamp.digicert.com"
 )
 
@@ -110,6 +114,32 @@ foreach ($f in $built) {
 }
 if (-not $SignWith) {
     Write-Host ""
-    Write-Host "UNSIGNED. Do not ship these. Re-run with -SignWith '<cert subject>'." `
-               -ForegroundColor Red
+    if ($UnsignedOnPurpose) {
+        # A deliberate choice, so say what it costs rather than calling it a
+        # mistake. The consequence is real and lands on the customer, not on
+        # whoever built this.
+        Write-Host "UNSIGNED, deliberately." -ForegroundColor Yellow
+        Write-Host "  Customers will see SmartScreen block the download, and" `
+                   -ForegroundColor Yellow
+        Write-Host "  'Windows protected your PC / Unknown publisher' on first run." `
+                   -ForegroundColor Yellow
+        Write-Host "  web/download.html explains that to them and points at the" `
+                   -ForegroundColor Yellow
+        Write-Host "  PGP-signed checksums instead. Keep those two in step: if this" `
+                   -ForegroundColor Yellow
+        Write-Host "  ever IS signed, that page must stop apologising for it." `
+                   -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  Still sign SHA256SUMS with the release PGP key —" -ForegroundColor Yellow
+        Write-Host "  scripts/release.sh does it, and it is the only integrity" `
+                   -ForegroundColor Yellow
+        Write-Host "  check a customer has left." -ForegroundColor Yellow
+    } else {
+        Write-Host "UNSIGNED. Do not ship these unless that is a decision you have" `
+                   -ForegroundColor Red
+        Write-Host "made on purpose — re-run with -SignWith '<cert subject>', or" `
+                   -ForegroundColor Red
+        Write-Host "with -UnsignedOnPurpose if you know what it costs the customer." `
+                   -ForegroundColor Red
+    }
 }

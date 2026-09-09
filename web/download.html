@@ -284,6 +284,38 @@ code {
     </div>
   </div>
 
+  <h2 id="windows-warning">Windows will warn you. Here is why, and what to check.</h2>
+  <p class="callout">
+    Our Windows installer is <strong>not signed with a commercial code-signing
+    certificate</strong>. So when you download it, SmartScreen will say it is
+    not commonly downloaded, and when you run it Windows will show a blue
+    &ldquo;Windows protected your PC&rdquo; box with <em>Unknown publisher</em>.
+    You get past it with <strong>More info &rarr; Run anyway</strong>.
+  </p>
+  <p class="callout">
+    We would rather tell you that here than have you meet it unexpectedly and
+    wonder what you have downloaded. Those certificates cost several hundred
+    dollars a year and are issued to a company identity — what they prove is
+    that a certificate authority took someone's money and checked a company
+    registration. They do not tell you the file is the one we built.
+  </p>
+  <p class="callout">
+    <strong>The check that does tell you that is below</strong>, and it is
+    stronger: every release is published with SHA-256 checksums signed with our
+    PGP key. That verifies the exact bytes we produced, from a key you can
+    check against our
+    <a href="/.well-known/security.txt">security.txt</a>, our warrant canary
+    and our onion mirror — not against a payment to a certificate authority.
+    It is the same way Tor Browser and other privacy tools are verified, and
+    we recommend you actually do it rather than clicking through.
+  </p>
+  <p class="callout">
+    If clicking past a scary warning is not something you are willing to do —
+    which is a reasonable position — the raw <code>.exe</code> behaves the
+    same way, and the honest alternative is to wait until we publish a signed
+    build. We will say so on this page when that changes.
+  </p>
+
   <h2>Running the AppImage</h2>
   <p class="callout">
     An AppImage is a single file: make it executable and run it. No installer,

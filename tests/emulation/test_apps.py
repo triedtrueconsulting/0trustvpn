@@ -458,6 +458,44 @@ try:
         check("the download page links the file the build produces",
               offered == expected, f"page offers {offered}, build writes {expected}")
 
+    print("\n[8] the unsigned-Windows decision, and the page that carries it")
+    # 0trust ships the MSI without an Authenticode certificate. That is a
+    # decision, not an oversight — but it lands on the customer as a
+    # SmartScreen block and an "Unknown publisher" box, and a privacy product
+    # that lets people meet that unprepared has taught them to click through
+    # scary warnings. So the page has to say it BEFORE they download.
+    dl = open(os.path.join(H.REPO, "web", "download.html")).read()
+    low = dl.lower()
+    check("the download page warns Windows users before they download",
+          "smartscreen" in low and "unknown publisher" in low,
+          "an unexplained warning on first run is how customers learn to "
+          "ignore the ones that matter")
+    check("and tells them how to get past it",
+          "run anyway" in low, dl[:200])
+    check("and points at the check that DOES prove the bytes",
+          "checksums signed with our pgp key" in low
+          or ("pgp" in low and "checksum" in low),
+          "with no code signature the PGP-signed SHA256SUMS is the only "
+          "integrity check a customer has left")
+
+    # The two must move together. If the MSI is ever signed, this page has to
+    # stop apologising for a warning that no longer appears — that is
+    # claim-vs-reality drift in the other direction, and nothing else would
+    # catch it.
+    build = open(os.path.join(H.REPO, "installer", "windows", "build.ps1")).read()
+    apologises = "smartscreen" in low
+    has_ack = "-UnsignedOnPurpose" in build or "UnsignedOnPurpose" in build
+    check("build.ps1 has a way to say unsigned was deliberate", has_ack,
+          "otherwise every build ends in a red 'do not ship', which is right "
+          "for an accident and wrong for a decision")
+    check("and it still shouts by default, for whoever did NOT mean it",
+          "Do not ship these unless" in build, build[-400:])
+    check("the page's warning and the unsigned build agree with each other",
+          apologises,
+          "download.html no longer warns about SmartScreen. If the MSI is now "
+          "signed that is correct — delete this check with it. If it is not, "
+          "customers meet the warning with no explanation.")
+
 finally:
     H.shutdown()
 

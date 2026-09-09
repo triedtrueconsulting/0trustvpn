@@ -71,9 +71,37 @@ The output `0trust-0.1.0-x64.msi` (~6-7 MB) is now installable. It's
 unsigned at this point — Windows SmartScreen will throw a warning on first
 launch. Sign it before distributing.
 
-## Sign
+## Sign — or decide not to, deliberately
 
-You need a **code-signing certificate**. Options:
+Signing is optional in the mechanical sense and consequential in every other.
+**Unsigned is a legitimate choice** (0trust ships unsigned as of this writing)
+but it is a choice about what your customers experience, so make it knowingly:
+
+- SmartScreen blocks the download until they click through "Keep anyway".
+- First run shows the blue "Windows protected your PC" box with
+  **Unknown publisher**; they need "More info → Run anyway".
+- It does not improve over time. SmartScreen reputation attaches to the
+  signing certificate, and for unsigned files to the exact file hash — which
+  changes with every release, so the warning resets each time.
+
+If you ship unsigned, build with `-UnsignedOnPurpose` (the script otherwise
+ends in a red "do not ship" warning, which is the right default for everyone
+who did not mean it), and make sure `web/download.html` tells customers what
+they will see and points them at the PGP-signed checksums instead. That page
+currently does. **If you later start signing, that section has to go** —
+apologising for a warning that no longer appears is claim-vs-reality drift in
+the other direction.
+
+The PGP signature over `SHA256SUMS` is a different thing and is NOT optional.
+It is what lets a customer verify the bytes are the ones you built, and with
+no Authenticode signature it is the only integrity check they have left.
+`scripts/release.sh` produces it and `preflight.sh`'s `installers-signed` gate
+is about that signature, not about Authenticode — so it still passes on an
+unsigned MSI.
+
+### If you do want a certificate
+
+Options:
 
 | Provider | Approx. cost | Notes |
 |----------|--------------|-------|
@@ -82,8 +110,18 @@ You need a **code-signing certificate**. Options:
 | SSL.com (cheaper alternative) | $200-500/yr | Same trust chain, fewer brand expectations |
 | Sectigo OV | $200/yr | Cheapest viable option |
 
-EV is the right choice for a privacy product where customers checking the
-publisher field is part of the trust model.
+There is also **Azure Trusted Signing** at roughly $10/month, which is an
+order of magnitude cheaper than the table above — Microsoft's own service,
+same SmartScreen trust. The catch is identity validation: organisations
+generally need three years of verifiable history, which a newly registered
+GmbH does not have. Worth checking before assuming the prices above are the
+floor.
+
+EV gives immediate SmartScreen trust and is the strongest option for a
+privacy product where customers checking the publisher field is part of the
+trust model — but note what it actually proves: that a certificate authority
+verified a company registration and took payment. It does not prove the file
+is the one you built. The PGP signature does.
 
 Once you have the cert:
 
