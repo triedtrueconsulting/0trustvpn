@@ -800,6 +800,25 @@ code, actively check for them:
    turns on a property of the input, construct an input that has it (and one
    that doesn't) instead of hoping the draw covers it. Same family as #10:
    green locally, red on a runner, for a reason the test never states.
+14b. **A verifier that fails on the normal case is one people stop running.**
+   `verify-release.sh` ran `sha256sum -c SHA256SUMS`, which checks every file
+   the manifest names — and a customer downloads ONE binary, for their own
+   platform. So the documented default reported "one or more files don't match
+   SHA256SUMS" on an ordinary, untampered download, the absent platforms being
+   the only cause; that message reads as tampering. download.html walked the
+   reader through exactly that one-binary session and then showed
+   "[✓] all files match SHA256SUMS", output the session could never produce.
+   Absent and altered are separate findings now and are worded so. The same
+   script printed "VERIFIED. Safe to run." and exited 0 while `EXPECTED_KEY`
+   was still the DEADBEEF placeholder — check 3 of the three it advertises
+   could not run, and it reported a pass; it exits 2 now and says what was and
+   was not established. It also requires a full 40-character fingerprint:
+   comparing a suffix of whatever length happened to be pinned made the
+   strength of the check a matter of typing. `test_release.py` [4b]–[4e] runs
+   all of it, including tying the page's quoted output to strings the script
+   can actually print — the tests previously asserted `rc == 0` and
+   "all N files match", which was encoding the bug.
+
 14. **Ops tooling nothing has ever executed.** Everything under `scripts/`,
    `canary/` and `btcpay/` runs once, on the day it matters, on a box the
    operator is standing at. Rehearsing the launch path end to end found
