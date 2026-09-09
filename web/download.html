@@ -284,6 +284,28 @@ code {
     </div>
   </div>
 
+  <h2 id="android-sideload">Android will warn you too, and it is the same story.</h2>
+  <p class="callout">
+    The <code>.apk</code> above installs directly, without going through Google
+    Play. Android calls that installing from an unknown source: the first time
+    you open the file, it will refuse and offer you a settings screen where you
+    allow your browser (or your file manager) to install apps. After that the
+    install proceeds normally.
+  </p>
+  <p class="callout">
+    The APK <em>is</em> signed — Android will not install one that is not — but
+    with our own key rather than one issued by anybody. That signature is what
+    ties every future update to the same publisher; it is not a statement by
+    Google about who we are. As on Windows, the check worth doing is the
+    <strong>PGP-signed checksum below</strong>.
+  </p>
+  <p class="callout">
+    <strong>Write your account token down before you install.</strong> It is
+    the only credential this service has and we cannot recover it — there is no
+    email address on your account to send a reset to. Keep it somewhere that
+    survives you uninstalling the app.
+  </p>
+
   <h2 id="windows-warning">Windows will warn you. Here is why, and what to check.</h2>
   <p class="callout">
     Our Windows installer is <strong>not signed with a commercial code-signing

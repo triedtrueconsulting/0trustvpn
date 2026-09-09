@@ -458,6 +458,31 @@ try:
         check("the download page links the file the build produces",
               offered == expected, f"page offers {offered}, build writes {expected}")
 
+    print("\n[7b] sideloading Android, and the token that cannot be recovered")
+    dl_a = open(os.path.join(H.REPO, "web", "download.html")).read().lower()
+    check("the page prepares people for the unknown-sources refusal",
+          "unknown source" in dl_a and "install apps" in dl_a,
+          "the APK link is right there and Android refuses the first attempt; "
+          "an unexplained refusal reads as a broken download")
+    # The sharpest one, and specific to this product: the account token is
+    # unrecoverable by design, so a forced uninstall is not an inconvenience.
+    check("and tells them to write the token down BEFORE installing",
+          "write your account token down" in dl_a,
+          "the token is the only credential and nobody can recover it — not "
+          "even the operator. Uninstalling the app destroys it, and an "
+          "Android update signed with a different key forces exactly that.")
+    # The keystore is what makes that risk real, so the launch checklist has
+    # to name it — generate-keys.sh does not produce it.
+    launch = open(os.path.join(H.REPO, "docs", "LAUNCH.md")).read().lower()
+    check("the launch checklist names the Android keystore",
+          "keystore" in launch and "keytool" in launch,
+          "generate-keys.sh does not make this one — it comes from the JDK, "
+          "and nothing listed it")
+    check("and says what losing it costs the CUSTOMER",
+          "account token" in launch and "uninstall" in launch,
+          "losing it is not just an ops inconvenience: customers would have "
+          "to uninstall to update, and that destroys their account")
+
     print("\n[8] the unsigned-Windows decision, and the page that carries it")
     # 0trust ships the MSI without an Authenticode certificate. That is a
     # decision, not an oversight — but it lands on the customer as a

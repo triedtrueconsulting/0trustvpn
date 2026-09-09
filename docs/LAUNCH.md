@@ -45,9 +45,25 @@ anything that looks like the server, and prints the exact edits afterwards:
 - [ ] **Support/security PGP key** — publish via WKD (`support/scripts/generate-key.sh`)
 - [ ] **Age key for backups** — the PUBLIC half goes on the control plane; the
       private half never does. It is the only thing that can read a backup.
-- [ ] **Back up `~/.0trust-keys` offline before doing anything else.** Three of
-      those keys cannot be replaced without telling every customer the old ones
-      are dead.
+- [ ] **Android upload keystore** — `generate-keys.sh` does NOT make this one;
+      it comes from the JDK, and it is the key Android identifies your app by.
+
+      ```bash
+      keytool -genkey -v -keystore zerotrust-upload.jks -alias 0trust \
+              -keyalg RSA -keysize 4096 -validity 10000
+      ```
+
+      Free, self-signed, no certificate authority — nothing to buy, unlike the
+      Windows situation. **Losing it is the worst key loss on this list**, and
+      it is worse here than for most apps: Android refuses an update signed by
+      a different key, so customers would have to uninstall to take one — and
+      uninstalling destroys the account token, which by design nobody can
+      recover, not even you. A lost keystore can therefore cost customers the
+      accounts they paid for. Back it up with the rest, in more than one place.
+
+- [ ] **Back up `~/.0trust-keys` AND the Android keystore offline before doing
+      anything else.** Four of those keys cannot be replaced without telling
+      every customer the old ones are dead.
 
 - [ ] **Bitcoin xpub** — the extended PUBLIC key of the wallet that receives
       payments. It is deliberately **not** committed anywhere in this repo: an
