@@ -864,6 +864,98 @@ try:
           f"{fmt or zones[:200]!r} — if this ever logs the full address, the "
           "jail decision above is worth revisiting")
 
+    print("\n[3d] the installer asks for what it was not given")
+    # The interactive path is the one an operator actually meets on a fresh
+    # VPS, and until now nothing had executed a single line of it. ZTV_INTERACTIVE
+    # is the seam that makes it drivable with a pipe — without it this would
+    # be the part of the installer that only ever runs on somebody's real box
+    # at the worst possible moment, which is bug class #14.
+    def interactive(answers, *args, env=None):
+        return subprocess.run(
+            ["bash", INSTALL, "--dry-run", *args],
+            input="".join(a + "\n" for a in answers),
+            capture_output=True, text=True, timeout=300,
+            env={**os.environ, "TERM": "dumb", "ZTV_INTERACTIVE": "always",
+                 **(env or {})})
+
+    # THE ONE THAT MATTERS MOST: no terminal must mean no questions. cloud-init
+    # and CI run this with stdin closed, and a read() there either takes an
+    # empty answer or blocks the boot forever. Both are worse than the error.
+    r = subprocess.run(["bash", INSTALL, "--dry-run"], stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=120,
+                       env={**os.environ, "TERM": "dumb"})
+    out = r.stdout + r.stderr
+    check("with no terminal it does not ask, it says which flag is missing",
+          "--mode must be" in out and "not a terminal" in out,
+          out[-400:] + "\n  a prompt here blocks a cloud-init boot forever")
+    check("and it terminates rather than waiting", r.returncode != 0, r.returncode)
+
+    r = subprocess.run(["bash", INSTALL, "--dry-run", "--non-interactive"],
+                       input="node\n", capture_output=True, text=True, timeout=120,
+                       env={**os.environ, "TERM": "dumb", "ZTV_INTERACTIVE": "always"})
+    check("--non-interactive overrides the seam and refuses to ask",
+          "--mode must be" in (r.stdout + r.stderr),
+          (r.stdout + r.stderr)[-300:])
+
+    # A whole node, entirely from answers, with every default taken.
+    r = interactive(["node", "", "", "ztvp-abcdefghijklmnop", "", "", "", "y", "y", "y"])
+    out = r.stdout + r.stderr
+    check("a node can be configured entirely by answering questions",
+          "about to install" in out and "region/role   zur / both" in out,
+          out[-600:])
+    check("and the port it recommends is the port it defaults to",
+          "wireguard     udp 443" in out,
+          "the help text says 443 is recommended; offering 51820 as the "
+          "default is how an operator takes the default and gets the thing "
+          "the text told them not to")
+    check("the relay is offered by default, so nodes actually carry it",
+          "DPI relay     udp 8443" in out, out[-400:])
+
+    # Every validator must refuse and re-ask rather than accept.
+    r = interactive(["banana", "node", "not-a-url", "https://cp.example.com",
+                     "ZUR!!", "rey", "short", "ztvp-abcdefghijklmnop",
+                     "both", "443", "443", "8443", "y", "y", "y"])
+    out = r.stdout + r.stderr
+    for needle, what in (
+        ("must be: test, production or node", "a bad mode"),
+        ("a URL, e.g.", "a bad control-plane URL"),
+        ("a short lowercase code", "a bad region"),
+        ("not a provisioning token", "a bad token"),
+        ("that is the WireGuard port", "a relay port colliding with WireGuard"),
+    ):
+        check(f"it refuses and re-asks: {what}", needle in out, out[-500:])
+    # ...and having refused them all, still reaches a correct plan.
+    check("and still arrives at a valid plan afterwards",
+          "region/role   rey / both" in out and "DPI relay     udp 8443" in out,
+          out[-500:])
+
+    # Production, with the wallet deferred — an install that works before the
+    # operator has decided how to take money.
+    r = interactive(["production", "vpn.example.com", "ops@example.com",
+                     "later", "none", "y", "y", "y"])
+    out = r.stdout + r.stderr
+    check("production can be configured by answering questions",
+          "domain        vpn.example.com" in out, out[-600:])
+    check("and deferring the wallet says what that costs",
+          "not configured — free trial only" in out, out[-400:])
+
+    # Declining the confirmation must change nothing at all.
+    r = interactive(["node", "", "", "ztvp-abcdefghijklmnop", "", "", "", "y", "y", "n"])
+    out = r.stdout + r.stderr
+    check("answering no to the summary stops without touching anything",
+          "nothing was changed" in out and "Installing packages" not in out,
+          out[-400:])
+
+    # A flag already given must not be asked for again.
+    r = interactive(["ztvp-abcdefghijklmnop", "", "", "", "y", "y", "y"],
+                    "--mode", "node", "--control-url", "https://cp.example.com",
+                    "--region", "buc")
+    out = r.stdout + r.stderr
+    check("values passed as flags are not asked for again",
+          "What is this box" not in out and "Control plane URL" not in out
+          and "region/role   buc / both" in out,
+          out[-600:])
+
 finally:
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL: print("  failures: " + ", ".join(FAIL))

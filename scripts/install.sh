@@ -26,6 +26,14 @@
 #
 # Idempotent: safe to re-run to pick up new code or repair a half-finished run.
 #
+# Run it with no flags at all and it asks for what it needs:
+#
+#   sudo ./scripts/install.sh
+#
+# Every question is also a flag, so the second deployment needs no questions.
+# On anything without a terminal — cloud-init, CI, `curl | bash` — it does not
+# ask, because a prompt there blocks the boot; it prints which flag is missing.
+#
 #   sudo ./scripts/install.sh --mode test
 #   sudo ./scripts/install.sh --mode production --domain 0trustvpn.com \
 #                             --email you@example.com
@@ -55,11 +63,25 @@
 #   --skip-preflight         skip the host checks (disk, ports, DNS,
 #                            WireGuard support) that run before anything
 #                            is changed
+#   --non-interactive        never ask questions; fail on a missing value
+#                            instead. Implied whenever stdin is not a terminal,
+#                            so cloud-init and CI already behave this way.
 #   --dry-run                render everything, touch no system state
 # ============================================================================
 set -euo pipefail
 
 MODE="" DOMAIN="" EMAIL=""
+# auto = ask only on a terminal. `never` = the flag-driven path, which is what
+# --non-interactive sets. `always` = ask even with no terminal, which exists so
+# the emulation suite can drive the questions with a pipe; without a seam like
+# this the interactive path would be the one part of the installer no test
+# ever executes, which is bug class #14 exactly.
+#
+# Assigned HERE, above the flag loop, and not beside the functions that use
+# it: it lived down there at first, which meant --non-interactive set it and
+# then this line quietly set it back. The flag looked supported and did
+# nothing.
+INTERACTIVE="${ZTV_INTERACTIVE:-auto}"
 DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1 SKIP_PREFLIGHT=0
 # Set when a post-install check found the box not actually serving.
 INSTALL_DEGRADED=0
@@ -127,7 +149,7 @@ harden_sshd() {
 }
 
 CONTROL_URL="" PROVISION_TOKEN="" REGION="" NODE_ROLE="both" WG_PORT="51820"
-OBFS_PORT="0"
+OBFS_PORT="0" WG_PORT_GIVEN=0
 SWAP_SIZE=""
 
 WALLET_BTC="${WALLET_BTC:-}"
@@ -164,6 +186,7 @@ while [[ $# -gt 0 ]]; do
         --domain) DOMAIN="${2:-}"; shift 2 ;;
         --email) EMAIL="${2:-}"; shift 2 ;;
         --no-firewall) DO_FIREWALL=0; shift ;;
+        --non-interactive|--no-prompt) INTERACTIVE=never; shift ;;
         --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         --no-ssh-hardening) DO_SSH=0; shift ;;
         --no-vpn) DO_VPN=0; shift ;;
@@ -172,7 +195,7 @@ while [[ $# -gt 0 ]]; do
         --provision-token) PROVISION_TOKEN="${2:-}"; shift 2 ;;
         --region) REGION="${2:-}"; shift 2 ;;
         --role) NODE_ROLE="${2:-}"; shift 2 ;;
-        --wg-port) WG_PORT="${2:-}"; shift 2 ;;
+        --wg-port) WG_PORT="${2:-}"; WG_PORT_GIVEN=1; shift 2 ;;
         --obfs-port) OBFS_PORT="${2:-}"; shift 2 ;;
         --no-obfs) OBFS_PORT=0; shift ;;
         --swap) SWAP_SIZE="${2:-}"; shift 2 ;;
@@ -194,6 +217,351 @@ run() {
     if [[ $DRY_RUN -eq 1 ]]; then printf '%s    would run: %s%s\n' "$DIM" "$*" "$NC"
     else "$@"; fi
 }
+
+# ============================================================================
+# INTERACTIVE SETUP
+# ============================================================================
+#
+# Everything the installer needs, asked for, when it was not given on the
+# command line. Deploying a VPS should not require knowing the flag list in
+# advance — and the flags stay, because a second deployment should not require
+# answering the questions again.
+#
+# THE RULE THAT MATTERS: never prompt unless stdin is a terminal. cloud-init,
+# CI, `curl … | bash` and Ansible all run this with no terminal attached, and
+# a read(1) there does not ask anybody anything — it either gets EOF and takes
+# an empty answer, or blocks forever holding the boot. Both are worse than the
+# error message the flag-driven path already prints. `--non-interactive`
+# forces that path even on a terminal, for a human who wants the failure.
+can_prompt() {
+    case "$INTERACTIVE" in
+        never) return 1 ;;
+        always) return 0 ;;
+        *) [[ -t 0 && -t 1 ]] ;;
+    esac
+}
+
+# ask <var> <prompt> <default> [validator] [help]
+#
+# Loops until the answer validates. An empty answer takes the default; a
+# default of "" with a validator means the question must be answered.
+ask() {
+    local __var="$1" __prompt="$2" __default="$3" __check="${4:-}" __help="${5:-}"
+    local __ans __shown
+    [[ -n "$__help" ]] && printf '%s    %s%s\n' "$DIM" "$__help" "$NC"
+    while true; do
+        __shown="$__prompt"
+        [[ -n "$__default" ]] && __shown="$__prompt [$__default]"
+        printf '%s  ? %s: %s' "$YLW" "$__shown" "$NC"
+        # EOF is not an empty answer. Input ending mid-questionnaire used to
+        # take the default, or re-ask a required question and hit EOF again,
+        # and again — an installer that hangs forever instead of exiting. Any
+        # loop reading from stdin needs this; there is no terminal to notice
+        # the spin.
+        if ! IFS= read -r __ans; then
+            [[ -n "$__default" ]] && { printf -v "$__var" '%s' "$__default"; return 0; }
+            printf '\n'
+            die "input ended while waiting for: $__prompt"
+        fi
+        [[ -z "$__ans" ]] && __ans="$__default"
+        if [[ -z "$__ans" ]]; then
+            printf '%s    (required)%s\n' "$RED" "$NC"
+            continue
+        fi
+        if [[ -n "$__check" ]] && ! "$__check" "$__ans"; then
+            continue
+        fi
+        printf -v "$__var" '%s' "$__ans"
+        return 0
+    done
+}
+
+# ask_yn <var> <prompt> <default y|n> [help] — sets the var to 1 or 0.
+ask_yn() {
+    local __var="$1" __prompt="$2" __default="$3" __help="${4:-}" __ans
+    [[ -n "$__help" ]] && printf '%s    %s%s\n' "$DIM" "$__help" "$NC"
+    while true; do
+        printf '%s  ? %s [%s/%s]: %s' "$YLW" "$__prompt" \
+               "$([[ $__default == y ]] && echo Y || echo y)" \
+               "$([[ $__default == n ]] && echo N || echo n)" "$NC"
+        if ! IFS= read -r __ans; then
+            printf -v "$__var" '%s' "$([[ $__default == y ]] && echo 1 || echo 0)"
+            return 0
+        fi
+        [[ -z "$__ans" ]] && __ans="$__default"
+        case "${__ans,,}" in
+            y|yes) printf -v "$__var" '%s' 1; return 0 ;;
+            n|no)  printf -v "$__var" '%s' 0; return 0 ;;
+            *) printf '%s    answer y or n%s\n' "$RED" "$NC" ;;
+        esac
+    done
+}
+
+# --- validators. Each prints WHY it refused, then the loop re-asks. ---------
+# They are the same rules the flag path enforces further down; the point is to
+# say so before the install starts rather than after it has written half a box.
+
+v_mode() {
+    case "$1" in
+        test|production|node) return 0 ;;
+        *) printf '%s    must be: test, production or node%s\n' "$RED" "$NC"; return 1 ;;
+    esac
+}
+
+v_domain() {
+    if [[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && "$1" == *.* ]]; then
+        return 0
+    fi
+    printf '%s    a bare hostname, e.g. 0trustvpn.com — no https://, no trailing path%s\n' "$RED" "$NC"
+    return 1
+}
+
+v_email() {
+    [[ "$1" == *@*.* && "$1" != *" "* ]] && return 0
+    printf '%s    that does not look like an email address%s\n' "$RED" "$NC"
+    return 1
+}
+
+v_url() {
+    [[ "$1" =~ ^https?://[^[:space:]/]+ ]] && return 0
+    printf '%s    a URL, e.g. https://0trustvpn.com%s\n' "$RED" "$NC"
+    return 1
+}
+
+v_region() {
+    [[ "$1" =~ ^[a-z]{2,8}$ ]] && return 0
+    printf '%s    a short lowercase code: zur, rey or buc%s\n' "$RED" "$NC"
+    return 1
+}
+
+v_role() {
+    case "$1" in
+        entry|exit|both) return 0 ;;
+        *) printf '%s    must be: entry, exit or both%s\n' "$RED" "$NC"; return 1 ;;
+    esac
+}
+
+v_port() {
+    [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 )) && return 0
+    printf '%s    a port number, 1-65535%s\n' "$RED" "$NC"
+    return 1
+}
+
+v_port0() {
+    [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 0 && $1 <= 65535 )) && return 0
+    printf '%s    a port number, or 0 to turn it off%s\n' "$RED" "$NC"
+    return 1
+}
+
+# The relay cannot share the WireGuard port — it would take the tunnel's own
+# listener away. The flag path refuses the pair too, but refusing it only
+# THERE means the operator answers every remaining question and is then
+# dropped back to the shell with nothing installed and no way to correct one
+# answer. Catch it where it is typed.
+v_obfs_port() {
+    v_port0 "$1" || return 1
+    if [[ "$1" != "0" && "$1" == "$WG_PORT" ]]; then
+        printf '%s    that is the WireGuard port — pick another, or 0 to turn it off%s\n' \
+               "$RED" "$NC"
+        return 1
+    fi
+    return 0
+}
+
+v_token() {
+    [[ "$1" =~ ^[A-Za-z0-9_-]{8,}$ ]] && return 0
+    printf '%s    that is not a provisioning token — they look like ztvp-xxxxxxxx%s\n' "$RED" "$NC"
+    return 1
+}
+
+v_swap() {
+    [[ "$1" == "none" ]] && return 0
+    [[ "$1" =~ ^[0-9]+[MG]$ ]] && return 0
+    printf '%s    a size like 2G or 512M, or "none"%s\n' "$RED" "$NC"
+    return 1
+}
+
+# The wallet is checked by the real thing — validate_wallet, including the
+# pin in scripts/wallet.pin — in a subshell so a refusal re-asks instead of
+# exiting the installer.
+v_wallet() {
+    [[ "$1" == "later" ]] && return 0
+    ( validate_wallet "$1" ) >/dev/null 2>&1 && return 0
+    printf '%s%s' "$RED" "$NC"
+    ( validate_wallet "$1" ) 2>&1 | sed 's/^/    /' || true
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# collect_missing — fill in whatever the command line did not give us.
+#
+# Called BEFORE the validation block below, never instead of it: a prompted
+# answer goes through exactly the same checks a flag does, so there is one
+# definition of a valid value and the interactive path cannot drift into
+# accepting something the flag path refuses.
+# ---------------------------------------------------------------------------
+collect_missing() {
+    local need=0
+    [[ -z "$MODE" ]] && need=1
+    case "$MODE" in
+        production) [[ -z "$DOMAIN" || -z "$EMAIL" ]] && need=1 ;;
+        node) [[ -z "$CONTROL_URL" || -z "$PROVISION_TOKEN" || -z "$REGION" ]] && need=1 ;;
+    esac
+    [[ $need -eq 0 ]] && return 0
+
+    if ! can_prompt; then
+        # Say WHY it is not asking. "production needs --domain" on a box where
+        # the operator expected to be asked is a confusing message on its own.
+        note "not a terminal — no questions will be asked; pass the flags instead"
+        return 0
+    fi
+
+    printf '\n%s  0trust installer%s\n' "$GRN" "$NC"
+    printf '%s  Answer these and the box configures itself. Everything here is\n' "$DIM"
+    printf '  also a command-line flag (--help) so a second deployment needs no\n'
+    printf '  questions. Ctrl-C now changes nothing.%s\n\n' "$NC"
+
+    [[ -z "$MODE" ]] && ask MODE "What is this box" "" v_mode \
+"production = the control plane: website, API, admin dashboard, payments.
+     node       = a mesh server that carries customer traffic.
+     test       = everything on one VPS to try it out. Not for customers."
+
+    case "$MODE" in
+      production) collect_production ;;
+      node)       collect_node ;;
+      test)       collect_test ;;
+    esac
+    confirm_plan
+}
+
+collect_production() {
+    printf '\n%s  --- control plane ---%s\n' "$GRN" "$NC"
+    [[ -z "$DOMAIN" ]] && ask DOMAIN "Domain" "" v_domain \
+"Must already point at THIS server's public IP — Let's Encrypt checks it
+     during the install, and a certificate cannot be issued before DNS is right."
+    [[ -z "$EMAIL" ]] && ask EMAIL "Email for certificate expiry notices" "" v_email \
+"Goes to Let's Encrypt only. It is not published and no customer sees it."
+
+    if [[ -z "$WALLET_BTC" ]]; then
+        printf '\n%s  --- taking money ---%s\n' "$GRN" "$NC"
+        ask WALLET_BTC "Bitcoin extended PUBLIC key (zpub/xpub), or \"later\"" \
+            "later" v_wallet \
+"This is what makes paid signup work on day one. It is a PUBLIC key: the
+     installer derives a fresh receive address per invoice and can never spend.
+     Never paste a private key or a seed phrase here.
+     \"later\" installs fine — signup stays free-trial only until you set it."
+        [[ "$WALLET_BTC" == "later" ]] && WALLET_BTC=""
+    fi
+
+    printf '\n%s  --- this machine ---%s\n' "$GRN" "$NC"
+    if [[ -z "$SWAP_SIZE" ]]; then
+        local _sw
+        ask _sw "Swap file to create" "none" v_swap \
+"A 1GB VPS wants some. Safe here — unlike on a mesh node, where swap could
+     page a WireGuard key to disk and the installer refuses it outright."
+        [[ "$_sw" != "none" ]] && SWAP_SIZE="$_sw"
+    fi
+    ask_yn DO_FIREWALL "Configure the firewall (ufw + fail2ban)" y \
+"Say no only if your provider already firewalls this box for you."
+    ask_yn DO_SSH "Disable ssh password login" y \
+"Only takes effect if an ssh key is already authorized — otherwise it is
+     skipped, because turning it off while you are holding the box open with
+     a password locks you out of your own server."
+}
+
+collect_node() {
+    printf '\n%s  --- joining the mesh ---%s\n' "$GRN" "$NC"
+    [[ -z "$CONTROL_URL" ]] && ask CONTROL_URL "Control plane URL" \
+        "https://0trustvpn.com" v_url \
+"The production box this node reports to."
+    [[ -z "$REGION" ]] && ask REGION "Region code" "zur" v_region \
+"zur = Zurich, rey = Reykjavik, buc = Bucharest. It must match the region
+     the provisioning token was minted for, or the control plane refuses."
+    [[ -z "$PROVISION_TOKEN" ]] && ask PROVISION_TOKEN "Provisioning token" "" v_token \
+"Mint it on the control plane — the dashboard's Nodes tab prints it, or:
+       sudo -u 0trust python3 /opt/0trust/api/mint-provision-token.py \\
+            --region <code> --role both --uses 20 --ttl 31536000
+     Use an enrolment token (--uses above 1): this box keeps nothing across a
+     reboot, so it has to re-register itself every time it starts."
+
+    ask NODE_ROLE "Role" "${NODE_ROLE:-both}" v_role \
+"both = accepts customers and exits their traffic. Leave it unless you are
+     deliberately splitting entry from exit."
+    # Offer 443, not the 51820 the flag defaults to. Recommending one value
+    # in the help text and defaulting to another is how an operator ends up
+    # taking the default and getting the thing the text told them not to.
+    local _wgdflt="$WG_PORT"
+    [[ $WG_PORT_GIVEN -eq 0 ]] && _wgdflt=443
+    ask WG_PORT "WireGuard UDP port" "$_wgdflt" v_port \
+"443 is recommended: UDP 443 is where QUIC lives, so at the flow level this
+     looks like ordinary web traffic rather than announcing itself on 51820.
+     It does NOT defeat deep packet inspection — that is the next question."
+    if [[ "$OBFS_PORT" == "0" ]]; then
+        local _ob _dflt=8443
+        [[ "$WG_PORT" != "443" ]] && _dflt=443
+        ask _ob "DPI-protection relay port (0 = off)" "$_dflt" v_obfs_port \
+"Lets customers turn on obfuscation, which removes WireGuard's signature so
+     deep packet inspection cannot identify the tunnel. Off by default for
+     them either way; this just makes it available on this node. Costs a
+     little throughput only for customers who switch it on. Cannot be the
+     same port as WireGuard above."
+        OBFS_PORT="$_ob"
+    fi
+    ask_yn DO_FIREWALL "Configure the firewall (ufw + fail2ban)" y
+    ask_yn DO_SSH "Disable ssh password login" y \
+"Same caveat as always: skipped unless a key is already authorized."
+}
+
+collect_test() {
+    printf '\n%s  --- test box ---%s\n' "$GRN" "$NC"
+    note "No TLS, one machine wearing three region codes, and multi-hop that"
+    note "routes correctly but hides nothing. Fine to try the product on;"
+    note "never point a customer at it."
+    ask_yn DO_VPN "Stand up a real on-box mesh (3 WireGuard interfaces)" y \
+"No gives you the old behaviour: placeholder rows, no tunnel to connect to."
+    ask_yn DO_FIREWALL "Configure the firewall" y
+}
+
+# confirm_plan — show what is about to happen and get a yes.
+#
+# The installer writes packages, a service user, secrets, a database and
+# firewall rules. An operator who mistyped the domain three questions ago
+# should find out here, not from a certificate failure halfway through.
+confirm_plan() {
+    printf '\n%s  --- about to install ---%s\n' "$GRN" "$NC"
+    printf '    mode          %s\n' "$MODE"
+    case "$MODE" in
+      production)
+        printf '    domain        %s\n' "$DOMAIN"
+        printf '    cert email    %s\n' "$EMAIL"
+        printf '    payments      %s\n' \
+               "$([[ -n "$WALLET_BTC" ]] && echo "watch (BTC, address per invoice)" \
+                                         || echo "not configured — free trial only")"
+        [[ -n "$SWAP_SIZE" ]] && printf '    swap          %s\n' "$SWAP_SIZE"
+        ;;
+      node)
+        printf '    control plane %s\n' "$CONTROL_URL"
+        printf '    region/role   %s / %s\n' "$REGION" "$NODE_ROLE"
+        printf '    wireguard     udp %s\n' "$WG_PORT"
+        printf '    DPI relay     %s\n' \
+               "$([[ "$OBFS_PORT" != "0" ]] && echo "udp $OBFS_PORT" || echo "off")"
+        printf '    disk          tmpfs — keys and node id are RAM only\n'
+        ;;
+      test)
+        printf '    on-box mesh   %s\n' "$([[ $DO_VPN -eq 1 ]] && echo yes || echo "no (placeholder rows)")"
+        ;;
+    esac
+    printf '    firewall      %s\n' "$([[ $DO_FIREWALL -eq 1 ]] && echo yes || echo no)"
+    [[ "$MODE" != "test" ]] && \
+        printf '    ssh hardening %s\n' "$([[ $DO_SSH -eq 1 ]] && echo yes || echo no)"
+    printf '\n'
+    local go
+    ask_yn go "Go ahead" y
+    [[ $go -eq 1 ]] || die "nothing was changed"
+    printf '\n'
+}
+
+collect_missing
 
 [[ "$MODE" == "test" || "$MODE" == "production" || "$MODE" == "node" ]] \
     || die "--mode must be test, production or node (see --help)"
