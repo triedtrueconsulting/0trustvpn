@@ -637,6 +637,57 @@ try:
           and "googleapis" not in fonts_decl[0],
           f"the funnel's front door is the page this matters most on: {fonts_decl}")
 
+    print("\n[hero] the first paragraph anyone reads is accurate")
+    # The hero is the most-read copy in the product and it carried three
+    # things that were not true. Each is the same failure the rest of this
+    # file guards against, just on the one page nobody re-reads.
+    idx_body = open(os.path.join(H.REPO, "web", "index.html"),
+                    encoding="utf-8").read()
+    hero = idx_body[idx_body.index('class="hero"'):
+                    idx_body.index('class="hero"') + 3000]
+
+    # "A peer-to-peer VPN" — customers connect to nodes the operator runs and
+    # never to each other. The word comes from WireGuard calling its
+    # endpoints peers, and to a reader it describes a different product.
+    check("the hero does not call this peer-to-peer",
+          "peer-to-peer" not in idx_body.lower(),
+          "customers do not route through each other; nothing here is P2P")
+
+    # "a global mesh" contradicted the jurisdictions section on the same
+    # page, which lists fourteen countries there are deliberately no servers
+    # in. Three nodes, all in Europe.
+    check("and does not call three European nodes global",
+          not re.search(r"global(ly)?\s+(mesh|network)", idx_body, re.I),
+          [l.strip() for l in idx_body.splitlines()
+           if re.search(r"global", l, re.I)][:3])
+
+    # A hardcoded month ages by itself and nothing goes red. It read "May
+    # 2026" in September, which on a security product's front page reads as
+    # abandoned.
+    stale = re.findall(r"(?:January|February|March|April|May|June|July|"
+                       r"August|September|October|November|December)\s+20\d\d",
+                       hero)
+    check("the hero states no date that will go stale on its own", not stale,
+          f"{stale} — nothing updates this and nothing notices")
+
+    # The version it does show has to be the version people can download.
+    hv = re.search(r'id="hero-version"[^>]*>v?([0-9]+\.[0-9]+)', hero)
+    check("the hero names a version", hv is not None, hero[:300])
+    dl_ver = re.search(r"/releases/([0-9]+\.[0-9]+)", 
+                       open(os.path.join(H.REPO, "web", "download.html"),
+                            encoding="utf-8").read())
+    if hv and dl_ver:
+        check("and it is the one the download page offers",
+              hv.group(1) == dl_ver.group(1),
+              f"hero v{hv.group(1)} vs downloads {dl_ver.group(1)}")
+
+    # The regions named in the hero must be the regions that exist.
+    live_regions = {r["code"] for r in H.call("GET", "/api/v1/regions")[1]["regions"]}
+    check("the mesh really is three regions", len(live_regions) == 3, live_regions)
+    check("and the hero says three, not some other number",
+          "three-country" in idx_body or "3 jurisdictions" in idx_body,
+          "the count is stated twice on this page and has to match the API")
+
     print("\n[links] every internal link and CTA goes somewhere")
     # Found by walking them: index.html's "What that means" link under the
     # payment-privacy panel pointed at /privacy#cards, and privacy.html had

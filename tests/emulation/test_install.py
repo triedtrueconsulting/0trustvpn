@@ -368,6 +368,67 @@ try:
     check("[test] no TLS directives leak into test mode",
           "ssl_certificate" not in globals().get("body_test", ""))
 
+    print("\n[4b] the environment the installer writes, on a NEW box and an old one")
+    # Two paths write api.env and only one of them is ever exercised by a
+    # test rig: the fresh-install branch. The other runs when install.sh is
+    # re-run against a deployment that predates a key, appending what is
+    # missing — so it is the path that touches a box with paying customers on
+    # it, and the one nobody looks at.
+    #
+    # It appended ZTV_PAYMENT_PROVIDER=btcpay. poll_invoices.py returns
+    # immediately unless the provider is `watch`, so an upgraded deployment
+    # would go on issuing invoices with addresses derived from the operator's
+    # own xpub, take real payments at them, and credit not one — with every
+    # health check green and no BTCPay instance anywhere in the picture.
+    sys.path.insert(0, os.path.join(H.REPO, "api"))
+    import payments as _pay
+    inst_txt = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
+    written = set(re.findall(r'ZTV_PAYMENT_PROVIDER=([a-z]+)"?\s*(?:;|\\|$)',
+                             inst_txt, re.M))
+    # Anything the script actually assigns, in either branch.
+    assigned = set(re.findall(r"^ZTV_PAYMENT_PROVIDER=([a-z]+)\s*$", inst_txt, re.M)) \
+             | set(re.findall(r'"ZTV_PAYMENT_PROVIDER=([a-z]+)"', inst_txt))
+    check("every provider the installer writes is the single default",
+          assigned and assigned == {_pay.DEFAULT_PROVIDER},
+          f"install.sh writes {sorted(assigned)}, "
+          f"payments.DEFAULT_PROVIDER is {_pay.DEFAULT_PROVIDER!r}")
+
+    # And the same for the example file an operator might copy.
+    ex = open(os.path.join(H.REPO, "systemd", "api.env.example")).read()
+    ex_prov = set(re.findall(r"^ZTV_PAYMENT_PROVIDER=([a-z]+)\s*$", ex, re.M))
+    check("and so is the one in api.env.example",
+          ex_prov == {_pay.DEFAULT_PROVIDER},
+          f"{sorted(ex_prov)} vs {_pay.DEFAULT_PROVIDER!r}")
+
+    # CORS was a hardcoded reference domain in api/main.py. Same-origin on a
+    # normal deployment so nothing broke, but an operator on their own domain
+    # had a control plane naming somebody else's as its only allowed origin.
+    main_txt = open(os.path.join(H.REPO, "api", "main.py")).read()
+    # The environment READ, not the name in prose. The first version grepped
+    # the whole file for "ZTV_ALLOWED_ORIGINS" and stayed green when the code
+    # was renamed away, because the comment above it explaining the key still
+    # said the words — the check-matches-its-own-comment failure, inside a
+    # check written to catch a hardcoded literal.
+    check("allowed origins are read from the environment, not hardcoded",
+          re.search(r'os\.environ\.get\(\s*"ZTV_ALLOWED_ORIGINS"', main_txt)
+          is not None,
+          "install.sh takes --domain and api/main.py did not follow it")
+    check("and the reference domain is only the fallback",
+          re.search(r"ALLOWED_ORIGINS\s*=\s*_origins\s+or\b", main_txt)
+          is not None,
+          "0trustvpn.com must be what you get when nothing is configured, "
+          "not what every deployment gets")
+    check("and the installer writes them from --domain",
+          "ZTV_ALLOWED_ORIGINS=" in inst_txt and "CORS_ORIGINS" in inst_txt)
+    for label, d in (("prod", os.path.join(TMP, "render-prod")),):
+        envp = os.path.join(d, "api.env")
+        if os.path.exists(envp):
+            envtxt = open(envp).read()
+            m = re.search(r"^ZTV_ALLOWED_ORIGINS=(.*)$", envtxt, re.M)
+            check(f"[{label}] the rendered env names the deployment's own domain",
+                  m is not None and "example.com" in (m.group(1) or ""),
+                  m.group(1) if m else "key absent")
+
     print("\n[5b] the routes that were only ever in the reference config")
     # nginx/0trustvpn.com.conf is a reference file the installer has never
     # installed. Six location blocks lived there and nowhere else, so on
@@ -390,6 +451,8 @@ try:
              "the download page links these directly"),
             ("location = /verify-release.sh",
              "download.html tells people to fetch and read it"),
+            ("location /fonts/", "the brand faces are three quarters of the "
+                                 "landing page's bytes and had no cache policy"),
             ("location = /robots.txt", "crawler directives"),
             ("location = /sitemap.xml", "the sitemap robots.txt advertises"),
         ):

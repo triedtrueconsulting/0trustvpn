@@ -176,6 +176,28 @@ async function loadOverview() {
     el('div', { class: 'stat ' + cls }, [
       el('div', { class: 'v', text: String(v) }), el('div', { class: 'k', text: k })])));
 
+  // Conversion, from rows the service keeps anyway. There is no visit or
+  // click measurement here and there will not be: that needs a third-party
+  // script or a per-visitor identifier, and privacy.html says we have
+  // neither. So the funnel starts at "someone asked for a trial" — earlier
+  // than that is deliberately invisible to us.
+  const f = d.funnel || {};
+  const pct = (v) => (v === null || v === undefined ? 'n/a' : v + '%');
+  $('funnel').replaceChildren(
+    table(['Stage', 'Count', 'Rate'], [
+      ['Trials started', f.trials_started, '\u2014'],
+      ['Trials that went on to pay', f.trials_converted,
+       pct(f.trial_conversion_pct)],
+      ['Paid without a trial', f.paid_direct, '\u2014'],
+      ['Invoices created', f.invoices_created, '\u2014'],
+      ['Invoices settled', f.invoices_settled, pct(f.checkout_completion_pct)],
+      ['Trials started (30d)', f.trials_started_30d, '\u2014'],
+      ['Invoices settled (30d)', f.invoices_settled_30d, '\u2014'],
+    ].map((r) => [r[0], String(r[1] === undefined ? '\u2014' : r[1]), r[2]])),
+    el('p', { class: 'note', text:
+      'Counted from accounts and invoices. No visitor tracking exists to '
+      + 'count from \u2014 see privacy.html \u00a75.' }));
+
   const unhealthy = d.nodes.filter((n) => !n.healthy).length;
   $('node-health').replaceChildren(
     table(['Node', 'Region', 'Role', 'State', 'Heartbeat'],

@@ -85,6 +85,93 @@ try:
     check("lists the seeded nodes", len(ov.get("nodes", [])) == 3, ov.get("nodes"))
     check("reports the active payment provider", ov.get("provider"), ov)
 
+    print("\n[4b] the conversion funnel, measured by converting one")
+    # The operator has to be able to answer "does the trial sell anything?"
+    # without a tracking script, because privacy.html §5 says there is not
+    # one. Everything here is counted from accounts and invoices, which the
+    # service keeps in order to deliver what people paid for. What that
+    # cannot show — where a visitor came from, how many bounced — is the
+    # deliberate cost, and the dashboard says so rather than leaving a gap
+    # somebody later fills with Google Analytics.
+    st, ov0 = adm("GET", "/overview")
+    check("the overview reports a funnel", "funnel" in ov0, sorted(ov0))
+    f0 = ov0.get("funnel", {})
+    for key in ("trials_started", "trials_converted", "trial_conversion_pct",
+                "invoices_created", "invoices_settled",
+                "checkout_completion_pct", "paid_direct"):
+        check(f"funnel reports {key}", key in f0, sorted(f0))
+
+    # Take a real trial through a real payment and watch the numbers move.
+    import hashlib as _hl
+    def _solve(nonce, bits):
+        i = 0
+        while True:
+            d = _hl.sha256(f"{nonce}:{i}".encode()).digest()
+            if int.from_bytes(d[:4], "big") >> (32 - bits) == 0:
+                return str(i)
+            i += 1
+
+    st, ch = H.call("GET", "/api/v1/trial/challenge")
+    check("a trial challenge is issued", st == 200, ch)
+    st, tr = H.call("POST", "/api/v1/trial", {
+        "nonce": ch["nonce"], "expires_at": ch["expires_at"],
+        "signature": ch["signature"], "solution": _solve(ch["nonce"], ch["bits"]),
+        "source": "test"})
+    check("the trial is redeemed", st == 200 and tr.get("plan") == "trial", tr)
+
+    st, ov1 = adm("GET", "/overview")
+    f1 = ov1["funnel"]
+    check("a started trial is counted",
+          f1["trials_started"] == f0["trials_started"] + 1,
+          f"{f0['trials_started']} -> {f1['trials_started']}")
+    check("and is not yet counted as converted",
+          f1["trials_converted"] == f0["trials_converted"],
+          f"{f0['trials_converted']} -> {f1['trials_converted']}")
+
+    st, inv = H.call("POST", "/api/v1/account/topup", {"months": 1},
+                     headers={"X-Account-Token": tr["token"]})
+    check("a trial account can pay", st == 200 and inv.get("invoice_id"), inv)
+    H.settle(inv["invoice_id"])
+
+    st, ov2 = adm("GET", "/overview")
+    f2 = ov2["funnel"]
+    # The one that matters: trial_started_at survives the conversion, which
+    # is what makes this knowable at all without adding a column — or, worse,
+    # a tracking cookie.
+    check("paying moves the account into converted",
+          f2["trials_converted"] == f0["trials_converted"] + 1,
+          f"{f1['trials_converted']} -> {f2['trials_converted']}")
+    check("without inflating the started count",
+          f2["trials_started"] == f1["trials_started"],
+          f"{f1['trials_started']} -> {f2['trials_started']}")
+    check("and it is not double-counted as a direct sale",
+          f2["paid_direct"] == f1["paid_direct"],
+          f"paid_direct {f1['paid_direct']} -> {f2['paid_direct']}")
+    check("the settled invoice raises checkout completion",
+          f2["invoices_settled"] > f1["invoices_settled"], f2)
+    check("conversion is a percentage, not a ratio nobody can read",
+          isinstance(f2["trial_conversion_pct"], (int, float))
+          and 0 <= f2["trial_conversion_pct"] <= 100,
+          f2["trial_conversion_pct"])
+
+    # An empty funnel must read as "no data", not as 0% — a dashboard that
+    # shows 0% conversion on day one looks like a broken product.
+    check("an empty denominator is null, not zero",
+          "None" not in str(f2.get("trial_conversion_pct")), f2)
+
+    print("\n[4c] the dashboard renders the funnel it is sent")
+    js = open(os.path.join(H.REPO, "web", "admin.js"), encoding="utf-8").read()
+    html = open(os.path.join(H.REPO, "web", "admin.html"), encoding="utf-8").read()
+    check("the overview has a funnel panel", 'id="funnel"' in html)
+    check("and the script fills it", "$('funnel')" in js)
+    for key in ("trials_started", "trials_converted", "trial_conversion_pct",
+                "checkout_completion_pct", "paid_direct"):
+        check(f"the panel shows {key}", key in js, "sent but never rendered")
+    # A number with no explanation of what it cannot see invites somebody to
+    # "fix" the gap with a third-party script.
+    check("and says why there is no visitor funnel above it",
+          "privacy.html" in js and "tracking" in js.lower(), js[:200])
+
     print("\n[5] accounts: search, ban, extend")
     tok, _ = H.paid_account()
     pk = H.genkey()
@@ -93,10 +180,16 @@ try:
            headers={"X-Account-Token": tok})
     st, lst = adm("GET", "/accounts")
     check("accounts listed", st == 200 and lst["total"] >= 1, lst)
-    acct_id = lst["accounts"][0]["id"]
 
     st, found = adm("GET", f"/accounts?q={tok}")
     check("an account is findable by its token", found["total"] == 1, found)
+    # The account this section then bans, extends and deletes is the one it
+    # just created, found by its own token. It used to be accounts[0] — the
+    # newest row in the default listing — which held only as long as nothing
+    # earlier in this file made an account afterwards. Adding a section above
+    # broke six checks here at once, none of which named ordering, so the
+    # dependency is made explicit rather than restored.
+    acct_id = found["accounts"][0]["id"]
     check("the token hash is never echoed back",
           "token_hash" not in json.dumps(found), "token_hash leaked")
     import urllib.parse as _up

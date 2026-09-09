@@ -811,9 +811,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# The site and the API are same-origin on a normal deployment — nginx serves
+# both from one host — so this list is not what keeps the dashboard working.
+# It was hardcoded to 0trustvpn.com all the same, which meant an operator who
+# ran install.sh --domain vpn.example.com had a control plane naming somebody
+# else's domain as the only origin it would answer cross-origin. Inert today,
+# and precisely the kind of reference-domain literal that looks configured
+# and is not. ZTV_ALLOWED_ORIGINS is written by the installer from --domain.
+_origins = [o.strip() for o in
+            os.environ.get("ZTV_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+ALLOWED_ORIGINS = _origins or ["https://0trustvpn.com",
+                               "https://www.0trustvpn.com"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://0trustvpn.com", "https://www.0trustvpn.com"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "DELETE", "PATCH"],
     allow_headers=["Content-Type", "X-Account-Token", "X-Admin-CSRF"],
     allow_credentials=True,

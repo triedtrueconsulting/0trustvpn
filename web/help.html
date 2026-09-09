@@ -97,6 +97,14 @@
         },
         {
           "@type": "Question",
+          "name": "Is there a free trial? Do I need a card?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes, and no. The trial asks for nothing at all — no email address, no card, no form. Your browser spends a few seconds solving a small proof-of-work puzzle, which is there to make signing up for ten thousand of them expensive, and you get an ordinary anonymous account token at the end of it. It is the same service a paying customer gets, on the same servers, with two limits: it runs for a shorter period, and it allows fewer devices at once. Nothing expires into a paid plan and there is nothing to cancel, because we have no way to charge you. If you decide to pay, the same account continues and whatever the trial had left is added to the months you buy rather than thrown away."
+          }
+        },
+        {
+          "@type": "Question",
           "name": "Why crypto only? Why no credit card?",
           "acceptedAnswer": {
             "@type": "Answer",
@@ -165,6 +173,22 @@
           "acceptedAnswer": {
             "@type": "Answer",
             "text": "Your tunnel claims both 0.0.0.0/0 and ::/0 , so IPv6 cannot route around us on a dual-stack network. That much is true on every connection. Whether IPv6 is carried depends on the exit node. Where the node has working IPv6, you get a v6 address inside the tunnel and v6 sites load normally; where it does not, you get no v6 address and v6 traffic is dropped rather than let out around us. So the failure mode is IPv6-only sites not loading, never IPv6 leaking. 0trust status tells you which you have on the current connection. Inside the tunnel your v6 address is a private ULA, and the exit masquerades it the same way it masquerades v4. Sites see the node’s address, not a per-customer prefix — a stable prefix of your own would be a tracking identifier, which is the opposite of the point. DNS goes to a resolver that only exists inside the tunnel, on the exit node carrying your traffic. It keeps no query log. See the privacy policy, section 4d for what that resolver does and does not know, including the upstream we forward to and cannot audit for you."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I use BitTorrent?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "We do not block it and the terms do not prohibit it. Be aware of what actually happens, though, because it is not nothing: copyright notices about a torrent swarm arrive at whoever owns the exit IP address, which is us. We cannot pass one on to you — there are no logs that would let us work out which customer it was, which is the whole design — so we reply saying so. The honest caveat is that if one exit address draws a large and sustained volume of notices, our remedy is coarse: we rotate that address, or in the worst case take the node out of the mesh, and that affects everyone routing through it rather than whoever caused it. There is no port forwarding, so seeding through the tunnel works poorly in any case."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Will Netflix and other streaming services work?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Probably not, and we would rather say so before you pay than after. We do nothing to defeat geographic blocking: there are three exit addresses, they are stable, they belong to hosting providers rather than home ISPs, and the major streaming services identify and block exactly that pattern. Buying more addresses to stay ahead of them is a full-time job we are not doing. If watching region-locked video is your reason for wanting a VPN, this is the wrong product and you should buy a different one. What this is built for is not being logged."
           }
         },
         {
@@ -450,6 +474,25 @@ a:focus-visible, button:focus-visible, input:focus-visible {
     </p>
   </div>
 
+  <div class="q">
+    <h3 id="is-there-a-free-trial">Is there a free trial? Do I need a card?</h3>
+    <p>
+      Yes, and no. The <a href="/trial">trial</a> asks for nothing at all —
+      no email address, no card, no form. Your browser spends a few seconds
+      solving a small proof-of-work puzzle, which is there to make signing up
+      for ten thousand of them expensive, and you get an ordinary anonymous
+      account token at the end of it.
+    </p>
+    <p>
+      It is the same service a paying customer gets, on the same servers,
+      with two limits: it runs for a shorter period, and it allows fewer
+      devices at once. Nothing expires into a paid plan and there is nothing
+      to cancel, because we have no way to charge you. If you decide to pay,
+      the same account continues and whatever the trial had left is added to
+      the months you buy rather than thrown away.
+    </p>
+  </div>
+
   <h2 id="payment">Payment</h2>
 
   <div class="q">
@@ -664,6 +707,43 @@ a:focus-visible, button:focus-visible, input:focus-visible {
       <a href="/privacy">the privacy policy, section 4d</a> for what that
       resolver does and does not know, including the upstream we forward to
       and cannot audit for you.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3 id="can-i-use-bittorrent">Can I use BitTorrent?</h3>
+    <p>
+      We do not block it and the <a href="/terms#acceptable-use">terms</a> do
+      not prohibit it. Be aware of what actually happens, though, because it
+      is not nothing: copyright notices about a torrent swarm arrive at
+      whoever owns the exit IP address, which is us. We cannot pass one on to
+      you — there are no logs that would let us work out which customer it
+      was, which is the whole design — so we reply saying so.
+    </p>
+    <p>
+      The honest caveat is that if one exit address draws a large and
+      sustained volume of notices, our remedy is coarse: we rotate that
+      address, or in the worst case take the node out of the mesh, and that
+      affects everyone routing through it rather than whoever caused it.
+      There is no port forwarding, so seeding through the tunnel works poorly
+      in any case.
+    </p>
+  </div>
+
+  <div class="q">
+    <h3 id="will-streaming-services-work">Will Netflix and other streaming services work?</h3>
+    <p>
+      Probably not, and we would rather say so before you pay than after.
+      We do nothing to defeat geographic blocking: there are three exit
+      addresses, they are stable, they belong to hosting providers rather
+      than home ISPs, and the major streaming services identify and block
+      exactly that pattern. Buying more addresses to stay ahead of them is a
+      full-time job we are not doing.
+    </p>
+    <p>
+      If watching region-locked video is your reason for wanting a VPN, this
+      is the wrong product and you should buy a different one. What this is
+      built for is not being logged.
     </p>
   </div>
 

@@ -377,6 +377,11 @@ try:
         a two-word label is not where a claim lives, and the outright bans
         above already cover the ones that would be.
         """
+        # Script and style contents are not copy. The JSON-LD block is one
+        # long line naming every platform the client builds for, so scanning
+        # it as prose invented a platform list nobody wrote — and its own
+        # sentence structure is JSON, which no sentence splitter can read.
+        html = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1>", " ", html)
         html = re.sub(r"(?is)<h[1-6]\b[^>]*>.*?</h[1-6]>", " ", html)
         for unit in re.split(BLOCK, html):
             unit = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", unit)).strip()

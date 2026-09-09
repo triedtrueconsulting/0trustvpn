@@ -422,6 +422,50 @@ def overview(admin: dict = Depends(current_admin)):
             "invoices_open": one(
                 "SELECT COUNT(*) FROM invoices WHERE status='pending'"),
         }
+        # --- The conversion funnel ---
+        #
+        # Every figure here is counted from rows the service has to keep
+        # anyway to deliver what a customer paid for: an account's plan and
+        # whether it began as a trial, and an invoice's status. Nothing new
+        # is collected and nothing is per-visitor, which is what lets this
+        # exist at all next to privacy.html §5. There is deliberately no
+        # measurement of visits, clicks or sources: that would need either a
+        # third-party script or a per-visitor identifier, and the site says
+        # in as many words that it has neither. The trade is real and it is
+        # made on purpose — we can see how many people who started a trial
+        # went on to pay, and we cannot see where any of them came from.
+        #
+        # trial_started_at survives conversion (paying sets plan='paid' and
+        # leaves it), so 'converted' is knowable without a new column.
+        trials_started = one("SELECT COUNT(*) FROM accounts WHERE trial_started_at > 0")
+        trials_converted = one(
+            "SELECT COUNT(*) FROM accounts WHERE trial_started_at > 0 AND plan='paid'")
+        invoices_made = one("SELECT COUNT(*) FROM invoices")
+        invoices_paid = one("SELECT COUNT(*) FROM invoices WHERE status='settled'")
+
+        def rate(num, den):
+            # None, not 0: an empty denominator is "no data yet", and a
+            # dashboard that renders that as 0% reads as a broken funnel on
+            # the first day of business.
+            return round(100.0 * num / den, 1) if den else None
+
+        funnel = {
+            "trials_started": trials_started,
+            "trials_converted": trials_converted,
+            "trial_conversion_pct": rate(trials_converted, trials_started),
+            "invoices_created": invoices_made,
+            "invoices_settled": invoices_paid,
+            "checkout_completion_pct": rate(invoices_paid, invoices_made),
+            "paid_direct": one(
+                "SELECT COUNT(*) FROM accounts WHERE plan='paid' AND trial_started_at = 0"),
+            "trials_started_30d": one(
+                "SELECT COUNT(*) FROM accounts WHERE trial_started_at > ?",
+                now - 30 * 86400),
+            "invoices_settled_30d": one(
+                "SELECT COUNT(*) FROM invoices WHERE status='settled' AND settled_at > ?",
+                now - 30 * 86400),
+        }
+
         nodes = [dict(r) for r in conn.execute(
             """SELECT id, region, role, active, ephemeral, public_ip,
                       last_heartbeat, capacity
@@ -435,9 +479,9 @@ def overview(admin: dict = Depends(current_admin)):
     for n in nodes:
         n["healthy"] = bool(n["active"]) and (
             not n["ephemeral"] or n["last_heartbeat"] > stale)
-    return {"accounts": accounts, "revenue": revenue, "devices": devices,
-            "nodes": nodes, "provider": provider, "recent_activity": recent,
-            "now": now}
+    return {"accounts": accounts, "revenue": revenue, "funnel": funnel,
+            "devices": devices, "nodes": nodes, "provider": provider,
+            "recent_activity": recent, "now": now}
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ entry, fails there rather than in a search console six weeks later.
   ./scripts/gen-sitemap.py            # rewrite web/sitemap.xml
   ./scripts/gen-sitemap.py --check    # exit 1 if it is out of date
 """
-import os, re, subprocess, sys
+import os, sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SITE = "https://0trustvpn.com"
@@ -46,24 +46,30 @@ PAGES = [
 EXCLUDED = {"admin.html", "404.html", "50x.html"}
 
 
-def lastmod(page):
-    """The date the page last actually changed, from git rather than mtime.
-
-    A checkout's mtimes are all the moment it was cloned, which would put
-    every page's lastmod at the same wrong day and teach crawlers to ignore
-    the field."""
-    r = subprocess.run(["git", "log", "-1", "--format=%cs", "--", f"web/{page}"],
-                       cwd=REPO, capture_output=True, text=True)
-    return r.stdout.strip() or "2026-01-01"
+# There is deliberately no <lastmod>.
+#
+# The first version of this script took it from `git log -1` on each page,
+# which is the only trustworthy source available — mtimes in a fresh checkout
+# are all the moment it was cloned. But a file whose content depends on its
+# own commit metadata cannot be committed consistently: regenerating, then
+# committing, changes the very date that was just written, so the --check
+# gate went red on every commit that touched a page and could only be
+# satisfied by a second, empty commit. That is a treadmill, and a treadmill
+# gets switched off.
+#
+# Dropping the field costs nothing. Google states plainly that it ignores
+# lastmod when the values do not look trustworthy, and a date that is always
+# one commit behind is exactly that. changefreq and priority are hints too;
+# they are kept because they are stable facts about the pages rather than
+# claims about time that need maintaining.
 
 
 def build():
     out = ['<?xml version="1.0" encoding="UTF-8"?>',
            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
-    for url, page, prio, freq in PAGES:
+    for url, _page, prio, freq in PAGES:
         out.append("  <url>")
         out.append(f"    <loc>{SITE}{url}</loc>")
-        out.append(f"    <lastmod>{lastmod(page)}</lastmod>")
         out.append(f"    <changefreq>{freq}</changefreq>")
         out.append(f"    <priority>{prio}</priority>")
         out.append("  </url>")
