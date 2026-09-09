@@ -529,16 +529,29 @@ nothing at all.
 
 The full schema is in `api/main.py`. Tables and their content:
 
+Every table, not a selection — the four that were missing from this list were
+missing because they hold no customer data, and three of them had no retention
+at all as a result. An auditor reconciling this table against the schema in
+`api/main.py` should find each name here, with an answer.
+
 | Table | Customer-identifying content? | Retention |
 |-------|-------------------------------|-----------|
-| `accounts` | Token hash, plan, expiry | Lifetime of subscription; unpaid signups deleted after 7 days |
-| `devices` | Pubkey + customer label | Until removed or account expired 7+ days |
-| `invoices` | Amount, status, checkout URL | Account lifetime; failed invoices GC'd after 30 days |
+| `accounts` | Token hash, plan, expiry | Deleted 30 days after expiry — the refund window in terms.html §4; unpaid signups deleted after 7 days |
+| `devices` | Pubkey + customer label | Released 7 days after the account expires; deleted with the account |
+| `invoices` | Amount, status, checkout URL | Deleted with the account; failed invoices GC'd after 30 days |
 | `hop_pairs` | Entry/exit node refs, port | 24h auto-rotation |
 | `mesh_nodes` | Node ID, pubkey, public IP | Persistent for static nodes; ephemeral nodes pruned 1h after last heartbeat |
 | `provision_tokens` | Token hash + region/role | Burned on use; row deleted 24h after that |
-| `trial_grants` | A random nonce we generated | 24h — long enough that a solved stamp cannot be reused, then gone |
+| `trial_grants` | A random nonce we generated | 24h — long enough that a solved stamp cannot be reused, then gone. Detached from the account before the account is deleted, so a stamp cannot be redeemed twice |
 | `device_nodes` | Which nodes may see a device's pubkey | Rewritten on every connect; deleted with the device |
+| `notices` | The text of a message to one account, or to all | Deleted with the account it addresses |
+| `notice_reads` | That an account has read a notice | Deleted with the account |
+| `ops_events` | **No** — node ids, provider names and counts, never an account id | 90 days (`ZTV_OPS_EVENT_RETAIN_DAYS`) |
+| `admin_audit` | **No** — the operator's own actions on the dashboard | 365 days (`ZTV_ADMIN_AUDIT_RETAIN_DAYS`) |
+| `admin_sessions` | **No** — a hash of the operator's session cookie | Deleted a day after the session expires, and on the next login |
+| `admins` | **No** — the operator's username and password hash | For as long as the operator exists |
+| `settings` | **No** — deployment configuration the dashboard owns | For as long as the setting is set |
+| `address_index` | **No** — a single counter, the next derivation index | Permanent by necessity: reusing an index reuses a receive address |
 
 Two of these deserve a note, because "we keep the minimum" only means
 something if abandoned data actually leaves.

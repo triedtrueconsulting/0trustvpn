@@ -68,6 +68,14 @@ func mustSub(f embed.FS, dir string) fs.FS {
 
 const ListenAddr = "127.0.0.1:51827"
 
+// maxRequestBytes caps every JSON body this server will read. Three handlers
+// already had it and five did not, which is the shape of an inconsistency
+// that gets noticed the day one of the five is the one being driven: the
+// largest legitimate body here is a device pubkey and a region code. Nothing
+// downstream needs its own bound — config.NormalizeToken is handed a value
+// that has already passed through this.
+const maxRequestBytes = 4096
+
 // Serve starts the GUI server and (optionally) opens the browser. Blocks
 // until the user kills the process or the server exits.
 // alreadyServing reports whether the thing holding our port is another copy of
@@ -339,7 +347,7 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 		Transport:           transport.Short(st),
 	}
 	if st.Token != "" {
-		view.Token = maskToken(st.Token)
+		view.Token = config.MaskToken(st.Token)
 		// Best-effort status fetch; don't fail the whole call if API is down
 		c := api.New(st.APIBase, st.Token)
 		if s := cachedStatus(c, r.URL.Query().Get("refresh") == "1"); s != nil {
@@ -367,13 +375,14 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body loginReq
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes)).Decode(&body); err != nil {
 		writeErr(w, 400, "bad json")
 		return
 	}
-	token := strings.ToUpper(strings.TrimSpace(body.Token))
-	if !validToken(token) {
-		writeErr(w, 400, "token must be XXXX-XXXX-XXXX-XXXX")
+	token, ok := config.NormalizeToken(body.Token)
+	if !ok {
+		writeErr(w, 400, "that is not an account token — it must be the 16 "+
+			"characters you were issued (XXXX-XXXX-XXXX-XXXX)")
 		return
 	}
 
@@ -427,7 +436,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body connectReq
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes)).Decode(&body); err != nil {
 		writeErr(w, 400, "bad json")
 		return
 	}
@@ -618,7 +627,7 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body exportReq
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes)).Decode(&body); err != nil {
 		writeErr(w, 400, "bad json")
 		return
 	}
@@ -719,7 +728,7 @@ func handleNoticeRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req noticeReadReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == 0 {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes)).Decode(&req); err != nil || req.ID == 0 {
 		writeErr(w, 400, "which notice?")
 		return
 	}
@@ -751,7 +760,7 @@ func handleRemoveDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req removeReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pubkey == "" {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes)).Decode(&req); err != nil || req.Pubkey == "" {
 		writeErr(w, 400, "pubkey required")
 		return
 	}
@@ -935,7 +944,7 @@ func handleKillSwitch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes)).Decode(&body); err != nil {
 		writeErr(w, 400, "malformed request")
 		return
 	}
@@ -974,7 +983,7 @@ func handleTopup(w http.ResponseWriter, r *http.Request) {
 		Months   int    `json:"months"`
 		Currency string `json:"currency"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes)).Decode(&body); err != nil {
 		writeErr(w, 400, "malformed request")
 		return
 	}
@@ -1052,7 +1061,7 @@ func handleObfuscate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes)).Decode(&body); err != nil {
 		writeErr(w, 400, "malformed request")
 		return
 	}
@@ -1122,31 +1131,6 @@ func checkRoot() error {
 		return errors.New("connect/disconnect/rotate need root — start the GUI with sudo")
 	}
 	return nil
-}
-
-func validToken(t string) bool {
-	if len(t) != 19 {
-		return false
-	}
-	for i, ch := range t {
-		if i == 4 || i == 9 || i == 14 {
-			if ch != '-' {
-				return false
-			}
-			continue
-		}
-		if !strings.ContainsRune("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", ch) {
-			return false
-		}
-	}
-	return true
-}
-
-func maskToken(t string) string {
-	if len(t) < 9 {
-		return t
-	}
-	return t[:4] + "-****-****-" + t[len(t)-4:]
 }
 
 func openInBrowser(url string) {

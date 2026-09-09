@@ -39,6 +39,40 @@ for v in BTCPAY_HOST BTCPAY_ADMIN_EMAIL BTCPAY_ADMIN_PASSWORD BTC_XPUB CONTROL_H
 done
 command -v jq >/dev/null || die "install jq first"
 
+# ----------------------------------------------------------------------------
+# Step 0 — the wallet, checked before anything reaches the network
+# ----------------------------------------------------------------------------
+# This used to sit in step 3, after the script had authenticated to BTCPay,
+# minted an API key and created a store. Every one of those is a side effect
+# on somebody else's machine, and all of it happened before a purely local
+# check on an environment variable — so an operator who pasted the wrong xpub
+# found out with a store already standing. Local checks first.
+#
+# BTCPay will accept any valid derivation scheme, issue addresses from it
+# forever, and mark invoices paid — into somebody else's wallet, with nothing
+# anywhere reporting a problem. The wallet this deployment is meant to pay
+# into is recorded by digest in scripts/wallet.pin, which is the only thing
+# that catches a truncated or wrong-account paste.
+prefix=${BTC_XPUB:0:4}
+case "$prefix" in
+    xpub|tpub)  DERIVATION="${BTC_XPUB}-[legacy]" ;;
+    ypub|upub)  DERIVATION="$BTC_XPUB" ;;
+    zpub|vpub)  DERIVATION="$BTC_XPUB" ;;
+    *)          die "Unrecognized xpub prefix '$prefix' (expected xpub/ypub/zpub)" ;;
+esac
+
+CHECK_WALLET="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check-wallet.sh"
+if [[ -x "$CHECK_WALLET" ]]; then
+    rc=0; "$CHECK_WALLET" --count 1 "$BTC_XPUB" >/dev/null 2>&1 || rc=$?
+    if [[ $rc -eq 3 && -z "${ALLOW_UNPINNED_WALLET:-}" ]]; then
+        die "BTC_XPUB is not the wallet pinned in scripts/wallet.pin.
+    Run ./scripts/check-wallet.sh '$prefix…' to see both digests. If this
+    wallet is deliberate, re-pin it (--pin) or set ALLOW_UNPINNED_WALLET=1."
+    fi
+else
+    warn "scripts/check-wallet.sh not found — BTC_XPUB unverified"
+fi
+
 STORE_NAME="${STORE_NAME:-0trust VPN}"
 BASE="https://$BTCPAY_HOST"
 
@@ -123,30 +157,6 @@ fi
 #   ypub.../49'/0'/0'  → wrapped segwit      → "<xpub>"
 #   zpub.../84'/0'/0'  → native segwit       → "<xpub>"  (default)
 log "Configuring Bitcoin payment method"
-prefix=${BTC_XPUB:0:4}
-case "$prefix" in
-    xpub|tpub)  DERIVATION="${BTC_XPUB}-[legacy]" ;;
-    ypub|upub)  DERIVATION="$BTC_XPUB" ;;
-    zpub|vpub)  DERIVATION="$BTC_XPUB" ;;
-    *)          die "Unrecognized xpub prefix '$prefix' (expected xpub/ypub/zpub)" ;;
-esac
-
-# The wallet this deployment is meant to pay into is recorded by digest in
-# scripts/wallet.pin. Check it here too: BTCPay will happily accept any valid
-# derivation scheme, issue addresses from it forever, and mark invoices paid —
-# into somebody else's wallet, with nothing to notice.
-CHECK_WALLET="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check-wallet.sh"
-if [[ -x "$CHECK_WALLET" ]]; then
-    rc=0; "$CHECK_WALLET" --count 1 "$BTC_XPUB" >/dev/null 2>&1 || rc=$?
-    if [[ $rc -eq 3 && -z "${ALLOW_UNPINNED_WALLET:-}" ]]; then
-        die "BTC_XPUB is not the wallet pinned in scripts/wallet.pin.
-    Run ./scripts/check-wallet.sh '$prefix…' to see both digests. If this
-    wallet is deliberate, re-pin it (--pin) or set ALLOW_UNPINNED_WALLET=1."
-    fi
-else
-    warn "scripts/check-wallet.sh not found — BTC_XPUB unverified"
-fi
-
 api PUT "/api/v1/stores/$STORE_ID/payment-methods/BTC-CHAIN" "$(jq -nc \
     --arg deriv "$DERIVATION" \
     '{

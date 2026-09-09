@@ -164,9 +164,14 @@ FastAPI app on `127.0.0.1:8080`. Endpoints:
 | GET    | `/api/v1/health`                  | none            | Liveness probe                       |
 | GET    | `/api/v1/config`                  | none            | Public offer: trial length + label, device cap, currencies |
 
-**Token model.** A 16-char Crockford-base32 string in 4-char groups
-(e.g. `7K2M-9X4P-AQ8R-J3WN`) ≈ 80 bits of entropy. Stored only as SHA-256
-hash. There is no recovery flow — by design.
+**Token model.** A 16-char string in 4-char groups (e.g. `7K2M-9X4P-AQ8R-J3WN`)
+— exactly 80 bits of entropy, stored only as a SHA-256 hash. There is no
+recovery flow, by design. The alphabet is A-Z and 2-9 with I, O, 0 and 1
+removed, so a token read off a screen cannot be mistyped into a *different
+valid* one. That is close to Crockford base32 but not the same set: Crockford
+also drops L and U, which these tokens use. The separators and the case are
+cosmetic — the server strips and upper-cases before hashing, so every client
+takes a paste in any of those spellings.
 
 **Database.** SQLite (WAL mode) at `/var/lib/0trust/0trust.db`. Migrate to
 Postgres when you have >10k active accounts.

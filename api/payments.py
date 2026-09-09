@@ -998,9 +998,20 @@ class WatchOnlyProvider:
             raise PaymentError(
                 f"{api} did not report a chain tip — cannot tell how deep a "
                 f"payment is, so it will not be credited")
-        # Mempool transactions plus the most recent confirmed ones. These are
-        # single-use invoice addresses, so the payment we are looking for is
-        # always in the first page.
+        # Mempool transactions plus the most recent 25 confirmed ones.
+        # Normally the payment is the only thing this address has ever seen.
+        # It is not guaranteed to be: the address is published to whoever is
+        # paying, and BIP84 derivation is sequential, so somebody who has
+        # bought once can predict the next addresses and dust-spam them. Past
+        # 25 confirmed transactions the real payment falls off this page and
+        # is counted as nothing — the customer has paid and the invoice never
+        # settles, with no error anywhere. The total below is what makes that
+        # visible; without it the failure is silent, which is the part that
+        # cannot be supported.
+        summary = _http("GET", f"{api}/address/{address}", {}, None,
+                        self.timeout) or {}
+        funded_total = int((summary.get("chain_stats") or {}).get(
+            "funded_txo_sum") or 0)
         txs = _http("GET", f"{api}/address/{address}/txs", {}, None,
                     self.timeout) or []
         deep = shallow = 0
@@ -1020,7 +1031,23 @@ class WatchOnlyProvider:
                 deep += paid
             else:
                 shallow += paid
+        if deep + shallow < funded_total:
+            # Some of what this address received is not on the page, so its
+            # depth is unknown. Refuse rather than report the smaller figure:
+            # the poller treats a raise as "ask again next minute", and the
+            # log line names an address a human can look at. Counting the
+            # rest as deep would be the opposite error — crediting money we
+            # cannot see the depth of — and this is the direction that costs
+            # a support ticket instead of a reorg.
+            raise PaymentError(
+                f"{api} paged out part of {address}'s history "
+                f"({deep + shallow} of {funded_total} accounted for) — cannot "
+                f"tell how deep the rest is, so it will not be credited")
         return deep, shallow
+
+    # How many unspent outputs Blockchair returns for one address. At the cap
+    # the list is truncated and nothing in the response says so.
+    BLOCKCHAIR_UTXO_PAGE = 100
 
     def _blockchair_received(self, api: str, address: str,
                              min_conf: int = 1) -> tuple[int, int]:
@@ -1043,6 +1070,23 @@ class WatchOnlyProvider:
             raise PaymentError(
                 f"{api} did not report block heights for {address} — cannot "
                 f"confirm {min_conf} blocks of depth, so it will not be credited")
+        if len(utxo) >= self.BLOCKCHAIR_UTXO_PAGE:
+            # Blockchair caps the UTXO list it returns. Past that cap this
+            # reader fails in the DANGEROUS direction, not the safe one: the
+            # `received - unspent` term below exists to count already-swept
+            # outputs as confirmed, and a truncated list inflates exactly that
+            # difference — so outputs whose depth was never seen get credited
+            # as deep. That is the reorg risk the confirmations setting exists
+            # to remove, arriving through the back door.
+            #
+            # A single-use invoice address does not accumulate a hundred
+            # outputs on its own. One that has is being dusted, and the honest
+            # answer is that we cannot account for it.
+            raise PaymentError(
+                f"{api} returned {len(utxo)} unspent outputs for {address}, "
+                f"its page limit — the rest of the address's outputs are not "
+                f"visible, so their depth cannot be confirmed and it will not "
+                f"be credited")
         deep = unspent = 0
         for u in utxo:
             value = int(u.get("value") or 0)
@@ -1054,7 +1098,8 @@ class WatchOnlyProvider:
         # and the operator could only have swept it from a confirmed output.
         # Without this an address swept while its invoice was still open would
         # read as never paid — the utxo set is what Blockchair reports heights
-        # for, and a swept output has left it.
+        # for, and a swept output has left it. Safe only because the page-limit
+        # check above rules out the other reason the two figures can differ.
         deep += max(0, received - unspent)
         return deep, max(unconfirmed, received - deep)
 

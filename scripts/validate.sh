@@ -266,6 +266,14 @@ check seo-sitemap "sitemap.xml covers the routed pages and is current" -- \
 check seo-jsonld "structured data matches the pages and the API's prices" -- \
     ./scripts/gen-seo.py --check
 
+# The vendored third-party JS is served from our own domain, into every
+# visitor's browser, and its integrity rested on a script nothing ran:
+# vendor-third-party.sh had a working --check-only mode and no gate above it.
+# A file edited in place, or a hash that drifted from the manifest, went
+# unnoticed. --check-only makes no network request.
+check vendor-integrity "vendored third-party JS matches its pinned hashes" -- \
+    ./scripts/vendor-third-party.sh --check-only
+
 check json-parse "every .json parses" -- "$PY" -c '
 import json, os, sys
 bad = []

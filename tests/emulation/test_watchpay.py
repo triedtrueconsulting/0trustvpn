@@ -204,6 +204,58 @@ try:
     check("the right amount, deep enough, settles",
           status_of(macct["invoice_id"]) == "settled")
 
+    # ----------------------------------------------------------------------
+    # A transfer the wallet does not label belongs to nobody.
+    #
+    # received() filters on subaddr_index and then re-filters, because some
+    # wallet-rpc builds ignore subaddr_indices for the pool bucket. But the
+    # re-filter was `if sub is not None and sub != mine: continue` — so a
+    # transfer with NO subaddr_index fell through and was counted. Each
+    # invoice queries with its own minor index and none of them could tell
+    # the transfer was not theirs, which means one unlabelled payment
+    # settling every open invoice at once. Skipping it under-credits, and an
+    # invoice that stays open gets a human; a subscription handed out for
+    # somebody else's money does not.
+    # ----------------------------------------------------------------------
+    print("\n[6c] an unattributable transfer credits nobody")
+    st, ghost = H.call("POST", "/api/v1/account", {"months": 1, "currency": "XMR"})
+    check("a third XMR signup for the attribution check", st == 200, ghost)
+    grow = sql("SELECT * FROM invoices WHERE id = ?", ghost["invoice_id"])[0]
+    g_atomic = int(round(float(grow["amount_crypto"]) * mw.ATOMIC))
+    g_idx = int(grow["derivation_index"])
+
+    # Paid in full, deep enough — but the wallet reports it without a
+    # subaddr_index, the way a build that drops the field would.
+    fake_walletrpc.UNLABELLED[0] = True
+    fake_walletrpc.pay(g_idx, g_atomic, confirmations=50)
+    try:
+        conf, pend_amt = mw.MoneroWatcher(
+            rpc_url=f"http://127.0.0.1:{WALLET_PORT}/json_rpc").received(g_idx)
+        check("an unlabelled transfer is not counted, even for its own index",
+              (conf, pend_amt) == (0, 0),
+              f"confirmed={conf} pending={pend_amt} — the watcher credited a "
+              f"transfer it could not attribute")
+        # The real harm: a DIFFERENT invoice asking must not see it either.
+        other, _ = mw.MoneroWatcher(
+            rpc_url=f"http://127.0.0.1:{WALLET_PORT}/json_rpc").received(g_idx + 999)
+        check("and an unrelated invoice does not see it as its own payment",
+              other == 0,
+              f"invoice at index {g_idx + 999} was credited {other} atomic "
+              f"units of somebody else's money")
+        run_poller()
+        check("so the invoice stays pending rather than settling on it",
+              status_of(ghost["invoice_id"]) == "pending",
+              "an unattributable transfer settled a real invoice")
+    finally:
+        fake_walletrpc.UNLABELLED[0] = False
+
+    # With the label back, the same money settles it — so the skip above is
+    # attribution failing closed, not the watcher being broken.
+    run_poller()
+    check("labelled, the same transfer settles it",
+          status_of(ghost["invoice_id"]) == "settled",
+          "the watcher stopped seeing a properly labelled payment")
+
     print("\n[6b] the checkout page is told the truth about the same money")
     # /payment/{id}/status is what the customer watches while they wait. It
     # had its own copy of the settlement arithmetic with 1e8 hardcoded and no
@@ -560,6 +612,56 @@ try:
             check(f"{label}: the full amount is counted as confirmed",
                   r["confirmed_sats"] == amount, r)
             fake_explorer.reset()
+
+            # ----------------------------------------------------------
+            # A payment pushed off the explorer's first page.
+            #
+            # Esplora returns at most 25 confirmed transactions per page,
+            # newest first. The depth reader read that one page and summed
+            # what it saw — so once 25 later transactions existed, the real
+            # payment was invisible and the address read as never paid. The
+            # customer has paid; the invoice never settles; nothing anywhere
+            # says why. And the address is not private: it is published to
+            # whoever is paying, and BIP84 derivation is sequential, so
+            # somebody who has bought once can predict the next ones.
+            #
+            # Under-crediting is the right direction — crediting money whose
+            # depth we cannot see is the reorg this whole block exists to
+            # prevent. Doing it SILENTLY is not. It has to raise.
+            # ----------------------------------------------------------
+            if depth > 1:
+                buried = f"probe-{coin.lower()}-buried"
+                fake_explorer.pay(buried, amount, depth=depth + 10)
+                r = prov.check(buried, amount, coin=coin)
+                check(f"{label}: a deep payment settles while it is on the page",
+                      r["status"] == pay_mod.SETTLED, r)
+                # Enough later one-satoshi transactions to push the real
+                # payment off whichever page this reader looks at, all deep
+                # enough that depth is not what hides it.
+                for _ in range(max(fake_explorer.PAGE_SIZE,
+                                   fake_explorer.BLOCKCHAIR_UTXO_PAGE)):
+                    fake_explorer.pay(buried, 1, depth=depth)
+                try:
+                    r = prov.check(buried, amount, coin=coin)
+                    settled_anyway = r["status"] == pay_mod.SETTLED
+                    check(f"{label}: a payment pushed off the page raises "
+                          f"rather than reading as unpaid",
+                          False,
+                          f"returned {r} instead of raising — a real payment "
+                          f"the reader cannot see must not be reported as a "
+                          f"smaller number"
+                          if not settled_anyway else
+                          f"settled from a truncated page: {r}")
+                except pay_mod.PaymentError as e:
+                    check(f"{label}: a payment pushed off the page raises "
+                          f"rather than reading as unpaid", True)
+                    check(f"{label}: and the error names the address and "
+                          f"what is missing, so an operator can act on it",
+                          buried in str(e)
+                          and ("accounted for" in str(e)
+                               or "not visible" in str(e)),
+                          f"unhelpful message: {e}")
+                fake_explorer.reset()
         finally:
             if prev is None:
                 os.environ.pop(env_conf, None)

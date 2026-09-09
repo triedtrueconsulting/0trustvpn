@@ -123,6 +123,14 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   wrong-account paste derives perfectly valid addresses belonging to somebody
   else. `check-wallet.sh` exits 3 on a mismatch, and `install.sh --wallet`,
   `scripts/preflight.sh` and `btcpay/scripts/configure.sh` all refuse on it.
+  **configure.sh checks it before it opens a connection.** The check used to
+  sit in step 3, so an operator who pasted the wrong xpub had already
+  authenticated, minted an API key and created a store on the BTCPay host
+  before a purely local check on an environment variable ran. `test_audit.py`
+  [6c] runs the script for real against a listener that counts connections and
+  requires zero of them on a refusal — with a positive control
+  (`ALLOW_UNPINNED_WALLET=1`) so the assertion cannot be satisfied by a script
+  that exits early for some other reason.
   The operator wallet chosen 2026-08-25 is
   `sha256:ac5863cea1b0c134fab8740a50247f1a8e3e6c03c049eaaf01d42377f4bcf484`
   (BIP84, bc1q…). Re-pin with `check-wallet.sh --pin <key>`; never paste the
@@ -170,10 +178,24 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   `XMR_CONFIRMATIONS` (10) decide when an invoice credits. Only Monero honoured
   its setting; BTC and ZEC read an explorer's `chain_stats`, which counts a
   transaction from the moment it is mined, so Zcash credited one block deep
-  while the dashboard label said five. Depth costs an extra explorer call
-  (`/blocks/tip/height` plus the address's txs for Esplora, `utxo[].block_id`
-  against `context.state` for Blockchair) and is taken only when the operator
-  asked for more than one. `/api/v1/config` publishes `confirmations` so no
+  while the dashboard label said five. Depth costs extra explorer calls
+  (`/blocks/tip/height`, the address summary and the address's txs for
+  Esplora; `utxo[].block_id` against `context.state` for Blockchair) and is
+  taken only when the operator asked for more than one.
+  **Both depth readers now refuse a truncated answer rather than guess.**
+  Esplora returns 25 confirmed transactions per page and Blockchair 100
+  unspent outputs, neither says it truncated, and an invoice address is
+  published to whoever is paying — while BIP84 derivation is sequential, so
+  one past customer can predict the next addresses and dust them. The two
+  readers failed in OPPOSITE directions, which is why both needed a guard:
+  Esplora summed one page and silently under-credited (the customer pays, the
+  invoice never settles, nothing logs why), while Blockchair's
+  `received - unspent` term — there so a swept address does not read as
+  unpaid — counted every output missing from a truncated list as confirmed,
+  crediting money whose depth was never seen. Esplora now compares the page
+  against `chain_stats.funded_txo_sum` and Blockchair against its own page
+  limit; either shortfall raises, which the poller treats as "ask again next
+  minute" and which puts the address in a log line a human can act on. `/api/v1/config` publishes `confirmations` so no
   page restates the numbers — the site used to say "activates on the first
   confirmation", which was false for two of the three coins.
 - **The default provider is `watch`, defined once in
@@ -468,9 +490,14 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   node. `_validate_wg_key` in `api/main.py` decodes it and requires 32 bytes;
   `_validate_public_ip` requires a literal IP, because a node's `public_ip`
   is interpolated into an `nft -f` DNAT rule. Both run on
-  `WGRegisterRequest`, `WGRotateRequest` and `NodeProvisionRequest`.
+  `WGRegisterRequest`, `WGRotateRequest`, `NodeProvisionRequest` **and the
+  admin dashboard's `NodeRequest`** — that fourth one was the ingest path
+  nobody had counted, and it had only `min_length=44, max_length=44`, which
+  is the exact guard this invariant exists because it was not enough.
   `min_length=44` alone was the old guard and it let all of the above
-  through. meshd also skips a malformed peer rather than failing the whole
+  through. A test that proves this has to use a key of EXACTLY 44 characters
+  with the newline inside them; a longer injection is refused by
+  `max_length` and says nothing about whether the key is validated. meshd also skips a malformed peer rather than failing the whole
   sync, as defence in depth — but ingest is the real fix. When a test's `wg`
   stub emits a fake key, it must emit a base64-of-32-bytes shape (the stub in
   `tests/emulation/bin/wg` did not, and every stubbed enrolment was refused
@@ -685,11 +712,24 @@ code, actively check for them:
    retries deliveries and the HMAC on a captured delivery never expires, so
    crediting has to be guarded on stored state (`invoices.status`), not on the
    signature being valid.
-8. **Foreign keys in scheduled jobs.** `hop_pairs` references `mesh_nodes`.
-   The sweeper deletes dead nodes, and a 24h pair routinely outlives the node
-   it names, so the delete has to clear dependent pairs first — otherwise it
-   raises and takes the rest of the sweep (account expiry, device release)
-   down with it.
+8. **Foreign keys in scheduled jobs — and in any other bulk delete.**
+   `hop_pairs` references `mesh_nodes`. The sweeper deletes dead nodes, and a
+   24h pair routinely outlives the node it names, so the delete has to clear
+   dependent pairs first — otherwise it raises and takes the rest of the
+   sweep (account expiry, device release) down with it. The account purge had
+   the same hole for `trial_grants`, the one dependent whose FK is
+   `ON DELETE SET NULL` rather than CASCADE — so the block's own comment
+   ("even though every one of these FKs carries ON DELETE CASCADE") did not
+   describe it. On the current schema SQLite covers for the omission; on a
+   database created before the clause was added the FK defaults to NO ACTION
+   and the DELETE raises. `test_lifecycle.py` now scans `api/main.py` for
+   every `REFERENCES accounts(id)` and requires each table to be named in
+   sweep.py's section 6b **with comments stripped first** — with them left in,
+   the check passed by reading back the paragraph explaining why the table
+   had to be handled (bug class #17, met while writing the guard against it).
+   `admin.delete_account` and `admin.admin_delete_device` do the dependents
+   explicitly for the same reason, and the audit row now carries the counts
+   rather than asserting a cascade it never verified.
 9. **Platform-specific Go.** `wg_unix.go` / `wg_windows.go` are build-tagged.
    `checkRoot()` returns nil on Windows (UAC handles elevation), requires
    euid 0 on Unix. Always cross-compile all 6 targets after touching wg or gui.

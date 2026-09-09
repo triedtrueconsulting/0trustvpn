@@ -90,21 +90,34 @@ class H(BaseHTTPRequestHandler):
                             "balance": conf + mem},
                 # Blockchair reports a height per unspent output; that is what
                 # the provider turns into a depth.
+                # Truncated at the page limit, the way Blockchair does it,
+                # and with nothing in the response saying so. Returning the
+                # whole set made the case where outputs are hidden — the one
+                # that used to OVER-credit — impossible to write.
                 "utxo": [{"block_id": p["height"] if p["height"] else -1,
                           "value": p["sats"], "index": i}
-                         for i, p in enumerate(paid)],
+                         for i, p in enumerate(paid)][:BLOCKCHAIR_UTXO_PAGE],
                 **({"_pad": "x" * FLOOD[0]} if FLOOD[0] else {}),
             }}, "context": {"code": 200, "state": TIP[0]}})
         if "/address/" in path and path.endswith("/txs"):
             addr = path[:-len("/txs")].rsplit("/address/", 1)[1]
             with LOCK:
-                paid = list(PAYMENTS.get(addr, []))
+                paid = list(enumerate(PAYMENTS.get(addr, [])))
+            # Esplora's shape, not a convenience: mempool transactions first,
+            # then the newest CONFIRMED ones, at most PAGE_SIZE of them. This
+            # fake used to return the whole history, which made it impossible
+            # to write the case where a payment is pushed off the page — the
+            # one where the customer has paid and the invoice never settles.
+            mem = [(i, p) for i, p in paid if not p["height"]]
+            conf = [(i, p) for i, p in paid if p["height"]]
+            conf.sort(key=lambda ip: (ip[1]["height"], ip[0]), reverse=True)
+            page = mem + conf[:PAGE_SIZE]
             return self._json(200, [{
                 "txid": f"{i:064x}",
                 "status": ({"confirmed": True, "block_height": p["height"]}
                            if p["height"] else {"confirmed": False}),
                 "vout": [{"scriptpubkey_address": addr, "value": p["sats"]}],
-            } for i, p in enumerate(paid)])
+            } for i, p in page])
         if "/address/" in path:
             addr = path.rsplit("/address/", 1)[1]
             conf, mem = _totals(addr)
@@ -117,6 +130,13 @@ class H(BaseHTTPRequestHandler):
                 **({"_pad": "x" * FLOOD[0]} if FLOOD[0] else {}),
             })
         self._json(404, {"error": "no route"})
+
+
+# Esplora returns at most this many confirmed transactions per page.
+PAGE_SIZE = 25
+
+# Blockchair returns at most this many unspent outputs per address.
+BLOCKCHAIR_UTXO_PAGE = 100
 
 
 def _totals(address):

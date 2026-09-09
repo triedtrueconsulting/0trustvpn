@@ -16,6 +16,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -43,7 +44,7 @@ func main() {
 	var err error
 	switch cmd {
 	case "login":
-		err = cmdLogin()
+		err = cmdLogin(args)
 	case "logout":
 		err = cmdLogout()
 	case "status":
@@ -215,16 +216,56 @@ CONNECT / DISCONNECT / ROTATE NEED ROOT
 
 // ---------------------------------------------------------------------------
 
-func cmdLogin() error {
+// cmdLogin reads the account token from stdin, never from the command line.
+//
+// That is deliberate and worth stating, because the obvious "improvement" is
+// to accept `0trust login <token>`: an argument is visible in the shell
+// history file, in `ps` output to every other user on the machine, and in
+// any command log a shared box keeps. The token IS the credential — there is
+// no password behind it and no way to rotate one — so it does not go
+// anywhere it can be read back.
+//
+// A token passed as an argument is REFUSED rather than ignored. It used to be
+// silently dropped: the prompt appeared anyway, and someone scripting it
+// would see a token they supplied go nowhere with nothing said.
+//
+// Piping works and is the supported non-interactive path:
+//
+//	echo 'XXXX-XXXX-XXXX-XXXX' | 0trust login
+func cmdLogin(args []string) error {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return fmt.Errorf(
+			"the token is not taken as an argument — it would land in your " +
+				"shell history and in ps output.\n" +
+				"  Run `0trust login` on its own and paste it at the prompt, " +
+				"or pipe it:\n" +
+				"    echo 'XXXX-XXXX-XXXX-XXXX' | 0trust login")
+	}
 	fmt.Print("Account token: ")
-	reader := bufio.NewReader(os.Stdin)
+	// Bounded: ReadString on a pipe with no newline reads until EOF, so an
+	// unbounded stdin becomes an unbounded allocation. A token line is 19
+	// bytes; anything past this is not one, and the shape check below says so.
+	reader := bufio.NewReader(io.LimitReader(os.Stdin, 4096))
 	token, err := reader.ReadString('\n')
-	if err != nil {
+	if err == io.EOF && strings.TrimSpace(token) == "" {
+		// Nothing on stdin at all: a script, a CI job, or a terminal-less
+		// context. "EOF" on its own is what this used to print, which tells
+		// the person nothing about what happened or what to do — the same
+		// failure the installer's read loop had.
+		return fmt.Errorf(
+			"no token on standard input.\n" +
+				"  Run `0trust login` from a terminal and paste it at the " +
+				"prompt, or pipe it in:\n" +
+				"    echo 'XXXX-XXXX-XXXX-XXXX' | 0trust login")
+	}
+	if err != nil && err != io.EOF {
 		return err
 	}
-	token = strings.ToUpper(strings.TrimSpace(token))
-	if !validToken(token) {
-		return fmt.Errorf("token must be 16 chars in 4-char groups (XXXX-XXXX-XXXX-XXXX)")
+	token, ok := config.NormalizeToken(token)
+	if !ok {
+		return fmt.Errorf("that is not an account token — it must be the 16 " +
+			"characters you were issued (XXXX-XXXX-XXXX-XXXX); the dashes and " +
+			"the case do not matter")
 	}
 
 	st, _ := config.Load()
@@ -325,7 +366,7 @@ func cmdStatus() error {
   kill switch : %s
   next rotate : %s
 `,
-		maskToken(st.Token), s.Status, expiryStr, plural(s.DaysRemaining, "day"),
+		config.MaskToken(st.Token), s.Status, expiryStr, plural(s.DaysRemaining, "day"),
 		s.DeviceCount, devCap, tunnelState(), mode, transport.Describe(st),
 		ipv6Str, killStr, rotateStr)
 
@@ -895,31 +936,6 @@ func requireRoot() error {
 		return fmt.Errorf("this command needs root — try: sudo 0trust %s", strings.Join(os.Args[1:], " "))
 	}
 	return nil
-}
-
-func validToken(t string) bool {
-	if len(t) != 19 {
-		return false
-	}
-	for i, ch := range t {
-		if i == 4 || i == 9 || i == 14 {
-			if ch != '-' {
-				return false
-			}
-			continue
-		}
-		if !strings.ContainsRune("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", ch) {
-			return false
-		}
-	}
-	return true
-}
-
-func maskToken(t string) string {
-	if len(t) < 9 {
-		return t
-	}
-	return t[:4] + "-****-****-" + t[len(t)-4:]
 }
 
 // plural renders a count with its unit, so a customer on their last day reads

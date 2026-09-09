@@ -416,6 +416,57 @@ try:
           f"landing took {quick_done:.1f}s, slow fetch {slow_done:.1f}s — the "
           f"handler is blocking the event loop")
 
+    # ---------------------------------------------------------------------------
+    # A v4 address wearing a v6 costume.
+    #
+    # _is_public() spells its categories out because "a miss here is an SSRF", and
+    # there are four ways an IPv4 address can arrive inside an IPv6 one:
+    # IPv4-mapped, 6to4, Teredo and NAT64. Only the first was named. The rest were
+    # refused anyway — by ipaddress's own is_private/is_reserved classification,
+    # which is a standard-library judgement call that has been revised before and
+    # which nothing here pinned. 2002:a9fe:a9fe:: is 169.254.169.254 in a 6to4
+    # wrapper; on a cloud VPS that address hands out credentials.
+    #
+    # Asserted against guards in-process. It is the one part of the SSRF story a
+    # request through the running proxy cannot show, because these addresses do
+    # not route anywhere from here.
+    # ---------------------------------------------------------------------------
+    print("\n[ssrf] a private address inside an IPv6 one is still private")
+    import ipaddress as _ipa
+    # guards is imported inside the proxy subprocess, not here.
+    sys.path.insert(0, os.path.join(H.REPO, "proxy"))
+    import guards as _guards
+
+    for _addr, _why in (
+            ("::ffff:127.0.0.1", "IPv4-mapped loopback"),
+            ("::ffff:169.254.169.254", "IPv4-mapped cloud metadata"),
+            ("::ffff:10.0.0.1", "IPv4-mapped RFC1918"),
+            ("2002:7f00:0001::", "6to4 wrapping 127.0.0.1"),
+            ("2002:a9fe:a9fe::", "6to4 wrapping the metadata service"),
+            ("2002:0a00:0001::", "6to4 wrapping 10.0.0.1"),
+            ("2001:0:4136:e378:8000:63bf:3fff:fdd2", "Teredo"),
+            ("64:ff9b::7f00:1", "NAT64, well-known prefix, 127.0.0.1"),
+            ("64:ff9b::a9fe:a9fe", "NAT64 wrapping the metadata service"),
+            ("64:ff9b:1::7f00:1", "NAT64, local-use prefix"),
+            ("::1", "plain loopback"),
+            ("fd00::1", "unique-local"),
+            ("fe80::1", "link-local"),
+    ):
+        check(f"refused: {_why} ({_addr})",
+              not _guards._is_public(_ipa.ip_address(_addr)),
+              f"_is_public said {_addr} is a public unicast address")
+
+    # The other direction, or the block above is satisfied by a function that
+    # returns False for everything.
+    for _addr, _why in (
+            ("8.8.8.8", "an ordinary public v4"),
+            ("2606:4700:4700::1111", "an ordinary public v6"),
+            ("1.1.1.1", "another public v4"),
+    ):
+        check(f"still allowed: {_why} ({_addr})",
+              _guards._is_public(_ipa.ip_address(_addr)),
+              f"_is_public refused {_addr} — the proxy now fetches nothing")
+
 finally:
     if proc.poll() is None:
         proc.terminate()

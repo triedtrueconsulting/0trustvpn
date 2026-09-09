@@ -212,6 +212,14 @@ try:
     rc = _sq3.connect(DB); rc.row_factory = _sq3.Row
     rc.execute("PRAGMA foreign_keys=ON")
 
+    def mkacct_in(conn, hashval, expires_at, status="expired", plan="paid"):
+        cur = conn.execute(
+            """INSERT INTO accounts (token_hash, created_at, expires_at,
+                                     status, plan)
+               VALUES (?,?,?,?,?)""",
+            (hashval, int(time.time()) - 400 * 86400, expires_at, status, plan))
+        return cur.lastrowid
+
     def mkacct(hashval, expires_at, status="expired", plan="paid"):
         cur = rc.execute(
             """INSERT INTO accounts (token_hash, created_at, expires_at,
@@ -267,6 +275,166 @@ try:
     check("and so did its invoice",
           rc.execute("SELECT 1 FROM invoices WHERE id = ?",
                      ("retention-test-invoice",)).fetchone() is None)
+    rc.close()
+
+    # ----------------------------------------------------------------------
+    # Every table that references accounts has to be named in that purge.
+    #
+    # trial_grants was not, and it is the one whose FK is ON DELETE SET NULL
+    # instead of CASCADE, so the block's own comment ("even though every one
+    # of these FKs carries ON DELETE CASCADE") did not describe it. On the
+    # current schema SQLite covers for the omission; on a database created
+    # before the clause was added the FK defaults to NO ACTION and the
+    # DELETE raises, which takes the REST of the sweep down with it — bug
+    # class #8, in the block that cites bug class #8.
+    #
+    # A structural check rather than a case, because the next table with an
+    # FK to accounts is the one nobody will remember to add here.
+    # ----------------------------------------------------------------------
+    # ----------------------------------------------------------------------
+    # The three tables that had no retention, swept for real.
+    #
+    # docs/AUDIT.md §10 now gives each of them a window. A window a document
+    # states and a sweeper does not enforce is the drift this product exists
+    # to not have, so this runs the sweeper and looks at the rows.
+    # ----------------------------------------------------------------------
+    print("\n[retention] ops events, admin audit and admin sessions are bounded")
+    rc = _sq3.connect(DB)
+    rc.execute("INSERT INTO ops_events (created_at, kind, severity, subject, "
+               "detail, delivered) VALUES (?,?,?,?,?,1)",
+               (now_i - 200 * 86400, "node.down", "warn", "zur-01", "old"))
+    rc.execute("INSERT INTO ops_events (created_at, kind, severity, subject, "
+               "detail, delivered) VALUES (?,?,?,?,?,1)",
+               (now_i - 3600, "node.up", "info", "zur-01", "recent"))
+    rc.execute("INSERT INTO admin_audit (admin_id, username, action, target, "
+               "detail, at) VALUES (1,'op','account.ban','a:1','old',?)",
+               (now_i - 400 * 86400,))
+    rc.execute("INSERT INTO admin_audit (admin_id, username, action, target, "
+               "detail, at) VALUES (1,'op','account.ban','a:2','recent',?)",
+               (now_i - 86400,))
+    rc.execute("INSERT INTO admins (id, username, password_hash, created_at) "
+               "VALUES (9,'sweeptest','x',?)", (now_i - 400 * 86400,))
+    rc.execute("INSERT INTO admin_sessions (token_hash, admin_id, created_at, "
+               "expires_at, last_seen) VALUES ('sweep-expired',9,?,?,?)",
+               (now_i - 40 * 86400, now_i - 30 * 86400, now_i - 30 * 86400))
+    rc.execute("INSERT INTO admin_sessions (token_hash, admin_id, created_at, "
+               "expires_at, last_seen) VALUES ('sweep-live',9,?,?,?)",
+               (now_i, now_i + 3600, now_i))
+    rc.commit(); rc.close()
+
+    sw3 = subprocess.run([sys.executable, os.path.join(H.REPO, "api", "sweep.py")],
+                         capture_output=True, text=True, timeout=120,
+                         env={**os.environ, "ZTV_DB_PATH": DB})
+    check("the sweeper ran cleanly with the new prunes in it",
+          sw3.returncode == 0, sw3.stderr[-500:])
+
+    rc = _sq3.connect(DB)
+    def _gone(sql, *a):
+        return rc.execute(sql, a).fetchone() is None
+
+    check("an ops event past its window is gone",
+          _gone("SELECT 1 FROM ops_events WHERE detail = 'old'"),
+          "docs/AUDIT.md §10 gives ops_events 90 days")
+    check("and a recent one is kept — the operator still needs the narrative",
+          not _gone("SELECT 1 FROM ops_events WHERE detail = 'recent'"))
+    check("an admin audit row past its window is gone",
+          _gone("SELECT 1 FROM admin_audit WHERE detail = 'old'"),
+          "docs/AUDIT.md §10 gives admin_audit 365 days")
+    check("and a recent one is kept",
+          not _gone("SELECT 1 FROM admin_audit WHERE detail = 'recent'"))
+    check("an expired admin session's token hash is gone",
+          _gone("SELECT 1 FROM admin_sessions WHERE token_hash = 'sweep-expired'"),
+          "an expired session cannot authenticate anything; the row is only a "
+          "credential at rest for whoever seizes the box")
+    check("and a live session survives — the operator is not logged out",
+          not _gone("SELECT 1 FROM admin_sessions WHERE token_hash = 'sweep-live'"))
+    rc.close()
+
+    print("\n[retention] the purge names every dependent of accounts")
+    import re as _re
+    main_src = open(os.path.join(H.REPO, "api", "main.py")).read()
+    sweep_src = open(os.path.join(H.REPO, "api", "sweep.py")).read()
+
+    referring = set()
+    table = None
+    for line in main_src.splitlines():
+        m = _re.match(r"CREATE TABLE IF NOT EXISTS (\w+)", line.strip())
+        if m:
+            table = m.group(1)
+        if table and "REFERENCES accounts(id)" in line:
+            referring.add(table)
+    check("the schema scan found the dependents it is supposed to check",
+          {"devices", "invoices", "notice_reads", "trial_grants"} <= referring,
+          f"found {sorted(referring)} — the scan has drifted from the schema "
+          f"and would pass by seeing nothing")
+
+    purge = sweep_src.split("6b. Purge accounts")[1].split("7. Prune")[0]
+    # Comments stripped first. With them left in, this check passed against a
+    # sweep.py whose only mention of trial_grants was the paragraph EXPLAINING
+    # why trial_grants has to be handled — the check reading its own
+    # justification back and calling it a pass. CLAUDE.md's bug class #17,
+    # reproduced while writing the check meant to prevent it.
+    purge = "\n".join(ln for ln in purge.splitlines()
+                       if not ln.lstrip().startswith("#"))
+    missing = [t for t in sorted(referring)
+               if not _re.search(rf"\b{t}\b", purge)]
+    check("the account purge handles every table referencing accounts",
+          not missing,
+          f"not handled in sweep.py section 6b: {missing}. Each one either "
+          f"raises FOREIGN KEY constraint failed on a pre-CASCADE database, "
+          f"or leaves a customer row behind that privacy.html says is gone.")
+
+    # And the concrete failure, on the schema shape that actually breaks.
+    print("\n[retention] the purge survives a pre-migration foreign key")
+    old_db = os.path.join(H.RUN, "premigration.db")
+    shutil.copy(DB, old_db)
+    rc = _sq3.connect(old_db)
+    rc.execute("PRAGMA foreign_keys=OFF")
+    # Recreate trial_grants the way a database predating the ON DELETE clause
+    # still has it. CREATE TABLE IF NOT EXISTS will not alter it back.
+    rc.execute("ALTER TABLE trial_grants RENAME TO trial_grants_old")
+    rc.execute("""CREATE TABLE trial_grants (
+      nonce TEXT PRIMARY KEY, issued_at INTEGER NOT NULL,
+      redeemed_at INTEGER NOT NULL,
+      account_id INTEGER REFERENCES accounts(id), source TEXT)""")
+    rc.execute("INSERT INTO trial_grants SELECT * FROM trial_grants_old")
+    rc.execute("DROP TABLE trial_grants_old")
+    doomed_id = mkacct_in(rc, "retention-premigration", now_i - retain - 86400)
+    # Redeemed recently, so section 7's own 24h prune leaves it alone and
+    # the purge's handling of it is what the assertions below actually see.
+    # The two windows do not overlap at the shipped defaults — a trial stamp
+    # is a day old and its account is purged 37 days on — but
+    # ZTV_TRIAL_NONCE_RETAIN_SECS is an operator setting, and raising it past
+    # the refund window makes this the ordinary case rather than a contrived
+    # one.
+    rc.execute("INSERT INTO trial_grants VALUES (?,?,?,?,?)",
+               ("premigration-nonce", now_i - 600, now_i - 600,
+                doomed_id, "web"))
+    rc.commit(); rc.close()
+
+    sw2 = subprocess.run([sys.executable, os.path.join(H.REPO, "api", "sweep.py")],
+                         capture_output=True, text=True, timeout=120,
+                         env={**os.environ, "ZTV_DB_PATH": old_db})
+    check("the sweeper does not die on a pre-migration trial_grants FK",
+          sw2.returncode == 0,
+          f"exit {sw2.returncode} — one un-detached dependent stops account "
+          f"expiry, device release and node cleanup for good:\n"
+          f"{sw2.stderr[-600:]}")
+    rc = _sq3.connect(old_db)
+    check("and the account it was blocking is gone",
+          rc.execute("SELECT 1 FROM accounts WHERE id = ?",
+                     (doomed_id,)).fetchone() is None,
+          "the purge ran but left the row it was there to remove")
+    check("the spent stamp survives, detached — a replay must still fail",
+          rc.execute("SELECT account_id FROM trial_grants WHERE nonce = ?",
+                     ("premigration-nonce",)).fetchone() == (None,),
+          "deleting the nonce with the account would let a stamp redeemed "
+          "just before the purge mint a second trial")
+    orphans = rc.execute(
+        """SELECT nonce FROM trial_grants WHERE account_id IS NOT NULL
+             AND account_id NOT IN (SELECT id FROM accounts)""").fetchall()
+    check("no stamp is left pointing at an account that no longer exists",
+          not orphans, f"dangling account_id on {[o[0] for o in orphans]}")
     rc.close()
 
     print("\n[alerts] the disk alarm can fire more than once in a lifetime")

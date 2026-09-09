@@ -518,9 +518,19 @@ section "§7. APPLICATION (API) LOGS"
 
 check api-log-no-tokens "Recent API log has no account-token leakage" -- bash -c "
     command -v journalctl >/dev/null || exit 77
-    # Account tokens are XXXX-XXXX-XXXX-XXXX (Crockford base32, no I/L/O/U/1/0)
+    # Account tokens are 16 characters of TOKEN_ALPHABET in api/main.py:
+    # A-Z and 2-9 with I, O, 0 and 1 removed, so a token read off a screen
+    # cannot be mistyped into a different valid one. That is NOT Crockford
+    # base32 and this comment used to say it was — Crockford also drops L and
+    # U, which this alphabet keeps. The distinction is not pedantic: about two
+    # of every three tokens contain an L or a U, so anyone "correcting" the
+    # class to match the comment would blind this check to most of them.
+    #
+    # Both spellings, because the server accepts both: hash_token() strips
+    # the separators before hashing, so the clients hand a customer's paste
+    # to the API with or without them.
     hit=\$(journalctl -u 0trust-api --since '1 hour ago' 2>/dev/null \
-        | grep -oE '\\b[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}\\b' \
+        | grep -oE '\\b[A-HJ-NP-Z2-9]{4}(-?[A-HJ-NP-Z2-9]{4}){3}\\b' \
         | { head -1; cat >/dev/null; } || true)
     if [[ -n \"\$hit\" ]]; then
         echo 'Account token visible in API journal'

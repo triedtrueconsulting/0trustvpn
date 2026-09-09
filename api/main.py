@@ -1131,9 +1131,16 @@ class TrialChallenge(BaseModel):
 
 
 class TrialRedeemRequest(BaseModel):
-    nonce: str
+    # Exact shapes, not just bounds. This is the only unauthenticated endpoint
+    # that takes a body, and both of these were unbounded while the two fields
+    # beside them were capped — so a wrong-length value reached _sign_challenge
+    # and was HMAC'd before anything looked at it. The server issues the nonce
+    # as secrets.token_hex(16) and the signature as a sha256 hexdigest, so
+    # anything of another length is not one of ours and can be refused on
+    # sight, by the framework, before a handler runs.
+    nonce: str = Field(..., pattern=r"^[0-9a-f]{32}$")
     expires_at: int
-    signature: str
+    signature: str = Field(..., pattern=r"^[0-9a-f]{64}$")
     solution: str = Field(..., max_length=64)
     source: str = Field("web", max_length=16)
 
@@ -2138,8 +2145,12 @@ def wg_rotate(
 # ----------------------------------------------------------------------------
 
 class NodeProvisionRequest(BaseModel):
-    pubkey: str
-    public_ip: str
+    # _validate_wg_key and _validate_public_ip are the real gates (see the
+    # invariant in CLAUDE.md — both of these are interpolated into a file that
+    # runs as root on the node). The bounds here only stop an over-long value
+    # being carried as far as them.
+    pubkey: str = Field(..., max_length=64)
+    public_ip: str = Field(..., max_length=45)
     # Shape-constrained, not enumerated: the set of live regions comes from
     # mesh_nodes, so a future region code has to be accepted — but a node
     # names its own region when it registers, and that string is rendered on

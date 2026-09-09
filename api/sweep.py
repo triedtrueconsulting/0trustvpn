@@ -85,6 +85,30 @@ TRIAL_NONCE_RETAIN_SECS = int(os.environ.get("ZTV_TRIAL_NONCE_RETAIN_SECS", str(
 ACCOUNT_RETAIN_SECS = int(
     os.environ.get("ZTV_ACCOUNT_RETAIN_DAYS", "30")) * 86400
 
+# The three tables that grew forever.
+#
+# None of them holds customer data — ops_events is node ids and counts by
+# invariant, admin_audit is the operator's own actions, admin_sessions is
+# their logins — which is why they were easy to miss while every customer
+# table got a boundary. Two reasons they still need one. First, docs/AUDIT.md
+# §10 presents itself as the complete list of tables and their retention, and
+# an auditor reconciling it against the schema finds rows with no answer.
+# Second, admin_sessions keeps a session token's hash after the session has
+# expired: the row is useless to the operator and is a credential at rest for
+# whoever seizes the box. A successful login already clears expired rows
+# (admin._issue_session), so on a busy deployment this finds nothing — which
+# is exactly why it was easy to believe the table was handled. The deployment
+# where it matters is the one whose operator has not logged in for months.
+OPS_EVENT_RETAIN_SECS = int(
+    os.environ.get("ZTV_OPS_EVENT_RETAIN_DAYS", "90")) * 86400
+# Long enough to answer "who changed that, and when" a year later, which is
+# the only question this table exists for.
+ADMIN_AUDIT_RETAIN_SECS = int(
+    os.environ.get("ZTV_ADMIN_AUDIT_RETAIN_DAYS", "365")) * 86400
+# A grace period past expiry, so a session is not swept out from under an
+# operator whose clock is a little behind the server's.
+ADMIN_SESSION_GRACE_SECS = 86400
+
 log = logging.getLogger("sweep")
 logging.basicConfig(
     level=logging.INFO,
@@ -396,6 +420,22 @@ def main():
                      doomed)
         conn.execute(f"DELETE FROM notices WHERE account_id IN ({marks})", doomed)
         conn.execute(f"DELETE FROM invoices WHERE account_id IN ({marks})", doomed)
+        # trial_grants is the one dependent whose FK is ON DELETE SET NULL
+        # rather than CASCADE, and it was the one this block did not touch.
+        # The reasoning above still applies and the omission was worse here:
+        # on a database created before the clause existed the FK defaults to
+        # NO ACTION, and the DELETE below raises FOREIGN KEY constraint
+        # failed — taking account expiry, device release and node cleanup
+        # down with it, on the schedule, silently.
+        #
+        # Detaching rather than deleting. The nonce has to outlive the
+        # account or a stamp redeemed just before the purge could be redeemed
+        # again; section 7 prunes it on its own clock, by which point the row
+        # is a redemption time and a source word with nothing to attach them
+        # to.
+        conn.execute(
+            f"UPDATE trial_grants SET account_id = NULL "
+            f"WHERE account_id IN ({marks})", doomed)
         cur = conn.execute(f"DELETE FROM accounts WHERE id IN ({marks})", doomed)
         # Counts only. ops_events never holds an account id — see the note at
         # the top of api/ops_alerts.py.
@@ -460,6 +500,29 @@ def main():
     )
     if cur.rowcount:
         log.info("released %d hop_pairs with dangling node refs", cur.rowcount)
+
+    # ---- 11. Bound the three tables that had no retention at all ----
+    # Done before delivery so this run's own events survive it, and last among
+    # the deletes so nothing above depends on rows this removes.
+    cur = conn.execute("DELETE FROM ops_events WHERE created_at < ?",
+                       (now - OPS_EVENT_RETAIN_SECS,))
+    if cur.rowcount:
+        log.info("pruned %d ops events older than %d days",
+                 cur.rowcount, OPS_EVENT_RETAIN_SECS // 86400)
+
+    cur = conn.execute("DELETE FROM admin_audit WHERE at < ?",
+                       (now - ADMIN_AUDIT_RETAIN_SECS,))
+    if cur.rowcount:
+        log.info("pruned %d admin audit rows older than %d days",
+                 cur.rowcount, ADMIN_AUDIT_RETAIN_SECS // 86400)
+
+    # An expired session cannot authenticate anything — current_admin checks
+    # expires_at — so the row is only a token hash sitting on disk. Logging in
+    # sweeps them too; this is the path that does not need anyone to log in.
+    cur = conn.execute("DELETE FROM admin_sessions WHERE expires_at < ?",
+                       (now - ADMIN_SESSION_GRACE_SECS,))
+    if cur.rowcount:
+        log.info("pruned %d expired admin sessions", cur.rowcount)
 
     # Deliver last, once every event this run could produce has been written.
     try:

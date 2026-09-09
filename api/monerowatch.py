@@ -44,6 +44,7 @@ What it costs, stated plainly:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
@@ -51,6 +52,8 @@ import urllib.request
 # 1 XMR = 10^12 piconero. Every amount across this file is atomic units;
 # floats never touch a balance comparison.
 ATOMIC = 10 ** 12
+
+log = logging.getLogger("0trust.monerowatch")
 
 
 # The wallet is ours, but the transfers in it are not: anyone can send to a
@@ -165,7 +168,22 @@ class MoneroWatcher:
                 # get_transfers ignores subaddr_indices on some versions for
                 # the pool bucket, so filter again rather than trusting it.
                 sub = (t.get("subaddr_index") or {}).get("minor")
-                if sub is not None and int(sub) != int(minor_index):
+                if sub is None:
+                    # Unattributable, so it counts for nobody. This used to
+                    # fall through and be added: a transfer the wallet did not
+                    # label would be counted by EVERY invoice that asked,
+                    # because each one asks with its own minor index and none
+                    # of them could tell it was not theirs — one payment
+                    # settling any number of invoices. Skipping under-credits
+                    # instead, which leaves the invoice open for a human to
+                    # look at rather than handing out subscriptions.
+                    log.warning(
+                        "monero: %s transfer with no subaddr_index, skipped "
+                        "(txid %s) — a wallet-rpc that does not label "
+                        "transfers cannot be used to attribute payments",
+                        bucket, str(t.get("txid"))[:16])
+                    continue
+                if int(sub) != int(minor_index):
                     continue
                 amount = int(t.get("amount") or 0)
                 if bucket == "in" and int(t.get("confirmations") or 0) >= self.confirmations:
@@ -188,12 +206,17 @@ class MoneroWatcher:
             return False, ("wallet-rpc is up but has scanned no blocks — check "
                            "--daemon-address points at a reachable node")
         try:
-            watch_only = bool(self._rpc("query_key", {"key_type": "mnemonic"}))
+            # Named for what it means. It was `watch_only` and set True when
+            # the mnemonic query SUCCEEDED — that is, when the wallet is not
+            # watch-only. The logic below was right and the name said the
+            # opposite of the value, in the one check standing between the
+            # control plane and a spend key.
+            has_spend_key = bool(self._rpc("query_key", {"key_type": "mnemonic"}))
         except MoneroError:
             # A view-only wallet has no mnemonic, and asking for one errors.
             # That error is the answer we want.
-            watch_only = False
-        note = "" if not watch_only else \
+            has_spend_key = False
+        note = "" if not has_spend_key else \
             " — WARNING: this wallet holds a spend key. Use a view-only wallet."
         return True, (f"monero-wallet-rpc v{ver}, scanned to height {height}, "
                       f"{self.confirmations} confirmations required{note}")

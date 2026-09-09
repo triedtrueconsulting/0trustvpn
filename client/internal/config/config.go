@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 type State struct {
@@ -154,4 +155,76 @@ func defaultAPIBase() string {
 		return v
 	}
 	return "https://0trustvpn.com"
+}
+
+// ---------------------------------------------------------------------------
+// Account tokens
+//
+// The control plane normalizes before hashing (hash_token in api/main.py:
+// upper, then strip "-" and " "), so the server accepts a token in any case,
+// with or without its group separators. Every other surface of the product
+// already matched that: the browser GUI's input handler re-groups a dashless
+// paste, the iOS app uppercases and trims, the Android app strips whitespace.
+// The CLI was the one that did not — it demanded exactly XXXX-XXXX-XXXX-XXXX
+// and refused a token the server would have accepted, with no way forward for
+// the customer holding it. This is the single definition all Go surfaces use.
+// ---------------------------------------------------------------------------
+
+// TokenAlphabet mirrors TOKEN_ALPHABET in api/main.py: no I, O, 0 or 1, so a
+// token read off a screen cannot be mistyped into a different valid one.
+const TokenAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+// tokenLen is the number of alphabet characters, separators excluded.
+const tokenLen = 16
+
+// NormalizeToken canonicalizes whatever the customer pasted or typed and
+// reports whether it is a well-formed account token. Case, whitespace anywhere
+// in the string, and the group separators are all discarded before checking;
+// what comes back is the canonical XXXX-XXXX-XXXX-XXXX form, which is what
+// gets stored and sent. ok is false for anything that is not exactly sixteen
+// alphabet characters — that check stays strict, because a typo caught here is
+// a clear message instead of a 401 from the server.
+//
+// There is deliberately no length bound inside the loop. One was here and a
+// mutation could not kill it: the trailing length check rejects the same
+// inputs either way, so it guarded nothing while its comment claimed a memory
+// bound it did not provide. The bound belongs where the bytes arrive —
+// maxRequestBytes in the GUI, and the limited stdin read in `0trust login`.
+func NormalizeToken(raw string) (token string, ok bool) {
+	var b strings.Builder
+	b.Grow(tokenLen)
+	for _, ch := range raw {
+		switch {
+		case ch == '-' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n':
+			continue
+		case ch >= 'a' && ch <= 'z':
+			ch -= 'a' - 'A'
+		}
+		if !strings.ContainsRune(TokenAlphabet, ch) {
+			return "", false
+		}
+		b.WriteRune(ch)
+	}
+	raw = b.String()
+	if len(raw) != tokenLen {
+		return "", false
+	}
+	var out strings.Builder
+	out.Grow(tokenLen + 3)
+	for i := 0; i < tokenLen; i += 4 {
+		if i > 0 {
+			out.WriteByte('-')
+		}
+		out.WriteString(raw[i : i+4])
+	}
+	return out.String(), true
+}
+
+// MaskToken renders a token for display: enough of it to recognize which
+// account this is, not enough to use. It takes the canonical form.
+func MaskToken(t string) string {
+	if len(t) < 9 {
+		return t
+	}
+	return t[:4] + "-****-****-" + t[len(t)-4:]
 }

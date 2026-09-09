@@ -15,7 +15,7 @@ the same discipline CLAUDE.md already applies to privacy.html, terms.html and
 the audit pack — a claim nothing executes, or an executable nothing claims, is
 how this product loses the only thing it is selling.
 """
-import os, re, subprocess, sys
+import os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
@@ -286,6 +286,118 @@ check("install.sh refuses a key that is not the pinned one",
       "--wallet must not install a wallet the operator cannot spend from")
 check("preflight blocks on it too", "wallet.pin" in pre and "wallet-pinned" in pre,
       pre[-200:])
+
+# ---------------------------------------------------------------------------
+# btcpay/scripts/configure.sh, actually executed.
+#
+# It is the fourth place that refuses an unpinned wallet and the only one
+# nothing had ever run — bug class #14, on the script that decides which
+# wallet a BTCPay deployment pays into. The two checks above are greps: they
+# see the string "wallet.pin" in a file and infer behaviour from it.
+#
+# The check also used to sit in step 3, after the script had authenticated,
+# minted an API key and created a store on the BTCPay host. So this asserts
+# the ordering as well as the refusal, by pointing BTCPAY_HOST at a listener
+# that records connections: a wrong wallet must produce ZERO of them.
+# ---------------------------------------------------------------------------
+print("\n[6d] the retention table lists every table the schema creates")
+# §10 says "The full schema is in api/main.py. Tables and their content" and
+# then lists a selection. Four were missing — ops_events, admin_audit,
+# admin_sessions and settings — and three of those had no retention at all,
+# which is how a table with no boundary hides in a document whose whole job is
+# to say where the boundaries are. None held customer data, which is why the
+# omission was comfortable rather than obvious.
+_main = open(os.path.join(H.REPO, "api", "main.py")).read()
+_schema_tables = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", _main))
+check("the schema scan found the tables it is meant to check",
+      {"accounts", "devices", "ops_events", "admin_sessions"} <= _schema_tables,
+      f"found {sorted(_schema_tables)} — the scan has drifted and would pass "
+      f"by seeing nothing")
+
+_aud = open(DOC).read()
+_sec10 = _aud.split("Tables and their content")[1].split("\n## ")[0]
+_listed = set(re.findall(r"^\| `(\w+)`", _sec10, re.M))
+_absent = sorted(_schema_tables - _listed)
+check("every table in the schema appears in the audit pack's retention table",
+      not _absent,
+      f"absent from docs/AUDIT.md §10: {_absent}. A table an auditor cannot "
+      f"find an answer for is the finding, whether or not it holds customer "
+      f"data.")
+_phantom = sorted(_listed - _schema_tables)
+check("and it lists no table the schema does not create", not _phantom,
+      f"listed but not in api/main.py: {_phantom}")
+
+# The three that now have a boundary must actually be swept, not merely
+# described. Greps here would restate the document; these are DELETEs.
+_sweep = open(os.path.join(H.REPO, "api", "sweep.py")).read()
+for _t in ("ops_events", "admin_audit", "admin_sessions"):
+    check(f"sweep.py really deletes from {_t}",
+          re.search(rf"DELETE FROM {_t}\b", _sweep) is not None,
+          f"docs/AUDIT.md gives {_t} a retention window and nothing enforces it")
+
+print("\n[6c] the BTCPay configure script refuses an unpinned wallet, before "
+      "it touches the network")
+import socket as _socket
+import threading as _threading
+
+_seen = []
+_lis = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+_lis.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+_lis.bind(("127.0.0.1", 0))
+_lis.listen(16)
+_port = _lis.getsockname()[1]
+_stop = _threading.Event()
+
+def _accept_loop():
+    _lis.settimeout(0.5)
+    while not _stop.is_set():
+        try:
+            c, _ = _lis.accept()
+        except OSError:
+            continue
+        _seen.append(1)
+        try: c.close()
+        except OSError: pass
+
+_t = _threading.Thread(target=_accept_loop, daemon=True); _t.start()
+
+CFG = os.path.join(H.REPO, "btcpay", "scripts", "configure.sh")
+check("configure.sh is executable", os.access(CFG, os.X_OK))
+
+def _run_configure(xpub, **extra):
+    _seen.clear()
+    env = {**os.environ,
+           "BTCPAY_HOST": f"127.0.0.1:{_port}",
+           "BTCPAY_ADMIN_EMAIL": "op@example.invalid",
+           "BTCPAY_ADMIN_PASSWORD": "not-a-real-password",
+           "BTC_XPUB": xpub,
+           "CONTROL_HOST": "0trustvpn.test"}
+    env.pop("ALLOW_UNPINNED_WALLET", None)
+    env.update(extra)
+    r = subprocess.run([CFG], capture_output=True, text=True, timeout=120,
+                       cwd=H.REPO, env=env)
+    time.sleep(0.3)          # let the accept loop record anything in flight
+    return r, len(_seen)
+
+r, conns = _run_configure(SPEC_ZPUB)
+check("a wallet that is not the pinned one is refused", r.returncode != 0,
+      f"rc={r.returncode} — BTCPay would have been configured to pay into it")
+check("and the refusal names wallet.pin and how to override it",
+      "wallet.pin" in r.stderr and "ALLOW_UNPINNED_WALLET" in r.stderr,
+      r.stderr[-300:])
+check("and it made no connection to the BTCPay host at all", conns == 0,
+      f"{conns} connection(s) — the script authenticated and created a store "
+      f"before running a local check on an environment variable")
+
+# The positive control. Without it the three checks above are satisfied by a
+# script that exits before doing anything, for any reason.
+r2, conns2 = _run_configure(SPEC_ZPUB, ALLOW_UNPINNED_WALLET="1")
+check("with the override, it gets past the wallet check and reaches BTCPay",
+      conns2 > 0,
+      f"{conns2} connections — the script stopped for some reason other than "
+      f"the wallet pin, so the checks above prove nothing about the pin")
+
+_stop.set(); _lis.close()
 
 print("\n[7] key generation refuses the wrong machine")
 GEN = os.path.join(H.REPO, "scripts", "generate-keys.sh")

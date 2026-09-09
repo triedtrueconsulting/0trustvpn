@@ -693,9 +693,35 @@ def delete_account(account_id: int, admin: dict = Depends(csrf_guard)):
                             (account_id,)).fetchone()
         if not acct:
             raise HTTPException(404, "No such account")
+        # Explicit, in dependency order, exactly as sweep.py's purge does it
+        # — and for the reason given there: a database created before the
+        # CASCADE clauses existed raises FOREIGN KEY constraint failed, and
+        # here that means a deletion request is refused with a 500 while the
+        # data stays. trial_grants is detached rather than deleted; its FK is
+        # SET NULL and the spent nonce has to outlive the account or the stamp
+        # could be redeemed a second time.
+        #
+        # The note used to say "cascaded: devices, invoices, notices,
+        # hop_pairs" whether or not anything had been. An audit row asserting
+        # a deletion it did not verify is the one kind of claim this product
+        # cannot make, so it now carries the counts.
+        removed = {}
+        for label, sql in (
+            ("hop_pairs", "DELETE FROM hop_pairs WHERE device_id IN "
+                          "(SELECT id FROM devices WHERE account_id = ?)"),
+            ("device_nodes", "DELETE FROM device_nodes WHERE device_id IN "
+                             "(SELECT id FROM devices WHERE account_id = ?)"),
+            ("devices", "DELETE FROM devices WHERE account_id = ?"),
+            ("notice_reads", "DELETE FROM notice_reads WHERE account_id = ?"),
+            ("notices", "DELETE FROM notices WHERE account_id = ?"),
+            ("invoices", "DELETE FROM invoices WHERE account_id = ?"),
+        ):
+            removed[label] = conn.execute(sql, (account_id,)).rowcount
+        conn.execute("UPDATE trial_grants SET account_id = NULL "
+                     "WHERE account_id = ?", (account_id,))
         conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         audit(conn, admin, "account.delete", f"account:{account_id}",
-              "cascaded: devices, invoices, notices, hop_pairs")
+              "deleted " + ", ".join(f"{n} {k}" for k, n in removed.items()))
     return {"ok": True}
 
 
@@ -706,6 +732,11 @@ def admin_delete_device(device_id: int, admin: dict = Depends(csrf_guard)):
                            (device_id,)).fetchone()
         if not row:
             raise HTTPException(404, "No such device")
+        # Same reasoning as delete_account: hop_pairs and device_nodes both
+        # reference devices, and relying on the CASCADE alone turns a
+        # pre-migration database into a 500 on an ordinary admin action.
+        conn.execute("DELETE FROM hop_pairs WHERE device_id = ?", (device_id,))
+        conn.execute("DELETE FROM device_nodes WHERE device_id = ?", (device_id,))
         conn.execute("DELETE FROM devices WHERE id = ?", (device_id,))
         audit(conn, admin, "device.delete", f"device:{device_id}",
               f"account:{row['account_id']}")
@@ -765,6 +796,21 @@ def add_node(req: NodeRequest, admin: dict = Depends(csrf_guard)):
             f"docs/AUDIT.md before you do.")
     if not req.id.startswith(req.region + "-"):
         raise HTTPException(400, f"Node id should start with '{req.region}-'")
+
+    # The same two validators the node's own /provision path runs, and for the
+    # same reason: this pubkey becomes a `PublicKey =` line in a config that
+    # `wg syncconf` parses AS ROOT on the exit node, and this public_ip is
+    # interpolated into an `nft -f` DNAT rule. CLAUDE.md names the invariant
+    # and lists three request models; this was the fourth ingest path and had
+    # neither check — only `min_length=44, max_length=44`, which is precisely
+    # the guard that invariant exists because it was not enough. Forty-four
+    # characters can include a newline, and one malformed peer breaks
+    # `wg syncconf` for EVERY customer on that node.
+    try:
+        req.pubkey = main._validate_wg_key(req.pubkey)
+        req.public_ip = main._validate_public_ip(req.public_ip)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
     endpoint = f"{req.public_ip}:{req.wg_port}"
     if ":" in req.public_ip and not req.public_ip.startswith("["):

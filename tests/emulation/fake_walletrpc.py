@@ -30,6 +30,11 @@ HEIGHT = [3_100_000]
 DOWN = [False]
 HOT_WALLET = [False]     # True = pretend to hold a spend key
 ERROR = [None]           # force a JSON-RPC error, e.g. (-13, "no wallet file")
+UNLABELLED = [False]     # emit transfers with no subaddr_index, and ignore
+                         # the subaddr_indices filter — what a wallet-rpc
+                         # build that drops the label actually does, and the
+                         # case monerowatch's own comment names. It used to
+                         # count such a transfer for whichever invoice asked.
 
 
 def _addr_for(idx):
@@ -76,6 +81,13 @@ class H(BaseHTTPRequestHandler):
 
         if method == "get_transfers":
             want = [int(i) for i in (params.get("subaddr_indices") or [])]
+            if UNLABELLED[0]:
+                # A build that cannot label a transfer cannot filter on the
+                # label either, so it returns everything. Filtering here would
+                # make this fake stricter than the wallet monerowatch has to
+                # defend against — and a check written against it would pass
+                # while the real failure went straight through.
+                want = []
             out = {"in": [], "pending": [], "pool": []}
             with LOCK:
                 for idx, items in TRANSFERS.items():
@@ -84,7 +96,9 @@ class H(BaseHTTPRequestHandler):
                     for t in items:
                         entry = {"amount": t["amount"],
                                  "confirmations": t["confirmations"],
-                                 "subaddr_index": {"major": 0, "minor": idx}}
+                                 "txid": f"fake{idx}"}
+                        if not UNLABELLED[0]:
+                            entry["subaddr_index"] = {"major": 0, "minor": idx}
                         bucket = "pool" if t.get("pool") else "in"
                         out[bucket].append(entry)
             return self._result(out)
@@ -118,7 +132,7 @@ def reset():
     with LOCK:
         SUBADDRS.clear(); TRANSFERS.clear()
         NEXT_INDEX[0] = 1; DOWN[0] = False; HOT_WALLET[0] = False
-        ERROR[0] = None
+        ERROR[0] = None; UNLABELLED[0] = False
 
 
 if __name__ == "__main__":

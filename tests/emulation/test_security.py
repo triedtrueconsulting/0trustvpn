@@ -61,6 +61,34 @@ try:
         "signature": ch3["signature"], "solution": "A" * 100000})
     check("over-long solution rejected without work", st5 in (400, 422), st5)
 
+    # The two fields BESIDE solution were unbounded while it was capped, which
+    # is the shape of an oversight rather than a decision. This is the only
+    # unauthenticated endpoint that takes a body, and _sign_challenge HMACs
+    # the nonce — so an over-long one was hashed before anything questioned
+    # it. Both are now pinned to the exact shape the server issues.
+    for field, bad, why in (
+            ("nonce", "f" * 100000, "a megabyte-scale nonce"),
+            ("nonce", "zz" * 16, "32 characters that are not hex"),
+            ("nonce", "f" * 31, "one hex digit short"),
+            ("signature", "a" * 100000, "an enormous signature"),
+            ("signature", "a" * 63, "one hex digit short"),
+            ("signature", "A" * 64, "upper-case hex the server never emits"),
+    ):
+        payload = {"nonce": ch3["nonce"], "expires_at": ch3["expires_at"],
+                   "signature": ch3["signature"], "solution": "0"}
+        payload[field] = bad
+        stx, rx = H.call("POST", "/api/v1/trial", payload)
+        check(f"{why} is refused by the schema, not the handler",
+              stx == 422, f"{stx} {str(rx)[:200]}")
+
+    # ...and the well-formed request is still accepted, so the patterns are
+    # not simply refusing everything.
+    st6, ch6 = H.call("GET", "/api/v1/trial/challenge")
+    st7, r7 = H.call("POST", "/api/v1/trial", {
+        "nonce": ch6["nonce"], "expires_at": ch6["expires_at"],
+        "signature": ch6["signature"], "solution": solve(ch6["nonce"], 10)})
+    check("a genuine challenge still redeems", st7 == 200, f"{st7} {r7}")
+
     print("\n[devices] cross-account access")
     tokA, _ = H.paid_account()
     tokB, _ = H.paid_account()
@@ -370,13 +398,99 @@ try:
     # for a JSON shape and the leak was a URL, so it reported green on a
     # leaking host. Run the shipped regex against the shipped leak.
     import re as _re
-    pat = _re.compile(r"([A-Za-z0-9]|%2[BbFf]|[+/]){43}(=|%3[Dd])")
+
+    def _shipped_regex(check_id):
+        """The pattern scripts/audit-verify.sh actually greps with.
+
+        Not a copy of it. A test carrying its own copy proves the copy works
+        and says nothing about the deployed script, which is the drift that
+        let the old pubkey check sit green for months — so read the bytes
+        that ship. The `\\b` in the file is a bash double-quoted escape;
+        one round of unescaping gives the regex the shell hands to grep.
+        """
+        root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        src = open(os.path.join(root, "scripts", "audit-verify.sh")).read()
+        cur, found = None, {}
+        for line in src.splitlines():
+            m = _re.match(r"\s*check\s+(\S+)\s", line)
+            if m:
+                cur = m.group(1)
+            g = _re.search(r"grep -oE '(.*)'\s*\\?\s*$", line)
+            if g and cur and cur not in found:
+                found[cur] = g.group(1).replace("\\\\", "\\")
+        assert check_id in found, (
+            f"no grep -oE found under `check {check_id}` in audit-verify.sh — "
+            f"the extractor has drifted from the script and this test would "
+            f"otherwise prove nothing")
+        return _re.compile(found[check_id])
+
+    pat = _shipped_regex("api-log-no-pubkeys")
     check("audit-verify's pubkey regex matches the real leaked line",
           bool(pat.search(leaky)),
           "the grep in scripts/audit-verify.sh cannot see a leak this test "
           "can — that is how the last one went unnoticed for months")
     check("and it does not fire on the clean log",
           not pat.search(quiet), pat.search(quiet).group(0) if pat.search(quiet) else "")
+
+    # ------------------------------------------------------------------
+    # Its sibling, api-log-no-tokens, had no such test at all: nothing had
+    # ever run that regex against a real account token. It could not have
+    # seen one in the spelling a client now sends, either — hash_token()
+    # strips the separators before hashing, so the CLI, the GUI, the iOS app
+    # and the Android app all forward a dashless paste as-is, and the check
+    # matched only XXXX-XXXX-XXXX-XXXX. Its comment also called the alphabet
+    # Crockford base32, which it is not (Crockford drops L and U; these
+    # tokens use them) — a comment that invites exactly the "fix" that would
+    # blind it to two tokens in three.
+    #
+    # No route puts a token in a URL, so there is no leak to reproduce the
+    # way the pubkey case does. What is testable, and what actually failed
+    # before, is the matcher: mint real tokens, spell them every way the
+    # server accepts, and require the shipped regex to see each one.
+    # ------------------------------------------------------------------
+    tok_pat = _shipped_regex("api-log-no-tokens")
+
+    H.boot(DB, workers=1)
+    try:
+        minted = [H.paid_account(1)[0] for _ in range(8)]
+        # An L and a U are in the alphabet but not in Crockford's. Draw until
+        # one turns up rather than trusting the draw (bug class #13): with
+        # eight tokens the chance of none is under one in a thousand, but
+        # "under one in a thousand" is how #13 reads in CI.
+        for _ in range(200):
+            if any("L" in t or "U" in t for t in minted):
+                break
+            minted.append(H.paid_account(1)[0])
+        else:
+            raise AssertionError("no token with an L or a U in 200 draws")
+    finally:
+        H.shutdown()
+
+    misses = []
+    for t in minted:
+        bare = t.replace("-", "")
+        for label, spelling in (
+                ("canonical", t),
+                ("dashless", bare),
+                ("mixed", bare[:4] + "-" + bare[4:12] + "-" + bare[12:]),
+        ):
+            line = f'INFO: something logged the token {spelling} by mistake'
+            if not tok_pat.search(line):
+                misses.append(f"{label}:{spelling}")
+    check("audit-verify's token regex sees a real token in every spelling "
+          "a client can send",
+          not misses, f"invisible to the check: {misses}")
+
+    awkward = [t for t in minted if "L" in t or "U" in t]
+    check("...including the letters Crockford drops and this alphabet keeps",
+          bool(awkward) and all(tok_pat.search(t) for t in awkward),
+          f"L/U tokens the regex could not see: "
+          f"{[t for t in awkward if not tok_pat.search(t)]}")
+
+    check("and it does not fire on the clean API log",
+          not tok_pat.search(quiet),
+          tok_pat.search(quiet).group(0) if tok_pat.search(quiet) else "")
 finally:
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL: print("  failures: " + ", ".join(FAIL))

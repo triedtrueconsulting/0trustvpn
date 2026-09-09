@@ -89,6 +89,25 @@ def _is_public(ip: ipaddress._BaseAddress) -> bool:
         # IPv4-mapped IPv6 (::ffff:127.0.0.1) — unwrap and re-check.
         or (ip.version == 6 and ip.ipv4_mapped is not None
             and not _is_public(ip.ipv4_mapped))
+        # The other three ways a v4 address wears a v6 costume. Every one of
+        # these is already refused by the categories above on the Python this
+        # was written against — but by accident, not by anything stated, and
+        # the accident is a classification in the standard library that a
+        # future release can widen. `2002:a9fe:a9fe::` is 169.254.169.254 in
+        # a 6to4 wrapper, which is the cloud metadata service; being one
+        # upstream reclassification away from reaching it is not a position
+        # worth being in when the check costs a line.
+        or (ip.version == 6 and ip.sixtofour is not None
+            and not _is_public(ip.sixtofour))
+        or (ip.version == 6 and ip.teredo is not None
+            and not all(_is_public(a) for a in ip.teredo))
+        # NAT64. Python has no accessor for these, so the prefixes are named:
+        # 64:ff9b::/96 is the global well-known one and 64:ff9b:1::/48 the
+        # local-use range, and both embed a v4 address in their low 32 bits.
+        or (ip.version == 6
+            and (ip in ipaddress.ip_network("64:ff9b::/96")
+                 or ip in ipaddress.ip_network("64:ff9b:1::/48"))
+            and not _is_public(ipaddress.ip_address(int(ip) & 0xffffffff)))
     )
 
 

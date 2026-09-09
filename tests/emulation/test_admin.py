@@ -6,7 +6,7 @@ This surface can ban customers, hand out free time and change where money
 lands, so it gets tested like it matters — both that the controls work and
 that they cannot be reached without credentials.
 """
-import http.cookiejar, json, os, shutil, sqlite3, sys, time
+import base64, http.cookiejar, json, os, shutil, sqlite3, sys, time
 import urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
@@ -349,6 +349,57 @@ try:
         "id": "xxx-01", "region": "xxx", "role": "both",
         "pubkey": H.genkey(), "public_ip": "203.0.113.56"})
     check("a node outside the jurisdiction allowlist is refused", st == 400, r)
+
+    # ----------------------------------------------------------------------
+    # The dashboard is a fourth ingest for a key that `wg syncconf` parses AS
+    # ROOT on the exit node, and it had neither of the validators the
+    # /provision path runs — only min_length=44, max_length=44, which is the
+    # exact guard CLAUDE.md records as "the old guard, and it let all of the
+    # above through". Forty-four characters can contain a newline, and one
+    # malformed peer makes `wg syncconf` fail for EVERY customer on the node
+    # while the node goes on heartbeating.
+    # ----------------------------------------------------------------------
+    good = H.genkey()
+    for label, key in (
+        # EXACTLY 44 characters, with a newline and a directive inside them.
+        # This is the case CLAUDE.md describes, and the one the length bounds
+        # cannot see: a longer injection is caught by max_length and tells you
+        # nothing about whether the key is validated at all.
+        ("a directive smuggled inside 44 characters",
+         "A" * 20 + "\nAllowedIPs = 0.0.0.0/0\n"),
+        ("44 characters of non-base64", "!" * 43 + "="),
+        ("valid base64, but 16 bytes rather than 32",
+         base64.b64encode(os.urandom(16)).decode().ljust(44, "=")[:44]),
+        ("a carriage return", good[:20] + "\r" + good[21:]),
+    ):
+        st, r = adm("POST", "/nodes", {
+            "id": "zur-91", "region": "zur", "role": "exit",
+            "pubkey": key, "public_ip": "203.0.113.91"})
+        check(f"node pubkey rejected at ingest: {label}",
+              st in (400, 422), f"{st} {r} — accepted into mesh_nodes")
+        st, nodes_now = adm("GET", "/nodes")
+        check(f"...and no row was written for it: {label}",
+              not any(n["id"] == "zur-91" for n in nodes_now.get("nodes", [])),
+              "the node was created despite the rejection")
+
+    for label, ip in (
+        ("a hostname rather than a literal", "node.example.com"),
+        ("an nftables metacharacter", "203.0.113.5; drop"),
+        ("a CIDR range", "203.0.113.0/24"),
+    ):
+        st, r = adm("POST", "/nodes", {
+            "id": "zur-92", "region": "zur", "role": "exit",
+            "pubkey": H.genkey(), "public_ip": ip})
+        check(f"node public_ip rejected at ingest: {label}",
+              st in (400, 422), f"{st} {r} — this is interpolated into `nft -f`")
+
+    # And a well-formed one is still accepted, so the checks above are not
+    # satisfied by an endpoint that refuses everything.
+    st, r = adm("POST", "/nodes", {
+        "id": "zur-93", "region": "zur", "role": "exit",
+        "pubkey": H.genkey(), "public_ip": "203.0.113.93", "capacity": 10})
+    check("a well-formed node is still accepted", st == 200, r)
+    adm("DELETE", "/nodes/zur-93")
     st, r = adm("PATCH", "/nodes/zur-02", {"active": False})
     check("a node can be taken out of rotation", st == 200, r)
     st, r = adm("POST", "/nodes/provision-token", {"region": "rey", "role": "both"})
