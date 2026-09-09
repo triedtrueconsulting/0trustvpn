@@ -129,9 +129,28 @@ file for the governing law — resolves to a real jurisdiction.
 | Real name | NO | — | — | Not requested |
 | IP address | NO* | — | — | See §4 (nginx logs) |
 | User-Agent | NO* | — | — | See §4 |
-| Account token (hash) | YES | `accounts.token_hash` | Lifetime of subscription | Sole credential |
-| Subscription expiry | YES | `accounts.expires_at` | Lifetime of subscription | Required to enforce duration |
-| Account status | YES | `accounts.status` | Lifetime of subscription | active / expired / banned |
+| Account token (hash) | YES | `accounts.token_hash` | Subscription + 30d, then deleted | Sole credential |
+| Subscription expiry | YES | `accounts.expires_at` | Subscription + 30d, then deleted | Required to enforce duration |
+| Account status | YES | `accounts.status` | Subscription + 30d, then deleted | active / expired / banned |
+| Invoice id and USD amount | YES | `invoices` | Deleted with the account | Refunds, and the only revenue record |
+
+"Subscription + 30d" is `ZTV_ACCOUNT_RETAIN_DAYS`, set to the refund window
+in terms.html §4. `api/sweep.py` deletes the account row and everything
+hanging off it — devices, invoices, notices — once it has been expired that
+long. Verified on a live database by `db-no-stale-expired-accounts`, and
+end to end by `tests/emulation/test_lifecycle.py`.
+
+**An operator should read the consequence of that before launch.** Deleting
+settled invoices with the account means the all-time revenue figure on the
+dashboard decays: money taken from a customer who lapsed more than a month
+ago is no longer counted anywhere in this system. That is the privacy policy
+working as written, not a bug. If the operating jurisdiction requires
+commercial records to be retained — Swiss law obliges a GmbH to keep
+accounting records for ten years — those records have to be kept OUTSIDE this
+database, from the payment side, where they belong. Do not solve it by
+raising the retention here: that would quietly extend how long customer
+records live in order to serve an accounting need, which is the trade this
+whole document exists to refuse.
 
 (* nginx records anonymized IPs in /29 buckets with no User-Agent. See §4.)
 
