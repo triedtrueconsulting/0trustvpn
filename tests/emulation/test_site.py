@@ -569,9 +569,24 @@ try:
     check("some pages were found", bool(pages))
     for f in pages:
         body = open(f, encoding="utf-8").read()
-        # Only fetched subresources matter; a link a human clicks is fine.
-        sub = re.findall(
-            r'<(?:link|script|img)\b[^>]*(?:src|href)="(https?://[^"]+)"', body)
+        # Only FETCHED subresources matter. A link a human clicks is fine, and
+        # so is metadata that is required to be absolute: rel="canonical" and
+        # og:url name this page's own URL for a search engine and are never
+        # requested by the browser. The first version of this check matched
+        # any <link href="https://...">, which made adding a canonical — the
+        # single most basic piece of technical SEO — look like reintroducing
+        # the Google Fonts leak. Narrowed to the rel values that actually
+        # cause a fetch, so it still fails on a stylesheet, an icon, a
+        # preconnect or a manifest from somebody else's origin.
+        FETCHING = ("stylesheet", "icon", "apple-touch-icon", "manifest",
+                    "preload", "prefetch", "preconnect", "dns-prefetch",
+                    "modulepreload")
+        sub = re.findall(r'<(?:script|img)\b[^>]*\bsrc="(https?://[^"]+)"', body)
+        for tag in re.findall(r"<link\b[^>]*>", body):
+            href = re.search(r'href="(https?://[^"]+)"', tag)
+            rel = re.search(r'rel="([^"]+)"', tag)
+            if href and rel and any(r in FETCHING for r in rel.group(1).split()):
+                sub.append(href.group(1))
         check(f"{os.path.basename(f)} fetches nothing off-origin", not sub, sub)
 
     faces = os.path.join(H.REPO, "web", "fonts", "faces.css")
@@ -621,6 +636,215 @@ try:
           fonts_decl and "/fonts/faces.css" in fonts_decl[0]
           and "googleapis" not in fonts_decl[0],
           f"the funnel's front door is the page this matters most on: {fonts_decl}")
+
+    print("\n[links] every internal link and CTA goes somewhere")
+    # Found by walking them: index.html's "What that means" link under the
+    # payment-privacy panel pointed at /privacy#cards, and privacy.html had
+    # no id on any heading at all — one id="content" for the skip link and
+    # nothing else. So the CTA landed readers at the top of a 5,000-word
+    # policy instead of the paragraph about what a card payment reveals, and
+    # nothing on the site could deep-link into any of the long documents.
+    WEBD = os.path.join(H.REPO, "web")
+    inst_src = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
+    exact = set(re.findall(r"location = (/[A-Za-z0-9._/-]*)", inst_src))
+    prefixes = set(re.findall(r"location (?:\^~ )?(/[A-Za-z0-9._/-]+)/? \{", inst_src))
+    on_disk = {os.path.basename(f) for f in glob.glob(os.path.join(WEBD, "*"))}
+
+    def resolves(path):
+        if path in exact or path == "/":
+            return True
+        if any(path == p_ or path.startswith(p_.rstrip("/") + "/")
+               for p_ in prefixes):
+            return True
+        local = path.lstrip("/")
+        return local in on_disk or (local + ".html") in on_disk
+
+    ids_of = {}
+    for f in glob.glob(os.path.join(WEBD, "*.html")):
+        ids_of[os.path.basename(f)] = set(
+            re.findall(r'\bid="([^"]+)"', open(f, encoding="utf-8").read()))
+
+    broken = []
+    for f in sorted(glob.glob(os.path.join(WEBD, "*.html"))):
+        name = os.path.basename(f)
+        body = open(f, encoding="utf-8").read()
+        for href in re.findall(r'<a\b[^>]*href="([^"]+)"', body):
+            if href.startswith(("mailto:", "http://", "https://", "tel:",
+                                "javascript:")):
+                continue
+            path, _, frag = href.partition("#")
+            path = path.split("?")[0]
+            if not path:                      # same-page anchor
+                if frag and frag not in ids_of[name]:
+                    broken.append((name, href, "no such anchor on this page"))
+                continue
+            if not resolves(path):
+                broken.append((name, href, "nothing routes or serves this"))
+                continue
+            if frag:
+                local = path.lstrip("/")
+                tgt = local if local in ids_of else local + ".html"
+                if tgt in ids_of and frag not in ids_of[tgt]:
+                    broken.append((name, href, f"#{frag} is not on {tgt}"))
+    check("no internal link is broken", not broken, broken[:6])
+
+    # And the long documents stay linkable. An unanchored policy cannot be
+    # cited by a support reply, a search result's jump-to link, or an answer
+    # engine quoting one clause.
+    for doc, least in (("privacy.html", 10), ("terms.html", 6),
+                       ("help.html", 20), ("audit.html", 5)):
+        anchored = len(re.findall(r"<h[23][^>]*\bid=", 
+                                  open(os.path.join(WEBD, doc), encoding="utf-8").read()))
+        check(f"{doc} has section anchors ({anchored})", anchored >= least,
+              f"only {anchored}; deep links into it cannot work")
+
+    print("\n[seo] the site is findable, and says the same thing twice")
+    # Before this existed the entire public site had no meta description, no
+    # canonical, no Open Graph, no structured data, no robots.txt and no
+    # sitemap — twelve pages of it. A search result was a bare title and
+    # whatever Google chose to quote, a shared link was a naked URL, and an
+    # answer engine had nothing machine-readable to work from at all.
+    import json as _json, struct as _struct, subprocess as _sub
+    WEB = os.path.join(H.REPO, "web")
+
+    sitemap = open(os.path.join(WEB, "sitemap.xml"), encoding="utf-8").read()
+    sm_urls = re.findall(r"<loc>([^<]+)</loc>", sitemap)
+    check("a sitemap exists and lists pages", len(sm_urls) >= 8, sm_urls)
+    check("every sitemap URL is absolute and on the canonical host",
+          all(u.startswith("https://0trustvpn.com/") for u in sm_urls), sm_urls)
+
+    # A sitemap entry for a URL nginx does not route sends crawlers to a 404
+    # from the file whose whole job is to be the map.
+    inst = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
+    routed = set(re.findall(r"location = (/[a-z0-9.-]*)", inst)) | {"/"}
+    unrouted = [u for u in sm_urls
+                if u.replace("https://0trustvpn.com", "") not in routed]
+    check("every sitemap URL is a route the installer serves",
+          not unrouted, f"{unrouted} not in {sorted(routed)}")
+
+    pages, noindex = {}, set()
+    for f in sorted(glob.glob(os.path.join(WEB, "*.html"))):
+        name = os.path.basename(f)
+        body = open(f, encoding="utf-8").read()
+        pages[name] = body
+        if re.search(r'name="robots" content="[^"]*noindex', body):
+            noindex.add(name)
+    check("the error pages and the dashboard are noindex",
+          {"404.html", "50x.html", "admin.html"} <= noindex, sorted(noindex))
+
+    # The trial page carried noindex — the single highest-intent page on the
+    # site, the one someone searching for a VPN trial without a card would
+    # land on, excluded from search entirely.
+    check("the trial page is NOT noindex", "trial.html" not in noindex,
+          "it is the page whose entire job is a conversion")
+
+    for name, body in pages.items():
+        if name in noindex or name == "admin.html":
+            continue
+        canon = re.search(r'<link rel="canonical" href="([^"]+)"', body)
+        desc = re.search(r'<meta name="description" content="([^"]*)"', body)
+        check(f"{name} has a canonical", bool(canon), body[:200])
+        check(f"{name} has a description", bool(desc))
+        if desc:
+            n = len(desc.group(1))
+            # Google truncates the snippet around 160; longer and the clause
+            # carrying the differentiator is the part that gets cut.
+            check(f"{name} description fits a snippet ({n} chars)",
+                  40 <= n <= 160, desc.group(1))
+        if canon:
+            check(f"{name} is in the sitemap under its canonical URL",
+                  canon.group(1) in sm_urls,
+                  f"{canon.group(1)} not among {sm_urls}")
+        for tag in ('property="og:title"', 'property="og:description"',
+                    'property="og:image"', 'property="og:url"',
+                    'name="twitter:card"'):
+            check(f"{name} has {tag}", tag in body)
+        og_url = re.search(r'property="og:url" content="([^"]+)"', body)
+        check(f"{name} og:url agrees with its canonical",
+              canon and og_url and og_url.group(1) == canon.group(1),
+              f"{og_url.group(1) if og_url else None} vs "
+              f"{canon.group(1) if canon else None}")
+
+    # og:image is the difference between a shared link that looks like a
+    # product and one that looks like a pasted URL.
+    og = os.path.join(WEB, "og.png")
+    check("the social card exists", os.path.exists(og))
+    if os.path.exists(og):
+        d = open(og, "rb").read(33)
+        w, h = _struct.unpack(">II", d[16:24])
+        check(f"and is the size every platform crops to ({w}x{h})",
+              (w, h) == (1200, 630), f"{w}x{h}")
+        refs = {re.search(r'property="og:image" content="([^"]+)"', b).group(1)
+                for n, b in pages.items() if 'property="og:image"' in b}
+        check("every page points at that one file", refs == {"https://0trustvpn.com/og.png"}, refs)
+
+    robots = open(os.path.join(WEB, "robots.txt"), encoding="utf-8").read()
+    check("robots.txt advertises the sitemap",
+          "Sitemap: https://0trustvpn.com/sitemap.xml" in robots)
+    # /surf renders other people's pages under our origin. Indexed, that is
+    # third-party duplicate content on our domain.
+    check("robots.txt keeps crawlers out of the visitor proxy",
+          "Disallow: /surf" in robots, robots[:200])
+    check("and out of the operations dashboard", "Disallow: /admin" in robots)
+    # Deliberately allowed, and worth asserting so a future "block the AI
+    # crawlers" edit is a decision somebody makes rather than one that
+    # happens: the questions people ask an assistant about a VPN are the
+    # questions this site answers in checkable terms.
+    for bot in ("GPTBot", "ClaudeBot", "PerplexityBot", "Google-Extended"):
+        check(f"robots.txt lets {bot} read the public pages",
+              re.search(rf"User-agent: {bot}\nAllow: /", robots) is not None,
+              robots)
+
+    print("\n[seo-schema] structured data says what the pages and the API say")
+    graphs = {}
+    for name, body in pages.items():
+        for blob in re.findall(
+                r'(?s)<script type="application/ld\+json">(.*?)</script>', body):
+            graphs.setdefault(name, []).extend(_json.loads(blob)["@graph"])
+    check("the landing page carries structured data", "index.html" in graphs)
+    nodes = graphs.get("index.html", [])
+    types = {t for n in nodes
+             for t in (n["@type"] if isinstance(n["@type"], list) else [n["@type"]])}
+    for want in ("Organization", "WebSite", "Product", "SoftwareApplication"):
+        check(f"the landing page declares a {want}", want in types, sorted(types))
+
+    org = next((n for n in nodes if n["@type"] == "Organization"), {})
+    # Entity clarity: an answer engine that cannot tell who operates a VPN
+    # cannot answer the first question anyone asks about one.
+    check("the operating entity is named in the schema",
+          org.get("legalName") == "0trust GmbH", org.get("legalName"))
+    check("and matches security.txt's entity",
+          "0trust GmbH" in open(os.path.join(WEB, ".well-known",
+                                             "security.txt")).read())
+
+    prod = next((n for n in nodes if isinstance(n["@type"], list)
+                 and "Product" in n["@type"]), {})
+    offers = {int(o["name"].split()[0]): float(o["price"])
+              for o in prod.get("offers", {}).get("offers", [])}
+    check("the schema prices exactly the terms the API sells",
+          offers == {int(k): float(v) for k, v in api_main.PRICING.items()},
+          f"schema {offers} vs API {api_main.PRICING}")
+
+    faq = next((n for g in graphs.values() for n in g
+                if n["@type"] == "FAQPage"), None)
+    check("the help page publishes a FAQPage", faq is not None)
+    if faq:
+        on_page = len(re.findall(r'<div class="q">',
+                                 pages["help.html"]))
+        check(f"and it carries every question on the page ({on_page})",
+              len(faq["mainEntity"]) == on_page,
+              f"schema {len(faq['mainEntity'])} vs page {on_page}")
+        empty = [q["name"] for q in faq["mainEntity"]
+                 if len(q["acceptedAnswer"]["text"]) < 40]
+        check("with a real answer on each", not empty, empty)
+
+    # The generators are the only thing keeping all of the above in step, so
+    # assert they are still able to say "out of date".
+    for script in ("gen-sitemap.py", "gen-seo.py"):
+        r = _sub.run([os.path.join(H.REPO, "scripts", script), "--check"],
+                     capture_output=True, text=True, cwd=H.REPO)
+        check(f"{script} --check passes on this checkout", r.returncode == 0,
+              r.stderr[-300:])
 
 finally:
     srv.shutdown(); H.shutdown()

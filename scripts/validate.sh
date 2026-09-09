@@ -257,6 +257,15 @@ check swift-structure "Swift sources are structurally sound" -- \
 check ios-fonts "bundled iOS faces are the ones the app asks for" -- \
     ./mobile/ios/fetch-fonts.sh --check
 
+# The sitemap names URLs nginx has to route, and the structured data restates
+# prices that live in api/main.py's PRICING. Both are generated for that
+# reason; these two checks are what makes "generated" mean something rather
+# than "generated once, in March".
+check seo-sitemap "sitemap.xml covers the routed pages and is current" -- \
+    ./scripts/gen-sitemap.py --check
+check seo-jsonld "structured data matches the pages and the API's prices" -- \
+    ./scripts/gen-seo.py --check
+
 check json-parse "every .json parses" -- "$PY" -c '
 import json, os, sys
 bad = []

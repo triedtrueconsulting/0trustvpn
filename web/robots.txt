@@ -1,0 +1,70 @@
+# 0trustvpn — https://0trustvpn.com/
+#
+# Everything public is crawlable. Two things are not, and both for the same
+# reason rather than any wish to be hidden.
+
+User-agent: *
+Allow: /
+
+# The visitor proxy renders OTHER people's pages under our origin. Letting a
+# crawler index that would put third-party content on our domain, invite
+# duplicate-content penalties for pages we do not own, and make us look like
+# a content farm. The service sends X-Robots-Tag: noindex on every response
+# as well; this is the belt to that pair of braces.
+Disallow: /surf
+
+# The operations dashboard. It can ban customers and move money.
+Disallow: /admin
+
+# AI answer engines are welcome, deliberately. A VPN is bought on trust, and
+# the questions people ask an assistant about one — what is logged, who runs
+# the servers, which jurisdiction, can it be audited — are exactly the
+# questions this site answers in public, in specific and checkable terms. We
+# would rather those answers came from our own pages than from a review site
+# that guessed. The same two exclusions apply, for the same reasons.
+User-agent: GPTBot
+Allow: /
+Disallow: /surf
+Disallow: /admin
+
+User-agent: OAI-SearchBot
+Allow: /
+Disallow: /surf
+Disallow: /admin
+
+User-agent: ChatGPT-User
+Allow: /
+Disallow: /surf
+Disallow: /admin
+
+User-agent: ClaudeBot
+Allow: /
+Disallow: /surf
+Disallow: /admin
+
+User-agent: Claude-Web
+Allow: /
+Disallow: /surf
+Disallow: /admin
+
+User-agent: PerplexityBot
+Allow: /
+Disallow: /surf
+Disallow: /admin
+
+User-agent: Google-Extended
+Allow: /
+Disallow: /surf
+Disallow: /admin
+
+User-agent: Applebot-Extended
+Allow: /
+Disallow: /surf
+Disallow: /admin
+
+User-agent: CCBot
+Allow: /
+Disallow: /surf
+Disallow: /admin
+
+Sitemap: https://0trustvpn.com/sitemap.xml

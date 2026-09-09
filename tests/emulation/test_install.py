@@ -368,6 +368,211 @@ try:
     check("[test] no TLS directives leak into test mode",
           "ssl_certificate" not in globals().get("body_test", ""))
 
+    print("\n[5b] the routes that were only ever in the reference config")
+    # nginx/0trustvpn.com.conf is a reference file the installer has never
+    # installed. Six location blocks lived there and nowhere else, so on
+    # every real deployment they did not exist. The worst one is not a 404
+    # page — it is that /.well-known/security.txt was UNREACHABLE.
+    for label in ("test", "prod"):
+        body = globals().get(f"body_{label}", "")
+        for want, why in (
+            ("location = /security-policy",
+             "security.txt names /security-policy as both Contact and Policy; "
+             "without this block a researcher following RFC 9116 to report a "
+             "vulnerability lands on a dead URL, and so does the footer link "
+             "on every page"),
+            ("location ^~ /.well-known/",
+             "the server ends in `location ~ /\\. { deny all; }` and an nginx "
+             "REGEX location beats a plain prefix one, so /.well-known/ "
+             "matched the dotfile deny and 403ed — taking RFC 9116 discovery "
+             "and the WKD key path down with it. ^~ outranks the regex"),
+            ("location /releases/",
+             "the download page links these directly"),
+            ("location = /verify-release.sh",
+             "download.html tells people to fetch and read it"),
+            ("location = /robots.txt", "crawler directives"),
+            ("location = /sitemap.xml", "the sitemap robots.txt advertises"),
+        ):
+            check(f"[{label}] {why[:60]}", want in body, why)
+
+        # The precedence argument above is the whole reason ^~ is there, so
+        # assert the shape rather than just the string: a plain-prefix
+        # .well-known block next to that regex is the bug all over again.
+        has_deny = "location ~ /\\. { deny all; }" in body or \
+                   "location ~ /\\." in body
+        caret = "location ^~ /.well-known/" in body
+        plain = "\n    location /.well-known/ " in body
+        check(f"[{label}] .well-known outranks the dotfile deny",
+              (not has_deny) or (caret and not plain),
+              "with `location ~ /\\.` present, .well-known must be ^~ or =")
+
+    # A soft 404 is worse than a 404: try_files ... /index.html answered every
+    # unknown URL with the landing page and a 200, so the branded error page
+    # could never appear and a crawler could mint unlimited duplicate
+    # homepages from typos.
+    for label in ("test", "prod"):
+        body = globals().get(f"body_{label}", "")
+        check(f"[{label}] an unknown URL 404s instead of serving the homepage",
+              "try_files $uri $uri/ =404;" in body
+              and "try_files $uri $uri/ /index.html;" not in body,
+              [l for l in body.splitlines() if "try_files $uri" in l])
+        check(f"[{label}] and the branded error pages are still wired",
+              "error_page 404 /404.html;" in body
+              and "error_page 500 502 503 504 /50x.html;" in body)
+
+    print("\n[5c] the same routes, asked for over HTTP by a real nginx")
+    # [5b] asserts strings. This section makes the requests, because the claim
+    # being made is about nginx LOCATION PRECEDENCE — that `^~` outranks the
+    # `~ /\.` dotfile deny — and a grep cannot check a precedence rule. The
+    # bug it is guarding was invisible to every string check in this file for
+    # exactly that reason: the .well-known files were present, the deny was
+    # correct, and the combination returned 403.
+    import socket as _sock, time as _time
+    def _free_port():
+        s_ = _sock.socket(); s_.bind(("127.0.0.1", 0))
+        port = s_.getsockname()[1]; s_.close(); return port
+
+    def serve_and_probe(site_text, port):
+        """Run nginx on `port` with this config and return {path: status}."""
+        root = os.path.join(TMP, f"probe-www-{port}")
+        os.makedirs(os.path.join(root, ".well-known", "openpgpkey", "hu"),
+                    exist_ok=True)
+        os.makedirs(os.path.join(root, "releases", "0.1.0"), exist_ok=True)
+        for rel, body in (
+            (".well-known/security.txt", "Contact: mailto:x@y.z\n"),
+            (".well-known/openpgpkey/hu/abc", "key\n"),
+            ("security-policy.html", "<html>policy</html>"),
+            ("robots.txt", "User-agent: *\n"),
+            ("sitemap.xml", "<urlset/>"),
+            ("index.html", "<html>home</html>"),
+            ("404.html", "<html>not found</html>"),
+            ("verify-release.sh", "#!/bin/sh\n"),
+            ("releases/0.1.0/0trust-linux-amd64", "ELF"),
+            (".env", "SECRET=1"),
+        ):
+            with open(os.path.join(root, rel), "w") as fh:
+                fh.write(body)
+
+        text = site_text
+        for a, b in (("listen 443 ssl http2;", f"listen {port};"),
+                     ("listen 80 default_server;", f"listen {port};"),
+                     ("listen 80;", f"listen {port};")):
+            text = text.replace(a, b)
+        text = "\n".join(l for l in text.splitlines()
+                          if "listen [::]" not in l and "ssl_" not in l)
+        text = (text.replace("/etc/nginx/snippets/", f"{TMP}/snippets/")
+                    .replace("/var/log/nginx/", f"{TMP}/"))
+        # Every root, not the first one: the config has a server block per
+        # scheme and pointing only one of them at the fixture serves the
+        # other from nginx's compiled-in prefix, which 404s everything and
+        # looks exactly like the bug under test.
+        text = re.sub(r"^(\s*)root .*$", f"\\1root {root};", text, flags=re.M)
+        conf = os.path.join(TMP, f"probe-{port}.conf")
+        pid = os.path.join(TMP, f"probe-{port}.pid")
+        # nginx's master runs as whoever started it and its workers drop to
+        # an unprivileged user. TMP comes from mkdtemp at 0700, so those
+        # workers cannot traverse it and every file answers 403 — the same
+        # status the dotfile deny returns, which would make this whole
+        # section pass or fail for the wrong reason.
+        as_user = "user root;" if os.geteuid() == 0 else ""
+        open(conf, "w").write(f"""
+{as_user}
+events {{ worker_connections 32; }}
+error_log {TMP}/probe-{port}-err.log;
+pid {pid};
+daemon on;
+http {{
+  access_log off;
+  client_body_temp_path {TMP}/probe-body-{port};
+  proxy_temp_path {TMP}/probe-proxy-{port};
+  fastcgi_temp_path {TMP}/probe-fcgi-{port};
+  uwsgi_temp_path {TMP}/probe-uwsgi-{port};
+  scgi_temp_path {TMP}/probe-scgi-{port};
+  include {TMP}/zones-probe.conf;
+{text}
+}}
+""")
+        r = subprocess.run(["nginx", "-c", conf, "-p", TMP],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            return None, r.stderr[-500:]
+        try:
+            for _ in range(50):
+                try:
+                    _sock.create_connection(("127.0.0.1", port), 0.2).close()
+                    break
+                except OSError:
+                    _time.sleep(0.1)
+            out = {}
+            for path in ("/.well-known/security.txt",
+                         "/.well-known/openpgpkey/hu/abc",
+                         "/security-policy", "/robots.txt", "/sitemap.xml",
+                         "/verify-release.sh",
+                         "/releases/0.1.0/0trust-linux-amd64",
+                         "/", "/no-such-page-here", "/.env"):
+                c = subprocess.run(
+                    ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                     "--max-time", "5", f"http://127.0.0.1:{port}{path}"],
+                    capture_output=True, text=True)
+                out[path] = c.stdout.strip()
+            return out, ""
+        finally:
+            if os.path.exists(pid):
+                subprocess.run(["nginx", "-c", conf, "-p", TMP, "-s", "quit"],
+                               capture_output=True)
+                _time.sleep(0.4)
+
+    open(os.path.join(TMP, "zones-probe.conf"), "w").write(
+        open(os.path.join(TMP, "render-test", "zones.conf")).read())
+    site_src = open(os.path.join(TMP, "render-test", "site.conf")).read()
+    port = _free_port()
+    codes, err = serve_and_probe(site_src, port)
+    check("a real nginx serves the generated config", codes is not None, err)
+    if codes:
+        for path, want, why in (
+            ("/.well-known/security.txt", "200",
+             "RFC 9116 discovery — 403 here and researchers have nowhere to "
+             "send a vulnerability report"),
+            ("/.well-known/openpgpkey/hu/abc", "200",
+             "WKD — the key security.txt says to encrypt reports to"),
+            ("/security-policy", "200", "the URL security.txt names twice"),
+            ("/robots.txt", "200", "crawler directives"),
+            ("/sitemap.xml", "200", "the sitemap robots.txt advertises"),
+            ("/verify-release.sh", "200", "download.html links it"),
+            ("/releases/0.1.0/0trust-linux-amd64", "200", "a release artifact"),
+            ("/", "200", "the landing page"),
+            ("/no-such-page-here", "404",
+             "a soft 200 here is a duplicate homepage for every typo"),
+            ("/.env", "403", "the dotfile deny still has to work"),
+        ):
+            check(f"GET {path} -> {want} ({why[:44]})",
+                  codes.get(path) == want, f"got {codes.get(path)}")
+
+    # The mutation, in the same run: put the .well-known block back to a
+    # plain prefix and confirm the dotfile deny takes it. If this does NOT
+    # 403, the ^~ above is decoration and [5b] is testing nothing.
+    broken = site_src.replace("location ^~ /.well-known/ {",
+                              "location /.well-known/ {")
+    check("the ^~ is load-bearing, not decoration",
+          broken != site_src, "no ^~ /.well-known/ block to weaken")
+    if broken != site_src:
+        bport = _free_port()
+        bcodes, berr = serve_and_probe(broken, bport)
+        # The WKD path, NOT security.txt. Measured, because the first version
+        # of this probe asked about security.txt and passed either way: a
+        # nested `location = ...` is promoted into nginx's exact-match tree
+        # and wins before regexes are consulted, so that one file is rescued
+        # with or without ^~ on the parent. The nested `^~ .../openpgpkey/`
+        # is an ordinary nested prefix and gets no such promotion, so it is
+        # the path where the parent's ^~ is the difference between 200 and
+        # 403 — verified both ways against a running nginx 1.24.
+        probe = "/.well-known/openpgpkey/hu/abc"
+        check("without ^~, WKD really is denied by the dotfile rule",
+              bcodes is not None and bcodes.get(probe) == "403",
+              f"got {bcodes.get(probe) if bcodes else berr} — expected 403, "
+              "which is what every deployment was returning for the key "
+              "security.txt tells reporters to encrypt to")
+
     print("\n[6] the rendered config is not corrupted by shell expansion")
     # Backticks inside install.sh's unquoted heredocs are command substitution,
     # not quoting — they silently blank the text they wrap. Caught once; this

@@ -3,8 +3,240 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>0trust · help</title>
+<title>Help and common questions — 0trustvpn</title>
 
+<meta name="description" content="Losing your token, why crypto only, how multi-hop and the kill switch work, what DPI protection does and does not do, and what we can see.">
+<link rel="canonical" href="https://0trustvpn.com/help">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="0trustvpn">
+<meta property="og:locale" content="en">
+<meta property="og:title" content="Help and common questions — 0trustvpn">
+<meta property="og:description" content="Losing your token, why crypto only, how multi-hop and the kill switch work, what DPI protection does and does not do, and what we can see.">
+<meta property="og:url" content="https://0trustvpn.com/help">
+<meta property="og:image" content="https://0trustvpn.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="0trustvpn — encrypted mesh VPN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Help and common questions — 0trustvpn">
+<meta name="twitter:description" content="Losing your token, why crypto only, how multi-hop and the kill switch work, what DPI protection does and does not do, and what we can see.">
+<meta name="twitter:image" content="https://0trustvpn.com/og.png">
+
+<!-- SEO:JSONLD -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://0trustvpn.com/help#webpage",
+      "url": "https://0trustvpn.com/help",
+      "name": "Help and common questions — 0trustvpn",
+      "description": "Losing your token, why crypto only, how multi-hop and the kill switch work, what DPI protection does and does not do, and what we can see.",
+      "isPartOf": {
+        "@id": "https://0trustvpn.com/#website"
+      },
+      "publisher": {
+        "@id": "https://0trustvpn.com/#organization"
+      },
+      "inLanguage": "en",
+      "breadcrumb": {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Home",
+            "item": "https://0trustvpn.com/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "Help and common questions — 0trustvpn"
+          }
+        ]
+      }
+    },
+    {
+      "@type": "FAQPage",
+      "@id": "https://0trustvpn.com/help#faq",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "I lost my account token.",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The 16-character token is the only credential. We have no email, no phone number, no recovery question. We cannot retrieve it. This is deliberate — if we could, so could a subpoena. The pragmatic fix: sign up again with a new token, keep a backup (password manager, paper, or both) this time. Your previous account expires naturally and you don't owe us anything."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I share my account across devices?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes — up to 8 devices per account. The CLI / GUI handles this; for phones, use 0trust export from the desktop client to generate a config QR."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I add a new device after my first connection?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "sudo 0trust connect on the new device, after pasting the same account token via 0trust login . The server assigns it a unique pubkey and IP. For mobile devices: open the desktop GUI, click Add mobile device , scan the QR with the WireGuard app."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How long does my subscription last?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "As long as you paid for. Check expiry with 0trust status — it shows days remaining. We don't auto-renew because we don't keep your payment details. About 7 days before expiry, the GUI shows a renewal reminder; you top up with another crypto invoice and the new days stack on top of the old ones."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why crypto only? Why no credit card?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Credit card processors require a real name and a billing address, and the card network itself logs every transaction. That data lives forever and is reachable by subpoena. Our no-logs claim would be meaningless if we collected it at signup. Crypto avoids the trail. If crypto is genuinely a blocker, the standard workaround is a pre-paid VISA card bought with cash from a corner store. We don't sell those; you'd need to figure that out locally."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "I paid but my account is still inactive.",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Your account activates once the payment is buried deep enough on-chain. How deep depends on which coin you paid in: the checkout shows the number of confirmations it is waiting for, and counts them off. For Bitcoin that is usually 10–20 minutes; coins that ask for more blocks take proportionally longer. We check the chain once a minute, so activation follows within about that long of the last block. Leave the signup page open and it will update on its own; the account token is on it either way. If 60+ minutes have passed and the invoice shows Settled but your account is still inactive, that's a real bug — email support with the invoice ID."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Refunds?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Within 30 days, yes, full refund via BTCPay's dispute flow — just ask. After that the bandwidth is used and we can't get it back."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What's the difference between single-hop and multi-hop?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Single-hop : one server terminates your tunnel and forwards traffic to the internet. Fast, simple, slightly cheaper on our end. Adequate for almost everyone. Multi-hop : your traffic enters via one server in region A and exits via a different server in region B. The entry server can see your IP but never decrypts your traffic (you're end-to-end-encrypted to the exit). The exit decrypts but only ever sees the entry's IP, never yours. Adds latency, eliminates the single-server correlation risk. Use 0trust connect zur for single-hop, or 0trust connect zur --exit buc for multi-hop."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How often does the multi-hop pair rotate?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Every 24 hours by default; the 0trust-rotate.timer systemd unit fires every 6 hours with jitter. You can rotate manually with sudo 0trust rotate any time — the tunnel hot-swaps without dropping existing connections."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "My tunnel works but the internet feels slow.",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Check status.0trustvpn.com first — if your region is degraded, capacity might be tight. Otherwise, try a different entry region ( 0trust connect rey instead of zur ). If multi-hop, try removing the exit ( --exit ) to compare. Real bottlenecks we’ve seen: ISP throttling of WireGuard on UDP/51820, and MTU problems (some carrier networks fragment WireGuard packets badly). Multi-hop uses a port in the 52000–59999 range rather than 51820, so 0trust connect zur --exit rey is worth trying on a network that appears to single out the default port."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "It says “no handshake — the tunnel is NOT carrying traffic”.",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The tunnel interface came up, but the node never answered, so nothing is getting through. We tell you rather than printing a tick, because the alternative is believing you are protected while you are not. We deliberately leave the interface up. It still holds your default route, so traffic is dropped instead of quietly going out in the clear. That is why the internet looks broken rather than merely unprotected. To get back online, fix the cause or run sudo 0trust disconnect . Usual causes, in order: the network blocks UDP (common on hotel and corporate wifi) — try multi-hop, which uses a different port range; the node is down — check the status page ; or the subscription lapsed — 0trust status ."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is there a kill switch?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "On Linux and Windows, yes. sudo 0trust connect --kill-switch blocks any traffic that is not going through the tunnel, so if the tunnel drops your connection stops rather than silently falling back to your normal one. The desktop app has a toggle for the same setting. It is sticky — you do not have to repeat the flag — and --no-kill-switch turns it off. It blocks your local network too : printers, NAS boxes and casting to a TV will stop working while it is on. That is what a strict kill switch means, and we would rather say so than surprise you. On Windows the official WireGuard service does this itself whenever the tunnel carries all traffic, which ours does, so it is already on. On macOS we do not have one. wg-quick there drives pf rather than iptables, and we would rather ship nothing than ship a setting that looks enabled and is not. The client tells you if you ask for it on a platform where it does nothing."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What about IPv6 and DNS leaks?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Your tunnel claims both 0.0.0.0/0 and ::/0 , so IPv6 cannot route around us on a dual-stack network. That much is true on every connection. Whether IPv6 is carried depends on the exit node. Where the node has working IPv6, you get a v6 address inside the tunnel and v6 sites load normally; where it does not, you get no v6 address and v6 traffic is dropped rather than let out around us. So the failure mode is IPv6-only sites not loading, never IPv6 leaking. 0trust status tells you which you have on the current connection. Inside the tunnel your v6 address is a private ULA, and the exit masquerades it the same way it masquerades v4. Sites see the node’s address, not a per-customer prefix — a stable prefix of your own would be a tracking identifier, which is the opposite of the point. DNS goes to a resolver that only exists inside the tunnel, on the exit node carrying your traffic. It keeps no query log. See the privacy policy, section 4d for what that resolver does and does not know, including the upstream we forward to and cannot audit for you."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Where are your servers? Which jurisdictions?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Three nodes in three countries: Switzerland (Zurich), Iceland (Reykjavik), and Romania (Bucharest). All three are outside the Five Eyes, Nine Eyes, and Fourteen Eyes intelligence-sharing alliances. No servers in the US, UK, Canada, Australia, New Zealand, Germany, France, Netherlands, Denmark, Belgium, Italy, Spain, Sweden, or Norway. Not for any reason. Three nodes means fewer servers to scrutinize and harden, not more. Each box is a RAM-only ephemeral instance — disk is tmpfs, swap is disabled, keys are regenerated on every reboot. A seized machine reveals the OS image and nothing operational. See the audit pack for the verification commands."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do you actually keep no logs?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The honest answer is \"almost\". Read the full audit pack for the details, but the short version: we store hashed account tokens, device pubkeys, and 2 days of /24-anonymized nginx access logs (for DDoS forensics). We don't store IPs, user agents, traffic destinations, or connection times. scripts/audit-verify.sh in the repo runs an automated verification matrix that any independent auditor (or you) can use to confirm what we say matches what the server does."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What happens if you're served a subpoena?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Specifics depend on jurisdiction. The structural defense is that we don't have the data most subpoenas would ask for — there's nothing to hand over. The disclosure signal is the warrant canary , re-signed weekly. If it stops being signed, treat that as the signal."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What if your servers get seized?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Our exit and entry nodes are RAM-only ephemeral instances (see audit pack §5.3). Disk is tmpfs, swap is off, keys regenerate on boot. A seized box contains its base OS and nothing operationally relevant. The control plane has a customer-token table, but tokens are stored as SHA-256 hashes; a seizure reveals which tokens have been issued but not which tokens map to which connections."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why WireGuard? Why not OpenVPN?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "WireGuard is smaller (~4000 lines of audited kernel code vs OpenVPN's ~70k), faster (kernel-space datapath), and has a saner cryptographic design (no negotiation, no roundtrip handshake costs after setup). The tradeoffs — slightly less hairy NAT traversal, no per-connection user authentication — don't matter for our model where we hand out per-device keypairs."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is the client open source?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes — github.com/0trust/cli . Builds are reproducible: same source rev + same Go version produces byte-identical binaries. See the build instructions in build-info.txt in any release."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I run my own exit node?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Not currently — we operate the mesh ourselves to keep customer traffic correlation under one trust boundary. A federated model (Bring-Your-Own-Node) is on the long-term roadmap but isn't something we're ready to support."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I contact you?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Email 0trustvpn@proton.me . We respond within 48 hours, faster for outages. Please encrypt sensitive details to our PGP key — fingerprint at /.well-known/security.txt . For security vulnerabilities, use 0trustvpn@proton.me — same key, faster triage. See our security policy . Tor users: we run a `.onion` mirror of this site. The address is published in the footer below, in our warrant canary, and on our Mastodon profile. Tor Browser auto-promotes you when you visit the clearnet URL (look for the purple onion icon)."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
+<!-- /SEO:JSONLD -->
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="/favicon.svg">
@@ -172,10 +404,10 @@ a:focus-visible, button:focus-visible, input:focus-visible {
     much faster when we're not also answering the ones that are.
   </p>
 
-  <h2>Account &amp; access</h2>
+  <h2 id="account-and-access">Account &amp; access</h2>
 
   <div class="q">
-    <h3>I lost my account token.</h3>
+    <h3 id="i-lost-my-account-token">I lost my account token.</h3>
     <p>
       The 16-character token is the <em>only</em> credential. We have no email,
       no phone number, no recovery question. We <strong>cannot</strong>
@@ -189,7 +421,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>Can I share my account across devices?</h3>
+    <h3 id="can-i-share-my-account-across-devices">Can I share my account across devices?</h3>
     <p>
       Yes — up to <strong>8 devices</strong> per account. The CLI / GUI
       handles this; for phones, use <code>0trust export</code> from the
@@ -198,7 +430,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>How do I add a new device after my first connection?</h3>
+    <h3 id="how-do-i-add-a-new-device-after-my-first-connection">How do I add a new device after my first connection?</h3>
     <p>
       <code>sudo 0trust connect</code> on the new device, after pasting the
       same account token via <code>0trust login</code>. The server assigns
@@ -208,7 +440,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>How long does my subscription last?</h3>
+    <h3 id="how-long-does-my-subscription-last">How long does my subscription last?</h3>
     <p>
       As long as you paid for. Check expiry with <code>0trust status</code> —
       it shows days remaining. We don't auto-renew because we don't keep your
@@ -218,10 +450,10 @@ a:focus-visible, button:focus-visible, input:focus-visible {
     </p>
   </div>
 
-  <h2>Payment</h2>
+  <h2 id="payment">Payment</h2>
 
   <div class="q">
-    <h3>Why crypto only? Why no credit card?</h3>
+    <h3 id="why-crypto-only-why-no-credit-card">Why crypto only? Why no credit card?</h3>
     <p>
       Credit card processors require a real name and a billing address,
       and the card network itself logs every transaction. That data lives
@@ -236,7 +468,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>I paid but my account is still inactive.</h3>
+    <h3 id="i-paid-but-my-account-is-still-inactive">I paid but my account is still inactive.</h3>
     <p>
       Your account activates once the payment is buried deep enough on-chain.
       How deep depends on which coin you paid in: the checkout shows the
@@ -255,17 +487,17 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>Refunds?</h3>
+    <h3 id="refunds">Refunds?</h3>
     <p>
       Within 30 days, yes, full refund via BTCPay's dispute flow — just
       ask. After that the bandwidth is used and we can't get it back.
     </p>
   </div>
 
-  <h2>Connection &amp; routing</h2>
+  <h2 id="connection-and-routing">Connection &amp; routing</h2>
 
   <div class="q">
-    <h3>What's the difference between single-hop and multi-hop?</h3>
+    <h3 id="what-s-the-difference-between-single-hop-and-multi-hop">What's the difference between single-hop and multi-hop?</h3>
     <p>
       <strong>Single-hop</strong>: one server terminates your tunnel and
       forwards traffic to the internet. Fast, simple, slightly cheaper on
@@ -286,7 +518,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>How often does the multi-hop pair rotate?</h3>
+    <h3 id="how-often-does-the-multi-hop-pair-rotate">How often does the multi-hop pair rotate?</h3>
     <p>
       Every 24 hours by default; the <code>0trust-rotate.timer</code>
       systemd unit fires every 6 hours with jitter. You can rotate
@@ -296,7 +528,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>My tunnel works but the internet feels slow.</h3>
+    <h3 id="my-tunnel-works-but-the-internet-feels-slow">My tunnel works but the internet feels slow.</h3>
     <p>
       Check <a href="/status">status.0trustvpn.com</a> first — if your region
       is degraded, capacity might be tight. Otherwise, try a different
@@ -314,7 +546,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>It says &ldquo;no handshake &mdash; the tunnel is NOT carrying
+    <h3 id="it-says-ldquo-no-handshake-the-tunnel-is-not-carrying-traffi">It says &ldquo;no handshake &mdash; the tunnel is NOT carrying
       traffic&rdquo;.</h3>
     <p>
       The tunnel interface came up, but the node never answered, so nothing is
@@ -337,7 +569,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>Is there a kill switch?</h3>
+    <h3 id="is-there-a-kill-switch">Is there a kill switch?</h3>
     <p>
       On Linux and Windows, yes. <code>sudo 0trust connect --kill-switch</code>
       blocks any traffic that is not going through the tunnel, so if the tunnel
@@ -362,7 +594,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q" id="q-dpi">
-    <h3>Can my network tell I&rsquo;m using a VPN?</h3>
+    <h3 id="can-my-network-tell-i-rsquo-m-using-a-vpn">Can my network tell I&rsquo;m using a VPN?</h3>
     <p>
       By default, yes. We run plain WireGuard, and WireGuard&rsquo;s handshake
       is a fixed-shape packet that any deep-packet-inspection box identifies
@@ -406,7 +638,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>What about IPv6 and DNS leaks?</h3>
+    <h3 id="what-about-ipv6-and-dns-leaks">What about IPv6 and DNS leaks?</h3>
     <p>
       Your tunnel claims both <code>0.0.0.0/0</code> and <code>::/0</code>, so
       IPv6 cannot route around us on a dual-stack network. That much is true
@@ -435,10 +667,10 @@ a:focus-visible, button:focus-visible, input:focus-visible {
     </p>
   </div>
 
-  <h2>Privacy &amp; logging</h2>
+  <h2 id="privacy-and-logging">Privacy &amp; logging</h2>
 
   <div class="q">
-    <h3>Where are your servers? Which jurisdictions?</h3>
+    <h3 id="where-are-your-servers-which-jurisdictions">Where are your servers? Which jurisdictions?</h3>
     <p>
       Three nodes in three countries: <strong>Switzerland</strong>
       (Zurich), <strong>Iceland</strong> (Reykjavik), and
@@ -458,7 +690,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>Do you actually keep no logs?</h3>
+    <h3 id="do-you-actually-keep-no-logs">Do you actually keep no logs?</h3>
     <p>
       The honest answer is "almost". Read <a href="/audit">the full audit
       pack</a> for the details, but the short version: we store hashed
@@ -474,7 +706,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>What happens if you're served a subpoena?</h3>
+    <h3 id="what-happens-if-you-re-served-a-subpoena">What happens if you're served a subpoena?</h3>
     <p>
       Specifics depend on jurisdiction. The structural defense is that we
       don't <em>have</em> the data most subpoenas would ask for — there's
@@ -485,7 +717,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>What if your servers get seized?</h3>
+    <h3 id="what-if-your-servers-get-seized">What if your servers get seized?</h3>
     <p>
       Our exit and entry nodes are <strong>RAM-only ephemeral instances</strong>
       (see audit pack §5.3). Disk is tmpfs, swap is off, keys regenerate on
@@ -496,10 +728,10 @@ a:focus-visible, button:focus-visible, input:focus-visible {
     </p>
   </div>
 
-  <h2>Technical</h2>
+  <h2 id="technical">Technical</h2>
 
   <div class="q">
-    <h3>Why WireGuard? Why not OpenVPN?</h3>
+    <h3 id="why-wireguard-why-not-openvpn">Why WireGuard? Why not OpenVPN?</h3>
     <p>
       WireGuard is smaller (~4000 lines of audited kernel code vs
       OpenVPN's ~70k), faster (kernel-space datapath), and has a saner
@@ -511,7 +743,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>Is the client open source?</h3>
+    <h3 id="is-the-client-open-source">Is the client open source?</h3>
     <p>
       Yes — <a href="https://github.com/0trust/cli">github.com/0trust/cli</a>.
       Builds are reproducible: same source rev + same Go version produces
@@ -521,7 +753,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 
   <div class="q">
-    <h3>Can I run my own exit node?</h3>
+    <h3 id="can-i-run-my-own-exit-node">Can I run my own exit node?</h3>
     <p>
       Not currently — we operate the mesh ourselves to keep customer
       traffic correlation under one trust boundary. A federated model
@@ -530,10 +762,10 @@ a:focus-visible, button:focus-visible, input:focus-visible {
     </p>
   </div>
 
-  <h2>Still need help?</h2>
+  <h2 id="still-need-help">Still need help?</h2>
 
   <div class="q">
-    <h3>How do I contact you?</h3>
+    <h3 id="how-do-i-contact-you">How do I contact you?</h3>
     <p>
       Email <a href="mailto:0trustvpn@proton.me">0trustvpn@proton.me</a>.
       We respond within 48 hours, faster for outages. <strong>Please

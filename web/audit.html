@@ -3,7 +3,65 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>0trust · audit</title>
+<title>No-logs audit pack — 0trustvpn</title>
+<meta name="description" content="The evidence behind the no-logs claim: what is stored, what is not, and a verifier you can run against a live server instead of trusting us.">
+<link rel="canonical" href="https://0trustvpn.com/audit">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="0trustvpn">
+<meta property="og:locale" content="en">
+<meta property="og:title" content="No-logs audit pack — 0trustvpn">
+<meta property="og:description" content="The evidence behind the no-logs claim: what is stored, what is not, and a verifier you can run against a live server instead of trusting us.">
+<meta property="og:url" content="https://0trustvpn.com/audit">
+<meta property="og:image" content="https://0trustvpn.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="0trustvpn — encrypted mesh VPN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="No-logs audit pack — 0trustvpn">
+<meta name="twitter:description" content="The evidence behind the no-logs claim: what is stored, what is not, and a verifier you can run against a live server instead of trusting us.">
+<meta name="twitter:image" content="https://0trustvpn.com/og.png">
+
+<!-- SEO:JSONLD -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://0trustvpn.com/audit#webpage",
+      "url": "https://0trustvpn.com/audit",
+      "name": "No-logs audit pack — 0trustvpn",
+      "description": "The evidence behind the no-logs claim: what is stored, what is not, and a verifier you can run against a live server instead of trusting us.",
+      "isPartOf": {
+        "@id": "https://0trustvpn.com/#website"
+      },
+      "publisher": {
+        "@id": "https://0trustvpn.com/#organization"
+      },
+      "inLanguage": "en",
+      "breadcrumb": {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Home",
+            "item": "https://0trustvpn.com/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "No-logs audit pack — 0trustvpn"
+          }
+        ]
+      }
+    }
+  ]
+}
+</script>
+<!-- /SEO:JSONLD -->
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="/favicon.svg">
@@ -139,7 +197,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   the same document.
 </p>
 
-<h2>Where the servers are</h2>
+<h2 id="where-the-servers-are">Where the servers are</h2>
 
 <div class="box">
   <h3>Three countries, all outside any Eyes alliance</h3>
@@ -163,7 +221,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </p>
 </div>
 
-<h2>The short version</h2>
+<h2 id="the-short-version">The short version</h2>
 
 <div class="box">
   <h3>What we store</h3>
@@ -199,9 +257,9 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </p>
 </div>
 
-<h2>At each stage</h2>
+<h2 id="at-each-stage">At each stage</h2>
 
-<h2 style="font-size:11px;margin-top:24px">Signup</h2>
+<h2 style="font-size:11px;margin-top:24px" id="signup">Signup</h2>
 <table>
 <thead><tr><th>Field</th><th>Stored?</th><th>Why</th></tr></thead>
 <tbody>
@@ -214,7 +272,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
 <tr><td>Subscription expiry</td><td>YES</td> <td>Required to enforce duration</td></tr>
 </tbody></table>
 
-<h2 style="font-size:11px;margin-top:32px">Payment</h2>
+<h2 style="font-size:11px;margin-top:32px" id="payment">Payment</h2>
 <table>
 <thead><tr><th>Field</th><th>Stored?</th><th>Why</th></tr></thead>
 <tbody>
@@ -224,7 +282,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
 <tr><td>Amount (USD)</td>       <td>YES</td> <td>Same</td></tr>
 </tbody></table>
 
-<h2 style="font-size:11px;margin-top:32px">Connect</h2>
+<h2 style="font-size:11px;margin-top:32px" id="connect">Connect</h2>
 <table>
 <thead><tr><th>Field</th><th>Stored?</th><th>Why</th></tr></thead>
 <tbody>
@@ -237,7 +295,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
 <tr><td>Connection start/end times</td><td>NO</td><td>Not recorded</td></tr>
 </tbody></table>
 
-<h2>Known limitations we declare proactively</h2>
+<h2 id="known-limitations-we-declare-proactively">Known limitations we declare proactively</h2>
 
 <div class="box">
   <h3>2 days of nginx access logs</h3>

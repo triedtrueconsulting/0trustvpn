@@ -1480,6 +1480,80 @@ render_common_locations() {
     location = /privacy { try_files /privacy.html =404; }
     location = /terms   { try_files /terms.html =404; }
     location = /audit   { try_files /audit.html =404; }
+    # This one was in the reference config and not here, so on every real
+    # deployment it 404ed — and it is the URL /.well-known/security.txt names
+    # twice, as both Contact and Policy. A researcher following RFC 9116 to
+    # report a vulnerability arrived at a dead link. index.html's footer and
+    # help.html link it too.
+    location = /security-policy { try_files /security-policy.html =404; }
+
+    # --- Crawlers ---
+    # Served from the webroot; they are here for the explicit content type,
+    # and so that a missing file is a 404 rather than the soft-200 the old
+    # index.html fallback produced for everything.
+    location = /robots.txt {
+        add_header Content-Type "text/plain; charset=utf-8" always;
+        add_header Cache-Control "public, max-age=3600" always;
+        try_files /robots.txt =404;
+    }
+    location = /sitemap.xml {
+        add_header Content-Type "application/xml; charset=utf-8" always;
+        add_header Cache-Control "public, max-age=3600" always;
+        try_files /sitemap.xml =404;
+    }
+
+    # --- .well-known ---
+    #
+    # `^~`, not a plain prefix, and the reason is worth writing down because
+    # it is not the obvious one.
+    #
+    # The server ends with `location ~ /\. { deny all; }`. An nginx regex
+    # location beats a plain prefix location, so before this block existed
+    # everything under /.well-known/ matched the dotfile deny and returned
+    # 403 — RFC 9116 discovery dead, and with it the WKD path that
+    # security.txt itself advertises as the way to fetch the key a
+    # vulnerability report should be encrypted to.
+    #
+    # The two paths are then rescued differently, which is easy to get wrong.
+    # A NESTED `location = ...` is promoted into nginx's exact-match tree and
+    # wins before any regex is consulted, so security.txt would be reachable
+    # even under a plain-prefix parent. The nested openpgpkey block is an
+    # ordinary prefix and gets no such promotion: for WKD, the `^~` here is
+    # the whole difference between 200 and 403. Both directions are probed
+    # against a running nginx in test_install.py [5c].
+    location ^~ /.well-known/ {
+        location = /.well-known/security.txt {
+            add_header Content-Type "text/plain; charset=utf-8" always;
+            add_header Cache-Control "public, max-age=3600" always;
+        }
+        location ^~ /.well-known/openpgpkey/ {
+            add_header Content-Type "application/octet-stream" always;
+            add_header Cache-Control "public, max-age=3600" always;
+            # WKD is fetched cross-origin by mail clients and key managers.
+            add_header Access-Control-Allow-Origin "*" always;
+        }
+    }
+
+    # --- Release artifacts ---
+    # The download page links these directly. Binaries download rather than
+    # rendering inline, and SHA256SUMS/the verify script stay readable in a
+    # browser so someone can check them without saving anything first.
+    location /releases/ {
+        add_header Cache-Control "public, max-age=86400" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        location ~ /releases/.*/0trust-[^/]*$ {
+            add_header Content-Type "application/octet-stream" always;
+            add_header Content-Disposition "attachment" always;
+        }
+    }
+    location = /verify-release.sh {
+        add_header Content-Type "text/plain; charset=utf-8" always;
+        add_header Cache-Control "public, max-age=3600" always;
+    }
+    location /vendor/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
 LOCEOF
 }
 
@@ -1653,7 +1727,11 @@ EOF
         render_common_locations
         cat <<'EOF'
 
-    location / { try_files $uri $uri/ /index.html; }
+    # =404, not /index.html. The fallback served the landing page with a 200
+    # for every unknown URL, so the branded 404 page could never appear and a
+    # crawler could mint unlimited duplicate copies of the homepage from
+    # typos. Every clean URL the site uses has an exact-match block above.
+    location / { try_files $uri $uri/ =404; }
     location ~ /\. { deny all; }
 }
 EOF
@@ -1718,7 +1796,11 @@ EOF
         render_common_locations
         cat <<'EOF'
 
-    location / { try_files $uri $uri/ /index.html; }
+    # =404, not /index.html. The fallback served the landing page with a 200
+    # for every unknown URL, so the branded 404 page could never appear and a
+    # crawler could mint unlimited duplicate copies of the homepage from
+    # typos. Every clean URL the site uses has an exact-match block above.
+    location / { try_files $uri $uri/ =404; }
     location ~ /\. { deny all; }
 }
 EOF

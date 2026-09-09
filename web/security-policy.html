@@ -3,7 +3,65 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>0trust · security policy</title>
+<title>Security policy and vulnerability disclosure — 0trustvpn</title>
+<meta name="description" content="How to report a vulnerability in 0trustvpn, what is in scope, how quickly we respond, and the PGP key to encrypt a report to.">
+<link rel="canonical" href="https://0trustvpn.com/security-policy">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="0trustvpn">
+<meta property="og:locale" content="en">
+<meta property="og:title" content="Security policy and vulnerability disclosure — 0trustvpn">
+<meta property="og:description" content="How to report a vulnerability in 0trustvpn, what is in scope, how quickly we respond, and the PGP key to encrypt a report to.">
+<meta property="og:url" content="https://0trustvpn.com/security-policy">
+<meta property="og:image" content="https://0trustvpn.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="0trustvpn — encrypted mesh VPN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Security policy and vulnerability disclosure — 0trustvpn">
+<meta name="twitter:description" content="How to report a vulnerability in 0trustvpn, what is in scope, how quickly we respond, and the PGP key to encrypt a report to.">
+<meta name="twitter:image" content="https://0trustvpn.com/og.png">
+
+<!-- SEO:JSONLD -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://0trustvpn.com/security-policy#webpage",
+      "url": "https://0trustvpn.com/security-policy",
+      "name": "Security policy and vulnerability disclosure — 0trustvpn",
+      "description": "How to report a vulnerability in 0trustvpn, what is in scope, how quickly we respond, and the PGP key to encrypt a report to.",
+      "isPartOf": {
+        "@id": "https://0trustvpn.com/#website"
+      },
+      "publisher": {
+        "@id": "https://0trustvpn.com/#organization"
+      },
+      "inLanguage": "en",
+      "breadcrumb": {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Home",
+            "item": "https://0trustvpn.com/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "Security policy and vulnerability disclosure — 0trustvpn"
+          }
+        ]
+      }
+    }
+  ]
+}
+</script>
+<!-- /SEO:JSONLD -->
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="/favicon.svg">
@@ -131,7 +189,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   we commit to, and what we ask in return.
 </p>
 
-<h2>Contact</h2>
+<h2 id="contact">Contact</h2>
 <p>
   Email <a href="mailto:0trustvpn@proton.me">0trustvpn@proton.me</a>,
   encrypted to our PGP key. Don't use the support address — vulnerability
@@ -149,7 +207,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   fingerprint above.
 </p>
 
-<h2>Our commitments to you</h2>
+<h2 id="our-commitments-to-you">Our commitments to you</h2>
 <ul>
   <li><strong>Acknowledgement within 24 hours</strong> — even on weekends. If you don't hear back in 24h, the report didn't reach us; please try a different channel (Mastodon, Bluesky, signed Tor onion submission).</li>
   <li><strong>Initial triage within 72 hours</strong> — we'll tell you whether we can reproduce, our severity estimate, and our expected timeline.</li>
@@ -158,7 +216,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   <li><strong>Never threaten you with legal action</strong> for good-faith research within the scope below. This commitment is non-revocable.</li>
 </ul>
 
-<h2>In scope</h2>
+<h2 id="in-scope">In scope</h2>
 
 <div class="scope">
   <div class="scope-col in">
@@ -186,7 +244,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   </div>
 </div>
 
-<h2>What we ask in return</h2>
+<h2 id="what-we-ask-in-return">What we ask in return</h2>
 <ul>
   <li><strong>Don't access customer data.</strong> If a vulnerability would allow it, demonstrate the path without retrieving real customer records.</li>
   <li><strong>Don't degrade service for others.</strong> No load testing, no fuzzing the live API at high volume, no traffic generation that would impact paying customers. Hit us up first if you want a test environment.</li>
@@ -194,7 +252,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   <li><strong>Encrypt your report.</strong> The mail provider is encrypted at rest, but PGP-to-PGP is end-to-end. Use the key above.</li>
 </ul>
 
-<h2>Safe harbor</h2>
+<h2 id="safe-harbor">Safe harbor</h2>
 <p>
   Research conducted within this policy is authorized. We will not pursue
   civil or criminal action against researchers who:
@@ -212,7 +270,7 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   our warrant canary archive, so a future operator cannot quietly revoke it.
 </p>
 
-<h2>Out-of-band verification</h2>
+<h2 id="out-of-band-verification">Out-of-band verification</h2>
 <p>
   If you suspect any of our public infrastructure is compromised — including
   this page — and you want to verify a key fingerprint or our identity:
