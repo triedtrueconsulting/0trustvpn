@@ -284,6 +284,10 @@ Four things this is NOT, all of which have to stay said:
 - **Not a way through a UDP block.** It is UDP in and UDP out. A network that
   drops all outbound UDP drops this too. Carrying the same frames over TCP is
   a different mode and is not implemented.
+- **Not on every client.** The CLI, the desktop GUI and the Android app have
+  the switch. iOS does not: WireGuardKit owns the packet path in the tunnel
+  extension and leaves nowhere to put a local relay, so the app ignores the
+  relay this node advertises and connects directly.
 
 The relay runs as its own unprivileged unit, not inside meshd. It parses bytes
 an unauthenticated stranger sent to a public port, and meshd holds

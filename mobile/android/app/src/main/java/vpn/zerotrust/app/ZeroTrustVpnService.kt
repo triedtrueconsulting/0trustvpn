@@ -108,6 +108,10 @@ class ZeroTrustVpnService : Service() {
                 ))
             } catch (t: Throwable) {
                 Log.e(TAG, "connect failed", t)
+                // The relay was started before the config that names it was
+                // built, so a failure here leaves it running with nothing to
+                // carry — holding a loopback port and a socket to the node.
+                ObfsRelayHolder.stop()
                 broadcast(ConnState.Failed, t.message ?: "Connect failed")
                 stopForegroundAndSelf()
             }
@@ -126,6 +130,11 @@ class ZeroTrustVpnService : Service() {
             } catch (t: Throwable) {
                 Log.w(TAG, "disconnect: $t")
             } finally {
+                // Unconditionally, and in `finally`: the relay is a pair of
+                // threads and two sockets that the tunnel going down does not
+                // touch. If setState threw, the tunnel may be down anyway and
+                // the relay must not outlive it.
+                ObfsRelayHolder.stop()
                 tunnel = null
                 broadcast(ConnState.Disconnected, "")
                 stopForegroundAndSelf()

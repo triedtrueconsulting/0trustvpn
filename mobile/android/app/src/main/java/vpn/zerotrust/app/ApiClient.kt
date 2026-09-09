@@ -52,6 +52,31 @@ import java.util.concurrent.TimeUnit
     // real, the privacy property multi-hop exists for is not, and the app has
     // to say so instead of printing the usual claim. The CLI already does.
     @SerialName("same_host")  val sameHost: Boolean = false,
+    // MTU for THIS config. The obfuscated transport adds 55 bytes per packet,
+    // so the two differ and the control plane answers per response rather
+    // than leaving a client to work it out. Zero means an older control plane
+    // said nothing, and the app keeps wireguard-android's own default.
+    val mtu: Int = 0,
+    // Set when the node this config points at runs an obfuscation relay.
+    // Absent means it does not — a normal state, not an error, and the app
+    // must connect directly rather than failing.
+    val obfuscation: ObfuscationInfo? = null,
+)
+
+/**
+ * How to reach a node without looking like WireGuard.
+ *
+ * `key` is shared by every client on that node — it is what lets the relay
+ * open their packets, not an access credential. WireGuard remains the only
+ * thing authenticating anybody, exactly as when this is unused.
+ */
+@Serializable data class ObfuscationInfo(
+    val kind: String = "",
+    val method: String = "",
+    val endpoint: String = "",
+    val key: String = "",
+    val target: String = "",
+    val mtu: Int = 0,
 )
 
 @Serializable data class AccountStatusResponse(

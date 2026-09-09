@@ -118,6 +118,7 @@ class MainActivity : ComponentActivity() {
                             onDisconnect = { requestDisconnect() },
                             onSelectEntry = { viewModel.selectEntry(it) },
                             onSelectExit = { viewModel.selectExit(it) },
+                            onSetObfuscate = { viewModel.setObfuscate(it) },
                             onLogout = { viewModel.logout() },
                             onRefreshDevices = { viewModel.refreshDevices() },
                             onRemoveDevice = { viewModel.removeDevice(it) },
@@ -162,10 +163,26 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             state.registerDevice().fold(
                 onSuccess = { cfg ->
-                    val text = cfg.toLibraryConfig().toWgQuickString()
-                    ZeroTrustVpnService.connect(this@MainActivity, text)
+                    // Rendering the config can still throw — a malformed
+                    // AllowedIPs set, an endpoint the library rejects — and
+                    // by this point registerDevice may already have started
+                    // the obfuscation relay. Without this the service is
+                    // never told to connect, so nothing ever tells the relay
+                    // to stop, and it sits holding a socket to the node with
+                    // no tunnel in front of it.
+                    runCatching { cfg.toLibraryConfig().toWgQuickString() }.fold(
+                        onSuccess = { text ->
+                            ZeroTrustVpnService.connect(this@MainActivity, text)
+                        },
+                        onFailure = { err ->
+                            ObfsRelayHolder.stop()
+                            state.updateTunnelState(
+                                ConnState.Failed, err.message ?: "bad tunnel config")
+                        },
+                    )
                 },
                 onFailure = { err ->
+                    ObfsRelayHolder.stop()
                     state.updateTunnelState(ConnState.Failed, err.message ?: "register failed")
                 },
             )
@@ -274,6 +291,7 @@ fun MainScreen(
     onDisconnect: () -> Unit,
     onSelectEntry: (String) -> Unit,
     onSelectExit: (String?) -> Unit,
+    onSetObfuscate: (Boolean) -> Unit,
     onLogout: () -> Unit,
     onRefreshDevices: () -> Unit,
     onRemoveDevice: (String) -> Unit,
@@ -318,6 +336,7 @@ fun MainScreen(
             ui = ui,
             onSelectEntry = onSelectEntry,
             onSelectExit = onSelectExit,
+            onSetObfuscate = onSetObfuscate,
         )
         AccountCard(ui = ui)
         DevicesCard(
@@ -411,6 +430,7 @@ private fun RoutingCard(
     ui: UiState,
     onSelectEntry: (String) -> Unit,
     onSelectExit: (String?) -> Unit,
+    onSetObfuscate: (Boolean) -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -461,6 +481,45 @@ private fun RoutingCard(
                         if (multihop) "Traffic enters one country, exits another"
                         else "Single-hop — your tunnel terminates at the entry node",
                         color = ZT_InkFnt,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = ui.obfuscate,
+                    onCheckedChange = onSetObfuscate,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = ZT_Amber,
+                        checkedTrackColor = ZT_BgElev,
+                        checkedBorderColor = ZT_Amber,
+                    ),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text("DPI protection", color = ZT_Ink, fontSize = 15.sp)
+                    // The switch shows the SETTING; this line shows what is
+                    // actually happening. They disagree whenever the node
+                    // this tunnel landed on runs no relay, and showing only
+                    // the switch would let a tick mark imply the traffic is
+                    // unrecognizable when it is plain WireGuard.
+                    Text(
+                        when {
+                            ui.obfuscationActive ->
+                                "On — packets are sealed, so this does not look " +
+                                "like WireGuard. Slower."
+                            ui.obfuscate && ui.tunnel == ConnState.Connected ->
+                                "Requested, but this node runs no relay — connected " +
+                                "directly and identifiable as WireGuard."
+                            ui.obfuscate ->
+                                "Applies on the next connect, if the node you land " +
+                                "on offers it."
+                            else ->
+                                "Off — full speed. Your network can tell this is a VPN."
+                        },
+                        color = if (ui.obfuscate && !ui.obfuscationActive &&
+                                    ui.tunnel == ConnState.Connected) ZT_Terra else ZT_InkFnt,
                         fontSize = 12.sp,
                     )
                 }

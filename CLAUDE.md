@@ -45,6 +45,10 @@ client/         Go module github.com/0trust/cli (Go 1.22, dep: skip2/go-qrcode)
   internal/gui/assets/            index.html, app.css, app.js (embedded)
   internal/export/export.go       Mobile QR config export
 mobile/android/                   Complete Kotlin/Compose app (wireguard-android).
+                                  ObfsCrypto/ObfsRelay/AllowedIps.kt are the
+                                  app's own copy of the obfuscated transport
+                                  and are PURE JVM — no android.* — so CI can
+                                  compile and run them against the Go relay.
                                   gradlew + wrapper jar committed; syntax-check.sh
                                   parses the Kotlin with no Android SDK present.
 mobile/ios/                       SwiftUI app + WireGuardKit packet-tunnel
@@ -768,13 +772,51 @@ the invariant above. The iOS app moved out too, into `mobile/ios/`; what
 remains for it is a Mac, a Developer account and Apple's entitlement
 approval, not engineering.
 
-**Obfuscation is desktop-only so far.** The CLI and the browser GUI have the
-switch; the Android and iOS apps do not, because their tunnel is brought up
-by wireguard-android's `GoBackend` and WireGuardKit respectively, and neither
-gives us a place to put a local UDP relay in the packet path the way a
-desktop can. They register and connect exactly as before — the control plane
-advertises the relay to them and they ignore it, which is the safe direction.
-Neither app's copy may mention DPI protection until that is untrue.
+**Obfuscation: CLI, GUI and Android have the switch. iOS does not.**
+WireGuardKit owns the packet path in the iOS extension and leaves nowhere to
+put a local UDP relay; the app ignores the `obfuscation` block and connects
+directly, which is the safe direction, and its copy must not mention DPI
+protection until that is untrue.
+
+**The Android transport is a SECOND implementation of the wire format, and
+that is the risk to manage.** `ObfsCrypto.kt` / `ObfsRelay.kt` cannot call the
+Go binary — wireguard-android brings the tunnel up inside the app process, so
+the relay has to live there too. Two implementations can disagree, and a
+disagreement is a tunnel that silently will not come up in the one country
+where the customer needed it. The mitigation, and it is not optional:
+**those files and `AllowedIps.kt` carry no `android.*` reference**, so
+`test_obfs.py` [9] compiles them on a plain JVM and pushes real packets
+through the real `0trust-obfs` binary. Adding an Android import there deletes
+the only test that ever executes the app's copy of the transport. A mutation
+changing the HKDF info string to `ss-subkeyX` turns that check red, which is
+what makes it worth having.
+
+**On Android the routing loop is the thing to get right.** The tunnel's
+Endpoint becomes `127.0.0.1:<relay>`, so the relay's own upstream socket would
+be captured by the VPN's `0.0.0.0/0` route, encrypted, and sent back to the
+relay. `AllowedIps.excludingV4()` claims every prefix except the node's /32
+(32 blocks), which is what wg-quick does for a peer endpoint on desktop. The
+two failure directions are NOT symmetric: too little excluded loops the tunnel
+loudly, too much routes a slice of the internet outside the VPN silently. It
+is tested exhaustively — no overlaps, 2^32-1 addresses, target in none — and
+the first version was wrong in the dangerous direction while passing for
+`0.0.0.0`, because zero is the one input where setting a bit and flipping it
+are the same thing (bug class #13, again).
+
+**Android's `Obfuscate` (preference) and `obfuscationActive` (fact) are
+separate, as everywhere else.** `UiState.obfuscationActive` comes from
+`WgConfig.obfs != null` — a relay that really started — never from
+`boot.obfuscate()`. `ObfsRelayHolder` is the one relay per process; the
+service stops it in `disconnect()`'s `finally` and on a failed connect, and
+`MainActivity` stops it when rendering the config throws, because by then it
+is already running.
+
+**NOTHING HAS RUN THE ANDROID INTEGRATION ON A DEVICE.** The transport is
+executed by CI; the parts that need Android — the endpoint rewrite reaching
+GoBackend, the split AllowedIPs actually keeping the relay's socket out of the
+tun, the MTU — have never run anywhere. Treat the first `./gradlew
+assembleDebug` on a real handset as the gate, exactly as with the iOS app, and
+expect the routing exclusion to be the thing that needs looking at.
 
 ## Conventions
 

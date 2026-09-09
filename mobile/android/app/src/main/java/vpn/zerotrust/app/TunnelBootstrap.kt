@@ -49,6 +49,20 @@ class TunnelBootstrap(private val prefs: SharedPreferences) {
     fun exitRegion(): String? =
         prefs.getString(KEY_EXIT, null)?.takeIf { it != entryRegion() }
 
+    /**
+     * Whether the customer has asked for DPI protection. Off by default and
+     * sticky, like the kill switch on desktop: a protection you must remember
+     * to re-enable on every connect is not one you can rely on.
+     *
+     * This is the WISH. Whether it is granted depends on the node the
+     * control plane routes to — see [register].
+     */
+    fun obfuscate(): Boolean = prefs.getBoolean(KEY_OBFUSCATE, false)
+
+    fun setObfuscate(on: Boolean) {
+        prefs.edit().putBoolean(KEY_OBFUSCATE, on).apply()
+    }
+
     fun deviceName(): String = "android-${Build.MODEL}".take(64)
 
     /** Register (idempotently) and return the tunnel config, or throw. */
@@ -78,7 +92,49 @@ class TunnelBootstrap(private val prefs: SharedPreferences) {
             peers        = resp.peers,
             multihop     = resp.multihop,
             sameHost     = resp.sameHost,
+            obfs         = startRelayIfWanted(resp),
         )
+    }
+
+    /**
+     * Bring up the local relay when the customer wants obfuscation and the
+     * node they landed on can provide it, and return what the tunnel config
+     * needs to know about it. Null means a direct tunnel.
+     *
+     * Every "no" here is a normal outcome, not an error, and each one leaves
+     * the customer with a working direct tunnel — but the UI must then say
+     * the traffic is NOT obfuscated, which is why this returns the fact
+     * rather than setting a flag from the preference.
+     */
+    private fun startRelayIfWanted(resp: WgRegisterResponse): WgConfig.ObfsRoute? {
+        ObfsRelayHolder.stop()          // never leave a previous one running
+        if (!obfuscate()) return null
+
+        val ob = resp.obfuscation ?: return null
+        if (ob.kind != "shadowsocks") return null
+        val nodeIp = resp.peers.firstOrNull()?.endpoint
+            ?.substringBeforeLast(':')?.trim('[', ']') ?: return null
+        // A v6 node address would need the v6 route complement too, which is
+        // not implemented. Refusing here gives a direct tunnel; going ahead
+        // would give an obfuscated one whose packets loop.
+        if (!AllowedIps.supportsExclusion(nodeIp)) return null
+
+        val relayHost = ob.endpoint.substringBeforeLast(':')
+        val relayPort = ob.endpoint.substringAfterLast(':').toIntOrNull() ?: return null
+        val targetHost = ob.target.substringBeforeLast(':')
+        val targetPort = ob.target.substringAfterLast(':').toIntOrNull() ?: return null
+        val mtu = if (ob.mtu > 0) ob.mtu else resp.mtu
+        if (mtu <= 0) return null
+
+        return try {
+            val local = ObfsRelayHolder.restart(
+                relayHost, relayPort, ob.key,
+                java.net.InetSocketAddress(targetHost, targetPort))
+            WgConfig.ObfsRoute(loopbackPort = local, nodeIp = nodeIp, mtu = mtu)
+        } catch (t: Throwable) {
+            ObfsRelayHolder.stop()
+            null
+        }
     }
 
     /** Register and render straight to a wg-quick config string. */
@@ -92,5 +148,6 @@ class TunnelBootstrap(private val prefs: SharedPreferences) {
         const val KEY_API_BASE     = "api_base"
         const val KEY_WG_PRIV      = "wg_private_key"
         const val KEY_WG_PUB       = "wg_public_key"
+        const val KEY_OBFUSCATE    = "obfuscate"
     }
 }

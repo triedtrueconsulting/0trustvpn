@@ -58,6 +58,18 @@ data class UiState(
     val tunnel: ConnState = ConnState.Disconnected,
     val entryRegion: String = "zur",
     val exitRegion: String? = null,         // null = single-hop
+    /**
+     * What the customer asked for. Rendered on the switch.
+     */
+    val obfuscate: Boolean = false,
+    /**
+     * Whether a relay is REALLY carrying this tunnel. Different from
+     * [obfuscate] whenever the node routed to runs none, and the hint under
+     * the switch reads this one. A control that implies unrecognizable
+     * traffic over plain WireGuard is the single worst thing this feature
+     * could do.
+     */
+    val obfuscationActive: Boolean = false,
     val regions: List<Region> = DEFAULT_REGIONS,
 
     val devices: List<Device> = emptyList(),
@@ -115,6 +127,10 @@ class AppState(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(
             apiBase = prefs.getString(KEY_API_BASE, null) ?: BuildConfig.DEFAULT_API_BASE,
             thisDevicePubkey = boot.publicKey(),
+            obfuscate = boot.obfuscate(),
+            // Not restored from a preference: whether a relay is running is a
+            // fact about this process, and after a restart there is none.
+            obfuscationActive = ObfsRelayHolder.isRunning,
         )
         // Restore the session from encrypted storage. Runs synchronously so
         // the first compose pass already sees the correct logged-in state.
@@ -271,6 +287,17 @@ class AppState(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Turn DPI protection on or off. Applies on the NEXT connect: the
+     * transport is chosen when the tunnel is built, and swapping it under a
+     * live one means tearing the tunnel down, which is not a thing to do to
+     * somebody who tapped a switch.
+     */
+    fun setObfuscate(on: Boolean) {
+        boot.setObfuscate(on)
+        _ui.value = _ui.value.copy(obfuscate = on)
+    }
+
     fun selectExit(code: String?) {
         if (code != null && code == _ui.value.entryRegion) return
         prefs.edit().apply {
@@ -322,6 +349,10 @@ class AppState(app: Application) : AndroidViewModel(app) {
             _ui.value = _ui.value.copy(
                 thisDevicePubkey = boot.publicKey(),
                 sameHostRoute = it.multihop && it.sameHost,
+                // it.obfs is non-null only when a relay actually started for
+                // this config. Reading boot.obfuscate() here instead would
+                // report the wish as the fact.
+                obfuscationActive = it.obfs != null,
             )
         }
         cfg

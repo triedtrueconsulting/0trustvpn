@@ -524,25 +524,229 @@ func main() {
         check("disconnect clears the relay from state",
               not state.get("relay_active") and not state.get("relay_pid"), state)
 
-    print("\n[9] the mobile apps do not break, and do not claim it either")
-    # Neither app can host a local UDP relay in its packet path — the tunnel
-    # is brought up by GoBackend and WireGuardKit — so they ignore the
-    # obfuscation block and connect directly. That is the safe direction, but
-    # only while their decoders tolerate a field they do not know, and only
-    # while their copy stays quiet about a capability they do not have.
-    kt = open(os.path.join(H.REPO, "mobile", "android", "app", "src", "main",
-                           "java", "vpn", "zerotrust", "app",
-                           "ApiClient.kt")).read()
-    check("the Android decoder ignores fields it does not know",
-          "ignoreUnknownKeys = true" in kt,
-          "without this, adding obfuscation to the register response would "
-          "make every Android connect throw on an unknown key")
-    sw = open(os.path.join(H.REPO, "mobile", "ios", "0trust", "Shared",
-                           "APIClient.swift")).read()
-    check("the iOS decoder lists its keys explicitly, so extras are skipped",
-          "CodingKeys" in sw and "obfuscation" not in sw,
-          "Swift skips unlisted keys, which is what makes this safe")
+    print("\n[9] the Android app's own transport, compiled and run")
+    # A second implementation of a wire format is a liability: two
+    # implementations can disagree, and a disagreement here is a tunnel that
+    # silently will not come up in the one country where the customer needed
+    # it. The Android app cannot run the Go binary — wireguard-android brings
+    # the tunnel up inside the app process, so the relay has to live there
+    # too — so the mitigation is that the Kotlin is tested AGAINST the Go,
+    # with real packets, rather than each against itself.
+    #
+    # This works at all only because ObfsCrypto, ObfsRelay and AllowedIps
+    # carry no android.* references. If somebody adds one, this section stops
+    # compiling and the check below says why.
+    KT = os.path.join(H.REPO, "mobile", "android", "app", "src", "main",
+                      "java", "vpn", "zerotrust", "app")
+    PURE = ["ObfsCrypto.kt", "ObfsRelay.kt", "AllowedIps.kt"]
+    for f in PURE:
+        body = open(os.path.join(KT, f)).read()
+        code = "\n".join(l for l in body.splitlines()
+                         if not l.lstrip().startswith(("*", "//", "/*")))
+        check(f"{f} has no android.* reference", "android." not in code,
+              "an android import here would stop this file compiling off a "
+              "device, and the interop run below is the only thing that ever "
+              "executes the app's copy of the transport")
 
+    kt_cache = os.environ.get("KOTLIN_CACHE_DIR") or "/tmp/0trust-kotlinc-2.0.20"
+    kotlinc = os.path.join(kt_cache, "kotlin-compiler-2.0.20.jar")
+    if not os.path.exists(kotlinc):
+        # A genuine "does not apply" only if the compiler cannot be had at
+        # all. Say which it is rather than passing quietly.
+        r = subprocess.run(["bash", os.path.join(H.REPO, "mobile", "android",
+                                                 "syntax-check.sh")],
+                           capture_output=True, text=True, timeout=900)
+        print(f"      (kotlinc absent and syntax-check.sh returned "
+              f"{r.returncode}; the Kotlin transport was NOT executed)")
+    else:
+        # annotations-13.0 is needed for codegen, not just parsing —
+        # syntax-check.sh never reaches codegen so it never noticed.
+        ann = os.path.join(kt_cache, "annotations-13.0.jar")
+        if not os.path.exists(ann):
+            subprocess.run(["curl", "-fsSL", "-o", ann,
+                            "https://repo1.maven.org/maven2/org/jetbrains/"
+                            "annotations/13.0/annotations-13.0.jar"],
+                           capture_output=True, timeout=180)
+        work = os.path.join(TMP, "kt"); os.makedirs(work, exist_ok=True)
+        stdlib = os.path.join(kt_cache, "kotlin-stdlib-2.0.20.jar")
+
+        # Driver: exercises the complement AND runs the relay against the Go
+        # node binary already listening from section [4].
+        open(os.path.join(work, "Drive.kt"), "w").write('''
+import vpn.zerotrust.app.AllowedIps
+import vpn.zerotrust.app.ObfsCrypto
+import vpn.zerotrust.app.ObfsRelay
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.InetSocketAddress
+
+fun ipToLong(s: String): Long {
+    val p = s.split(".")
+    return (p[0].toLong() shl 24) or (p[1].toLong() shl 16) or
+           (p[2].toLong() shl 8) or p[3].toLong()
+}
+
+fun complement(): Boolean {
+    // The excluded address must be in NO block, the blocks must not overlap,
+    // and together they must cover every address but that one. Getting this
+    // wrong in the generous direction routes a slice of the internet outside
+    // the tunnel with no error anywhere, so it is checked rather than read.
+    val cases = listOf("203.0.113.10", "0.0.0.0", "255.255.255.255", "1.2.3.4",
+                       "127.0.0.1", "10.64.0.1", "8.8.8.8", "192.168.1.1",
+                       "172.16.31.255", "9.255.255.254")
+    for (c in cases) {
+        val blocks = AllowedIps.excludingV4(c)
+        if (blocks.size != 32) { println("COMPLEMENT-FAIL $c size"); return false }
+        val target = ipToLong(c)
+        var total = 0L
+        val seen = ArrayList<Pair<Long, Long>>()
+        for (b in blocks) {
+            val lo = ipToLong(b.address)
+            val size = 1L shl (32 - b.prefix)
+            if (lo % size != 0L) { println("COMPLEMENT-FAIL $c align $b"); return false }
+            val hi = lo + size - 1
+            if (target in lo..hi) { println("COMPLEMENT-FAIL $c covers target"); return false }
+            for ((olo, ohi) in seen) if (lo <= ohi && olo <= hi) {
+                println("COMPLEMENT-FAIL $c overlap"); return false
+            }
+            seen.add(lo to hi); total += size
+        }
+        if (total != (1L shl 32) - 1) { println("COMPLEMENT-FAIL $c total=$total"); return false }
+    }
+    // ::/0 must survive whole: the tunnel always claims v6 so it cannot leak
+    // around us, and without a v6 address that blackholes it.
+    if (!AllowedIps.forRelay("203.0.113.10").contains("::/0")) {
+        println("COMPLEMENT-FAIL v6 default route dropped"); return false
+    }
+    if (AllowedIps.supportsExclusion("2001:db8::1")) {
+        println("COMPLEMENT-FAIL claims it can exclude a v6 node"); return false
+    }
+    return true
+}
+
+fun main(args: Array<String>) {
+    println(if (complement()) "COMPLEMENT-OK" else "COMPLEMENT-BAD")
+
+    val key = System.getenv("KEY")
+    val serverPort = args[0].toInt()
+    val wgPort = args[1].toInt()
+    val lo = InetAddress.getByName("127.0.0.1")
+    val target = InetSocketAddress(lo, wgPort)
+
+    val relay = ObfsRelay("127.0.0.1", serverPort, key, target)
+    val port = relay.start()
+
+    val msg = ByteArray(148); msg[0] = 1
+    "handshake".toByteArray().copyInto(msg, 4)
+    val c = DatagramSocket(); c.soTimeout = 8000
+    c.send(DatagramPacket(msg, msg.size, InetSocketAddress(lo, port)))
+    val buf = ByteArray(65535)
+    val reply = DatagramPacket(buf, buf.size)
+    try {
+        c.receive(reply)
+        println("REPLY " + reply.length + " " +
+                buf.copyOf(9).joinToString("") { "%02x".format(it) })
+    } catch (t: Throwable) { println("NOREPLY $t") }
+
+    val psk = ObfsCrypto.parseKey(key)
+    val wire = ObfsCrypto.pack(psk, target, msg)
+    println("WIRE " + wire.size + " " +
+            wire.copyOf(4).joinToString("") { "%02x".format(it) })
+    println("OVERHEAD " + ObfsCrypto.OVERHEAD)
+
+    // A packet the Kotlin side sealed must open on the Kotlin side too, and
+    // a wrong key must not open it.
+    val back = ObfsCrypto.unpack(psk, wire)
+    println("ROUNDTRIP " + (back.payload.contentEquals(msg) &&
+                            back.dst.port == wgPort))
+    val other = ObfsCrypto.parseKey(
+        java.util.Base64.getEncoder().encodeToString(ByteArray(32) { 7 }))
+    println("WRONGKEY " + try { ObfsCrypto.unpack(other, wire); false }
+                          catch (t: Throwable) { true })
+
+    // A datagram big enough that sealing it overflows the maximum UDP
+    // payload, so the upstream send throws — then a normal handshake right
+    // after it. DatagramPacket.length is both capacity in and size out and it
+    // PERSISTS, so a version that reset it only on the success path would
+    // truncate this second packet to whatever the failed one measured, and
+    // the tunnel would start corrupting traffic after its first hiccup
+    // instead of failing.
+    val huge = ByteArray(65500)
+    c.send(DatagramPacket(huge, huge.size, InetSocketAddress(lo, port)))
+    Thread.sleep(200)
+    val again = ByteArray(148); again[0] = 1
+    "second".toByteArray().copyInto(again, 4)
+    c.send(DatagramPacket(again, again.size, InetSocketAddress(lo, port)))
+    try {
+        c.receive(reply)
+        println("AFTERFAIL " + reply.length)
+    } catch (t: Throwable) { println("AFTERFAIL none") }
+
+    relay.stop()
+    println("STOPPED " + !relay.isRunning)
+    c.close()
+}
+''')
+        srcs = [os.path.join(KT, f) for f in PURE] + [os.path.join(work, "Drive.kt")]
+        r = subprocess.run(
+            ["java", "-cp", os.path.join(kt_cache, "*"),
+             "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler",
+             "-cp", stdlib, "-d", os.path.join(work, "out"), "-nowarn"] + srcs,
+            capture_output=True, text=True, timeout=900)
+        compiled = os.path.isdir(os.path.join(work, "out"))
+        check("the app's transport compiles on a plain JVM", compiled,
+              (r.stdout + r.stderr)[-600:])
+
+        if compiled:
+            # Reuse the Go relay and WireGuard stub from section [4], both
+            # still running, so this is Kotlin client -> Go node -> back.
+            rk = subprocess.run(
+                ["java", "-cp", os.path.join(work, "out") + ":" + stdlib, "DriveKt",
+                 str(relay_port), str(wg_port)],
+                capture_output=True, text=True, timeout=300,
+                env={**os.environ, "KEY": OBFS_KEY})
+            out = rk.stdout
+            check("the AllowedIPs complement covers everything but the node, "
+                  "exactly", "COMPLEMENT-OK" in out,
+                  (rk.stdout + rk.stderr)[-500:] + "\n  too little excluded "
+                  "loops the tunnel; too much routes traffic outside it with "
+                  "no error anywhere")
+            check("a WireGuard handshake goes Kotlin -> Go relay -> back",
+                  "504f4e473a01000000" in out,
+                  (rk.stdout + rk.stderr)[-500:] + "\n  the two implementations "
+                  "of the packet format do not agree")
+            wire = [l for l in out.splitlines() if l.startswith("WIRE")]
+            over = [l for l in out.splitlines() if l.startswith("OVERHEAD")]
+            check("and adds exactly the overhead the Go side does",
+                  bool(wire) and int(wire[0].split()[1]) == 148 + 55,
+                  wire)
+            check("with the same Overhead constant, measured not copied",
+                  bool(over) and over[0].split()[1] == "55", over)
+            check("the WireGuard type byte is gone from the Kotlin wire too",
+                  bool(wire) and not wire[0].split()[2].startswith("01000000"),
+                  wire)
+            check("a Kotlin-sealed packet reopens as itself",
+                  "ROUNDTRIP true" in out, out[-300:])
+            check("and does not open under a different key",
+                  "WRONGKEY true" in out, out[-300:])
+            # This was first written as "a packet after a failure is not
+            # truncated" and was toothless: the only reachable send failure
+            # is an oversized datagram, and everything after one is smaller,
+            # so no length ever carried over. What the sequence DOES prove is
+            # that a failed send leaves the relay carrying traffic — a `return`
+            # in that catch instead of a continue kills the transport under a
+            # live tunnel, and the mutation for that turns this red.
+            check("a failed send does not kill the relay",
+                  "AFTERFAIL 153" in out,
+                  (rk.stdout + rk.stderr)[-500:] + "\n  the pump exited on the "
+                  "first oversized datagram and stopped carrying the tunnel")
+            check("stopping the relay really stops it",
+                  "STOPPED true" in out, out[-300:])
+
+    print("\n[10] what the apps may and may not claim")
+    # Android HAS the switch now, so "obfuscat" is no longer banned there.
+    # The absolutes never stop being banned, on any surface.
     for root, label in ((os.path.join(H.REPO, "mobile", "android"), "Android"),
                         (os.path.join(H.REPO, "mobile", "ios"), "iOS")):
         hits = []
@@ -553,16 +757,40 @@ func main() {
                 if not f.endswith((".kt", ".swift", ".xml", ".strings")):
                     continue
                 try:
-                    txt = open(os.path.join(dirpath, f),
-                               encoding="utf-8", errors="replace").read().lower()
+                    txt = open(os.path.join(dirpath, f), encoding="utf-8",
+                               errors="replace").read().lower()
                 except OSError:
                     continue
-                for w in ("dpi protection", "obfuscat", "undetectable"):
+                for w in ("undetectable", "untraceable", "unblockable",
+                          "invisible", "bypass censorship", "great firewall"):
                     if w in txt:
                         hits.append(f"{f}: {w}")
-        check(f"the {label} app promises no DPI protection", not hits,
-              f"{hits} — the switch does not exist there; offering it would be "
-              "a control that does nothing")
+        check(f"the {label} app makes no absolute stealth claim", not hits, hits)
+
+    # iOS still has no switch, so it still must not offer one.
+    ios_hits = []
+    for dirpath, _, files in os.walk(os.path.join(H.REPO, "mobile", "ios")):
+        for f in files:
+            if f.endswith(".swift"):
+                t = open(os.path.join(dirpath, f), encoding="utf-8",
+                         errors="replace").read().lower()
+                if "dpi protection" in t:
+                    ios_hits.append(f)
+    check("iOS promises no DPI protection, because it has none", not ios_hits,
+          f"{ios_hits} — WireGuardKit owns the packet path there and no relay "
+          "sits in front of it; a switch would be a control that does nothing")
+
+    # And the Android switch must render the FACT, not the preference.
+    st = open(os.path.join(H.REPO, "mobile", "android", "app", "src", "main",
+                           "java", "vpn", "zerotrust", "app", "AppState.kt")).read()
+    check("Android tracks the running relay separately from the setting",
+          "obfuscationActive" in st and "it.obfs != null" in st,
+          "reading the preference where the fact belongs is how a tick mark "
+          "comes to imply unrecognizable traffic over plain WireGuard")
+    ma = open(os.path.join(H.REPO, "mobile", "android", "app", "src", "main",
+                           "java", "vpn", "zerotrust", "app", "MainActivity.kt")).read()
+    check("and the hint under the switch says so when they disagree",
+          "this node runs no relay" in ma, "the switch alone cannot say it")
 
 finally:
     for p in PROCS:
