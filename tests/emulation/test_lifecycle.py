@@ -200,6 +200,85 @@ try:
           f"service={ps.get('service')} regions={states}")
 
     # ================= 6. SWEEPER =================
+    print("\n[alerts] the disk alarm can fire more than once in a lifetime")
+    # ops_alerts had no test of any kind, and it is the module that decides
+    # whether the operator hears about an outage. Its rule is "transitions,
+    # not states" — an event when something CHANGES, so silence means nothing
+    # has. check_disk implemented half of that: it recorded a warning on the
+    # way down and nothing at all on the way back up, so the last disk event
+    # stayed disk.critical forever and a machine that filled, was cleaned and
+    # filled again was silent the second time. On the one alert whose own
+    # docstring calls a full disk a total outage arriving with no warning.
+    import sqlite3 as _sq, importlib as _il, shutil as _sh
+    sys.path.insert(0, os.path.join(H.REPO, "api"))
+    import ops_alerts as _oa
+    _il.reload(_oa)
+
+    ac = _sq.connect(DB); ac.row_factory = _sq.Row
+
+    class _Usage:
+        def __init__(self, free_pct):
+            self.total = 100 * 1024 * 1024 * 1024
+            self.free = int(self.total * free_pct / 100.0)
+            self.used = self.total - self.free
+
+    real_usage = _sh.disk_usage
+
+    def at(free_pct):
+        """Run check_disk as though the filesystem were this full."""
+        _sh.disk_usage = lambda _p: _Usage(free_pct)
+        try:
+            _oa.check_disk(ac, DB)
+            ac.commit()
+        finally:
+            _sh.disk_usage = real_usage
+
+    def disk_events():
+        return [r["kind"] for r in ac.execute(
+            "SELECT kind FROM ops_events WHERE kind LIKE 'disk.%' ORDER BY id")]
+
+    ac.execute("DELETE FROM ops_events WHERE kind LIKE 'disk.%'"); ac.commit()
+
+    at(50)
+    check("a healthy disk says nothing", disk_events() == [], disk_events())
+
+    at(8)
+    check("crossing the warning line warns once",
+          disk_events() == ["disk.low"], disk_events())
+    at(8)
+    check("and does not repeat every hour",
+          disk_events() == ["disk.low"], disk_events())
+
+    at(2)
+    check("getting worse is a new transition",
+          disk_events() == ["disk.low", "disk.critical"], disk_events())
+
+    at(60)
+    check("recovering closes the loop",
+          disk_events() == ["disk.low", "disk.critical", "disk.recovered"],
+          disk_events())
+    at(70)
+    check("and recovery does not repeat either",
+          disk_events() == ["disk.low", "disk.critical", "disk.recovered"],
+          disk_events())
+
+    # The one that was broken. Without a recovery event the last disk row
+    # stays disk.critical and this second emergency is swallowed.
+    at(2)
+    check("a SECOND emergency is reported, not swallowed",
+          disk_events() == ["disk.low", "disk.critical", "disk.recovered",
+                            "disk.critical"],
+          f"{disk_events()} — the alarm fired once in the machine's lifetime")
+
+    # And the invariant this table exists under, checked on the rows it just
+    # wrote: infrastructure detail only, never an account.
+    rows = list(ac.execute(
+        "SELECT subject, detail FROM ops_events WHERE kind LIKE 'disk.%'"))
+    check("the disk alerts carry no customer data",
+          all(r["subject"] == "control-plane" for r in rows),
+          [dict(r) for r in rows][:2])
+    ac.close()
+
     print("\n[6] sweeper against live data")
     c = sqlite3.connect(DB)
     # a dead ephemeral node that still has a live hop_pair

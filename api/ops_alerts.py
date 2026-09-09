@@ -137,18 +137,37 @@ def check_disk(conn, path: str) -> None:
     except OSError:
         return
     free_pct = 100.0 * usage.free / usage.total if usage.total else 100.0
+
+    # The last thing said about the disk, whichever direction it was in.
+    prior = conn.execute(
+        """SELECT kind FROM ops_events
+            WHERE kind IN ('disk.low','disk.critical','disk.recovered')
+            ORDER BY id DESC LIMIT 1""").fetchone()
+    last = prior["kind"] if prior is not None else "disk.recovered"
+
     if free_pct <= DISK_CRITICAL_PCT:
         severity, kind = "critical", "disk.critical"
     elif free_pct <= DISK_WARN_PCT:
         severity, kind = "warn", "disk.low"
     else:
+        # Back above the warning line. Closing the loop is not a nicety here:
+        # without it, "transitions, not states" degenerates into "once, ever".
+        # The old code returned at this point, leaving the last disk event as
+        # disk.critical forever — so a machine that filled up, was cleaned,
+        # and filled again was silent the second time, on the alert whose own
+        # docstring calls a full disk a total outage that arrives with no
+        # warning. The node alerts already close their loop with node.up;
+        # this is the same shape.
+        if last in ("disk.low", "disk.critical"):
+            record(conn, "disk.recovered", "info", "control-plane",
+                   f"{free_pct:.1f}% free on the database filesystem "
+                   f"({usage.free // (1024*1024)} MiB) — back above the "
+                   f"{DISK_WARN_PCT:.0f}% warning line")
         return
-    # Transition only: do not repeat the same warning every hour.
-    prior = conn.execute(
-        """SELECT kind FROM ops_events
-            WHERE kind IN ('disk.low','disk.critical')
-            ORDER BY id DESC LIMIT 1""").fetchone()
-    if prior is not None and prior["kind"] == kind:
+
+    # Do not repeat the same warning every hour. A move from low to critical
+    # is a different kind, so it still gets through.
+    if last == kind:
         return
     record(conn, kind, severity, "control-plane",
            f"{free_pct:.1f}% free on the database filesystem "
