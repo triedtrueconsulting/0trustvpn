@@ -177,6 +177,36 @@ def shutdown():
             try: p.kill()
             except Exception: pass
     _procs.clear()
+    _sweep_run_databases()
+
+
+def _sweep_run_databases():
+    """No unencrypted 0trust database survives a run, anywhere.
+
+    tempdir() already learned this: a module that leaves a database behind
+    leaves account rows and device pubkeys in plaintext on disk, and
+    scripts/audit-verify.sh's backups-encrypted check looks for exactly that
+    and is right to. The run/ directory was the gap — it holds api.log and
+    btcpay.log legitimately, and a test that copied a database into it left
+    one there for good. That is how the check fired on this repository, on a
+    file a test written the same day had put there.
+
+    Logs stay: dump_logs() reads them after a failure, and they carry no
+    customer data. Only databases go. ZTV_KEEP_TMP keeps everything, for the
+    same reason it does in tempdir().
+    """
+    if os.environ.get("ZTV_KEEP_TMP"):
+        return
+    try:
+        names = os.listdir(RUN)
+    except OSError:
+        return
+    for name in names:
+        if name.endswith((".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3")):
+            try:
+                os.remove(os.path.join(RUN, name))
+            except OSError:
+                pass
 
 
 def dump_logs():

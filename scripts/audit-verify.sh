@@ -121,31 +121,90 @@ check juris-no-eyes-codes "No Eyes-country region codes anywhere in DB" -- bash 
     done
 "
 
+# Three outcomes, three answers.
+#
+# This compared the looked-up country against the expected one and failed on
+# any difference — including the difference between "RO" and "", which is what
+# comes back when the lookup did not happen: no network, a rate limit, or a
+# public_ip that is a documentation address no geolocation service will
+# resolve. So an offline box reported "node zur-01 (zur): IP ... geolocates
+# to , expected CH", which reads as a node in the wrong country and is not.
+# A check that cannot tell "I could not find out" from "it is wrong" produces
+# findings an auditor learns to dismiss.
+#
+# A non-public public_ip is its own finding and gets its own sentence: it
+# means the row is a placeholder, not that the node moved.
 check juris-public-ip-geolocate "Node public IPs geolocate to declared countries" -- bash -c "
     [[ -f '$DB_PATH' ]] || exit 77
     command -v curl >/dev/null || { echo 'curl required'; exit 77; }
-    # ipapi.co rate-limits aggressively; this check uses ip-api.com which is
-    # more forgiving but requires HTTP (we're checking infrastructure, not
-    # exfiltrating data, so plaintext is fine).
-    failed=0
-    while IFS='|' read -r id region public_ip; do
-        [[ -z \"\$public_ip\" || \"\$public_ip\" == \"NULL\" ]] && continue
-        expected=''
-        case \"\$region\" in
-            zur) expected='CH' ;;
-            rey) expected='IS' ;;
-            buc) expected='RO' ;;
-            *)   echo \"unknown region \$region\"; failed=1 ;;
-        esac
-        actual=\$(curl -fsS \"http://ip-api.com/json/\$public_ip?fields=countryCode\" 2>/dev/null \
-                  | grep -oE '\"countryCode\":\"[A-Z]+\"' | sed 's/[^A-Z]*\"\([A-Z]*\)\"/\1/')
-        if [[ \"\$actual\" != \"\$expected\" ]]; then
-            echo \"node \$id (\$region): IP \$public_ip geolocates to \$actual, expected \$expected\"
-            failed=1
-        fi
-    done < <(sqlite3 -separator '|' '$DB_PATH' \\
-        'SELECT id, region, public_ip FROM mesh_nodes WHERE active=1')
-    exit \$failed
+    python3 - '$DB_PATH' <<'PYEOF'
+import ipaddress, json, subprocess, sys, urllib.error, urllib.request
+
+EXPECTED = {'zur': 'CH', 'rey': 'IS', 'buc': 'RO'}
+
+rows = subprocess.run(
+    ['sqlite3', '-separator', '|', sys.argv[1],
+     'SELECT id, region, public_ip FROM mesh_nodes WHERE active=1'],
+    capture_output=True, text=True, timeout=30).stdout.strip().splitlines()
+
+wrong, placeholder, unknown, checked = [], [], [], 0
+for line in rows:
+    parts = line.split('|')
+    if len(parts) != 3:
+        continue
+    nid, region, ip = (p.strip() for p in parts)
+    if not ip or ip.upper() == 'NULL':
+        continue
+    want = EXPECTED.get(region)
+    if want is None:
+        wrong.append(f'node {nid}: region {region!r} is not one of {sorted(EXPECTED)}')
+        continue
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        placeholder.append(f'node {nid} ({region}): public_ip {ip!r} is not an IP address')
+        continue
+    if not addr.is_global:
+        placeholder.append(
+            f'node {nid} ({region}): public_ip {ip} is not a public address, so this '
+            f'row is a placeholder rather than a node anyone can reach')
+        continue
+    # Overridable so an operator can point at their own service, and so the
+    # mismatch branch below is reachable from a test — the default is plain
+    # HTTP to a third party, which plenty of hosts cannot reach, and a branch
+    # nobody can execute is a branch nobody has checked.
+    import os as _os
+    base = _os.environ.get('ZTV_GEOIP_API', 'http://ip-api.com/json')
+    try:
+        with urllib.request.urlopen(
+                f'{base}/{ip}?fields=status,countryCode', timeout=10) as r:
+            data = json.loads(r.read(4096).decode())
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+        unknown.append(f'node {nid} ({region}): lookup failed ({type(e).__name__})')
+        continue
+    got = data.get('countryCode') or ''
+    if data.get('status') != 'success' or not got:
+        unknown.append(f'node {nid} ({region}): the service returned no country for {ip}')
+        continue
+    checked += 1
+    if got != want:
+        wrong.append(f'node {nid} ({region}): {ip} geolocates to {got}, expected {want}')
+
+for msg in wrong + placeholder:
+    print(msg)
+if wrong or placeholder:
+    sys.exit(1)
+if unknown and checked == 0:
+    # Nothing could be determined. Saying so is honest; reporting a pass is
+    # not, and reporting a country mismatch is a lie about what happened.
+    print('could not determine any node country:')
+    print('\\n'.join('  ' + u for u in unknown))
+    sys.exit(77)
+if unknown:
+    print(f'{checked} node(s) verified; {len(unknown)} could not be looked up:')
+    print('\\n'.join('  ' + u for u in unknown))
+    sys.exit(77)
+PYEOF
 "
 
 section "§3. CONTROL-PLANE DATABASE"
@@ -656,13 +715,47 @@ check no-cdnjs "Landing page does not reference cdnjs or other CDNs" -- bash -c 
     fi
 "
 
-check vendor-sri-pinned "All vendored scripts have SRI integrity attributes" -- bash -c "
+# Tags, not lines — and the hash, not just the attribute.
+#
+# This grepped line by line, so a <script> tag written across three lines
+# (which is how index.html writes it, because src, integrity and
+# referrerpolicy do not fit on one) matched the first grep on its src line
+# and was never filtered by the second, whose integrity= was on the NEXT
+# line. It reported a FAIL against a page that has correct, matching SRI.
+# A gate that cries wolf is a gate an auditor learns to wave through, and
+# the next FAIL it produces gets waved through with it.
+#
+# Checking the hash as well as the attribute, because an integrity value
+# that no longer matches the file is not a smaller problem than a missing
+# one: the browser refuses to execute the script and the QR code silently
+# stops rendering on the signup page.
+check vendor-sri-pinned "Vendored scripts carry SRI that matches the file" -- bash -c "
     web_root=/var/www/0trust
     [[ -d \$web_root ]] || exit 77
-    # Find every <script src=\"/vendor/...\"> tag and ensure it has integrity=
-    missing=\$(grep -hE '<script[^>]+src=\"/vendor/' \$web_root/*.html 2>/dev/null \
-              | grep -v 'integrity=' || true)
-    [[ -z \"\$missing\" ]] || { echo \"vendor script without integrity attr: \$missing\"; exit 1; }
+    python3 - \"\$web_root\" <<'PYEOF'
+import base64, glob, hashlib, os, re, sys
+root = sys.argv[1]
+bad = []
+tag_re = re.compile(r'<script\\b[^>]*src=[\"\'](/vendor/[^\"\']+)[\"\'][^>]*>', re.I | re.S)
+for page in glob.glob(os.path.join(root, '*.html')):
+    html = open(page, encoding='utf-8', errors='replace').read()
+    for m in tag_re.finditer(html):
+        tag, src = m.group(0), m.group(1)
+        got = re.search(r'integrity=[\"\']sha256-([A-Za-z0-9+/=]+)[\"\']', tag, re.I)
+        if not got:
+            bad.append(f'{os.path.basename(page)}: {src} has no integrity attribute')
+            continue
+        ondisk = os.path.join(root, src.lstrip('/'))
+        if not os.path.exists(ondisk):
+            bad.append(f'{os.path.basename(page)}: {src} is not on disk')
+            continue
+        want = base64.b64encode(hashlib.sha256(open(ondisk,'rb').read()).digest()).decode()
+        if got.group(1) != want:
+            bad.append(f'{os.path.basename(page)}: {src} integrity does not match '
+                       f'the file (page says sha256-{got.group(1)}, file is sha256-{want})')
+if bad:
+    print('\\n'.join(bad)); sys.exit(1)
+PYEOF
 "
 
 # Delegated to the canary's own checker rather than re-implementing the age

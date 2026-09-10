@@ -425,6 +425,11 @@ try:
           rc.execute("SELECT 1 FROM accounts WHERE id = ?",
                      (doomed_id,)).fetchone() is None,
           "the purge ran but left the row it was there to remove")
+    # This database is a copy made for one assertion. The harness sweeps
+    # run/ on shutdown, but the module that made the mess should clear it.
+    import atexit as _atexit
+    _atexit.register(lambda: os.path.exists(old_db) and os.remove(old_db))
+
     check("the spent stamp survives, detached — a replay must still fail",
           rc.execute("SELECT account_id FROM trial_grants WHERE nonce = ?",
                      ("premigration-nonce",)).fetchone() == (None,),

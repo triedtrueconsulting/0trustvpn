@@ -851,7 +851,7 @@ document. If one fails, the claim above it is the one that needs answering.
 | Check | What a pass proves |
 |-------|--------------------|
 | `no-cdnjs` | Landing page does not reference cdnjs or other CDNs |
-| `vendor-sri-pinned` | All vendored scripts have SRI integrity attributes |
+| `vendor-sri-pinned` | Vendored scripts carry SRI that matches the file |
 | `canary-fresh` | Warrant canary is within its published signing deadline |
 
 `tests/emulation/test_audit.py` asserts this table and the script cannot drift

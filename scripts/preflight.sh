@@ -257,12 +257,24 @@ $(grep -q 'BEGIN PGP SIGNED MESSAGE' web/.well-known/security.txt 2>/dev/null \
   && echo ok || echo warn)
 EOF
 
+# --repo used to `echo ok` here, so `preflight.sh --repo` reported
+# audit-clean READY without running audit-verify.sh at all — a check that did
+# not happen, presented as one that passed, on the claim this whole product is
+# built around. It reported READY while the verifier was returning four FAILs.
+#
+# The verifier skips its own host-dependent checks (exit 77) when systemd,
+# nginx or journald are not there, so running it in --repo mode is safe and
+# still covers the repository-level ones: jurisdiction, SRI, the database
+# retention checks. It is slower than an echo, and that is the price of the
+# gate meaning something.
 gate audit-clean "scripts/audit-verify.sh reports no failures" \
      "run it and resolve each FAIL; it is what a third-party auditor will run" <<EOF
-$(if [[ $REPO_ONLY -eq 1 ]]; then echo ok
-  else out="$(bash scripts/audit-verify.sh 2>/dev/null)"
-       n="$(sed -n 's/.*FAIL:[^0-9]*\([0-9]\+\).*/\1/p' <<<"$out" | tail -1)"
-       [[ "${n:-1}" == "0" ]] && echo ok || echo "${n:-?} check(s) failing"; fi)
+$(out="$(bash scripts/audit-verify.sh 2>/dev/null)"
+  n="$(sed -n 's/.*FAIL:[^0-9]*\([0-9]\+\).*/\1/p' <<<"$out" | tail -1)"
+  if [[ -z "$n" ]]; then
+      echo "audit-verify.sh produced no summary line — it did not finish"
+  elif [[ "$n" == "0" ]]; then echo ok
+  else echo "$n check(s) failing — run ./scripts/audit-verify.sh"; fi)
 EOF
 
 # ---------------------------------------------------------------------------
