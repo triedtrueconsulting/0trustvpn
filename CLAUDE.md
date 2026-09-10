@@ -441,6 +441,19 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   is an open proxy with a published password. `NewServer` refuses an empty or
   non-loopback allowlist, destinations are the node's own WireGuard ports
   only, and hostnames are rejected outright so it never resolves for anybody.
+  **Its flow table is capped (`obfs.MaxFlows`), not merely reaped.** The
+  reaper evicts what is idle, which bounds the steady state and not the peak —
+  its own comment names running out of file descriptors as the failure mode,
+  and a sender doing thousands of packets a second from distinct source ports
+  reaches that inside one 30-second tick. The shared key makes "can produce a
+  valid packet" a low bar, and the source address is never verified before a
+  flow (a socket and a goroutine) is created, so a spoofed one costs the same.
+  Above the cap NEW flows are refused and established ones keep working —
+  evicting the oldest would let whoever is spraying push real customers off
+  the node. The cap only helps if it binds before the fd limit does, so
+  `0trust-obfs.service` sets `LimitNOFILE` explicitly and `test_obfs.py`
+  checks the two numbers against each other; below the cap, `ListenUDP` fails
+  first and the relay's per-packet error log becomes the denial of service.
   **The setting and the fact are different things everywhere.** `Obfuscate` is
   what the customer asked for; `RelayActive` is whether a relay is really
   carrying the traffic, and they differ whenever the node they landed on runs

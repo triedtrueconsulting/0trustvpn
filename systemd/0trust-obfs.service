@@ -28,6 +28,16 @@ DynamicUser=yes
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
+# One open socket per client flow, capped at obfs.MaxFlows (4096) in the
+# relay itself. This has to sit comfortably above that cap: below it, the
+# cap never binds and net.ListenUDP fails first — which the relay logs per
+# packet, and at the rate that happens the log line IS the denial of
+# service. Stated rather than inherited, because the alternative is resting
+# on systemd's DefaultLimitNOFILE and on Go raising the soft limit to the
+# hard one at startup, neither of which this repository controls.
+# tests/emulation/test_node.py checks this number against MaxFlows.
+LimitNOFILE=16384
+
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

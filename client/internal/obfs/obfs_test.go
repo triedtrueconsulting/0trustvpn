@@ -280,3 +280,98 @@ func TestKeySizeIsEnforced(t *testing.T) {
 		t.Fatal("a non-base64 key was accepted")
 	}
 }
+
+// TestFlowTableIsBounded — the relay must refuse new flows past its cap
+// rather than opening a socket and a goroutine for each one.
+//
+// The reaper evicts what is idle, which bounds the STEADY state and not the
+// peak: its own comment names running out of file descriptors as the failure
+// mode, and a sender doing thousands of packets a second from distinct source
+// ports reaches that well inside one 30-second tick. Every customer on a node
+// holds the same pre-shared key, so producing a valid packet is not a high
+// bar, and the source address is not verified before the flow is created — a
+// spoofed one costs a socket just the same.
+func TestFlowTableIsBounded(t *testing.T) {
+	wgAddr, stopWG := wgStub(t)
+	defer stopWG()
+
+	key := testKey(t)
+	srv, err := NewServer(key, []netip.AddrPort{wgAddr}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	// A small cap, so the test exercises the boundary rather than the
+	// machine's file-descriptor limit.
+	srv.maxFlows = 8
+
+	sc, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	srvAddr := sc.LocalAddr().String()
+	sc.Close()
+	go srv.ListenAndServe(srvAddr)
+	time.Sleep(100 * time.Millisecond)
+
+	psk, _ := ParseKey(key)
+	pkt, err := Pack(psk, wgAddr, []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Each socket is a distinct source port, which is a distinct flow.
+	var conns []*net.UDPConn
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	ra, _ := net.ResolveUDPAddr("udp", srvAddr)
+	for i := 0; i < srv.maxFlows*4; i++ {
+		c, err := net.DialUDP("udp", nil, ra)
+		if err != nil {
+			t.Fatalf("could not open source socket %d: %v", i, err)
+		}
+		conns = append(conns, c)
+		if _, err := c.Write(pkt); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+	// The server reads and forwards asynchronously.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		n := len(srv.flows)
+		srv.mu.Unlock()
+		if n >= srv.maxFlows {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	srv.mu.Lock()
+	live, refused := len(srv.flows), srv.refused
+	srv.mu.Unlock()
+
+	if live > srv.maxFlows {
+		t.Fatalf("flow table holds %d flows with a cap of %d — one sender "+
+			"opened a socket and a goroutine per source port", live, srv.maxFlows)
+	}
+	if live != srv.maxFlows {
+		t.Fatalf("flow table holds %d of a possible %d — the sender should "+
+			"have filled it, so this test is not exercising the cap", live, srv.maxFlows)
+	}
+	if refused == 0 {
+		t.Fatal("nothing was refused, so the cap was never reached and the " +
+			"check above passed for the wrong reason")
+	}
+
+	// The flows that DID get in still work: refusing new ones must not break
+	// the customers already on the node.
+	conns[0].SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conns[0].Write(pkt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conns[0].Read(make([]byte, 65535)); err != nil {
+		t.Fatalf("an established flow stopped working once the table filled: %v", err)
+	}
+}

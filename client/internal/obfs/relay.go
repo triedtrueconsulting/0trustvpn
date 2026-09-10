@@ -176,15 +176,35 @@ func (r *Relay) Close() error {
 // the first thing it would earn is an abuse report naming us. Only the
 // node's own loopback WireGuard ports are reachable through it.
 type Server struct {
-	psk     []byte
-	allowed map[netip.AddrPort]bool
-	idle    time.Duration
+	psk      []byte
+	allowed  map[netip.AddrPort]bool
+	idle     time.Duration
+	maxFlows int
 
 	conn *net.UDPConn
 
 	mu    sync.Mutex
 	flows map[string]*flow
+
+	// Counted, not logged per packet: at the rate this fires, a log line per
+	// refusal is the denial of service.
+	refused uint64
 }
+
+// MaxFlows caps the flow table. The reaper below evicts what is idle, which
+// bounds the STEADY state and not the peak — its own comment names running
+// out of file descriptors as the failure mode, and a sender doing ten
+// thousand packets a second from distinct source ports reaches that inside
+// one reaper tick. Every customer on a node holds the same pre-shared key,
+// so "an attacker who can produce a valid packet" is not a high bar, and the
+// source address is not verified before the flow is created — a spoofed one
+// costs a socket and a goroutine just the same.
+//
+// Above the cap, new flows are refused and existing ones keep working. That
+// direction is deliberate: evicting the oldest instead would let whoever is
+// spraying push real customers off the node, which is the outcome the cap is
+// there to prevent. Capacity comes back as flows idle out.
+const MaxFlows = 4096
 
 type flow struct {
 	sock *net.UDPConn
@@ -211,7 +231,8 @@ func NewServer(pskB64 string, allowed []netip.AddrPort, idle time.Duration) (*Se
 	if idle <= 0 {
 		idle = 3 * time.Minute
 	}
-	return &Server{psk: psk, allowed: set, idle: idle, flows: map[string]*flow{}}, nil
+	return &Server{psk: psk, allowed: set, idle: idle, maxFlows: MaxFlows,
+		flows: map[string]*flow{}}, nil
 }
 
 // ListenAndServe binds addr and serves until the socket is closed.
@@ -254,6 +275,11 @@ func (s *Server) forward(from *net.UDPAddr, dst netip.AddrPort, payload []byte) 
 	s.mu.Lock()
 	f := s.flows[key]
 	if f == nil {
+		if len(s.flows) >= s.maxFlows {
+			s.refused++
+			s.mu.Unlock()
+			return
+		}
 		sock, err := net.ListenUDP("udp", nil)
 		if err != nil {
 			s.mu.Unlock()
@@ -315,7 +341,17 @@ func (s *Server) reap() {
 				delete(s.flows, k)
 			}
 		}
+		refused, live := s.refused, len(s.flows)
+		s.refused = 0
 		s.mu.Unlock()
+		if refused > 0 {
+			// Once per tick. The operator needs to know the node is at its
+			// ceiling — customers are being turned away — without the log
+			// itself becoming the load.
+			log.Printf("obfs: flow table at capacity, refused %d new flow(s) "+
+				"in the last interval (%d live, cap %d)",
+				refused, live, s.maxFlows)
+		}
 	}
 }
 

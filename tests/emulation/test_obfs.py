@@ -423,6 +423,38 @@ func main() {
           "ProtectSystem=strict" in unit and "ReadWritePaths" not in unit,
           "the relay holds no state across a restart and must never record "
           "who talked to it")
+    # The flow table's cap and the unit's fd limit are one decision in two
+    # files, so they are checked against each other.
+    #
+    # The reaper evicts idle flows, which bounds the STEADY state and not the
+    # peak — its own comment names running out of file descriptors as the
+    # failure mode, and a sender doing thousands of packets a second from
+    # distinct source ports reaches that inside one 30-second tick. Every
+    # customer on a node holds the same pre-shared key, so producing a valid
+    # packet is not a high bar, and the source address is not verified before
+    # the flow is created.
+    #
+    # The cap only helps if it binds BEFORE the fd limit does. Below it,
+    # net.ListenUDP fails first, which the relay logs per packet — and at
+    # that rate the log line is the denial of service.
+    relay_src = open(os.path.join(H.REPO, "client", "internal", "obfs",
+                                  "relay.go")).read()
+    m = re.search(r"^const MaxFlows = (\d+)$", relay_src, re.M)
+    check("the relay declares a flow cap", m is not None,
+          "without one, a single sender opens a socket and a goroutine per "
+          "source port until the node runs out of file descriptors")
+    n = re.search(r"^LimitNOFILE=(\d+)$", unit, re.M)
+    check("and the unit sets an explicit fd limit", n is not None,
+          "otherwise the headroom is systemd's DefaultLimitNOFILE and Go "
+          "raising the soft limit at startup, neither of which this "
+          "repository controls")
+    if m and n:
+        check("the fd limit is comfortably above the flow cap",
+              int(n.group(1)) >= int(m.group(1)) * 2,
+              f"LimitNOFILE={n.group(1)} against MaxFlows={m.group(1)} — the "
+              f"cap has to bind first, or ListenUDP fails and the per-packet "
+              f"error log becomes the load")
+
     inst = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
     check("install.sh verifies the relay is LISTENING, not merely started",
           "ss -lunp" in inst and "NOTHING is listening" in inst,
