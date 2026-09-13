@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -766,8 +767,30 @@ private fun DevicesCard(
  * warning is amber, urgent is terracotta — the same three the control plane
  * stores and the desktop GUI renders.
  */
+/**
+ * The renewal link out of a notice body, or null.
+ *
+ * The phone shows the sweeper's expiry warning and had nowhere to send the
+ * customer: no command line for `0trust topup`, and the website's Begin flow
+ * opens a NEW account rather than extending this one. The control plane now
+ * names a page in the notice itself, so the URL is read from the message
+ * rather than written down a second time here — change it in sweep.py and the
+ * app follows.
+ *
+ * Deliberately narrow: our own host only, and a path of unreserved characters
+ * only. A notice is operator-supplied text, and a banner that will open any
+ * URL a message asks it to is a phishing surface handed to whoever can post
+ * one. No '@', so the host cannot be turned into userinfo for somewhere else.
+ */
+private val NOTICE_LINK = Regex("""0trustvpn\.com(/[A-Za-z0-9/_.-]*)""")
+
+internal fun noticeLink(body: String): String? =
+    NOTICE_LINK.find(body)?.let { "https://0trustvpn.com" + it.groupValues[1] }
+
 @Composable
 private fun NoticeBanner(notice: NoticeResponse, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val link = remember(notice.body) { noticeLink(notice.body) }
     val accent = when (notice.severity) {
         "urgent"  -> ZT_Terra
         "warning" -> ZT_Amber
@@ -799,6 +822,22 @@ private fun NoticeBanner(notice: NoticeResponse, onDismiss: () -> Unit) {
             if (notice.body.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
                 Text(notice.body, color = ZT_InkDim, fontSize = 12.sp)
+            }
+            if (link != null) {
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(link))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
+                    },
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Text("Open $link", color = ZT_Amber, fontSize = 12.sp,
+                         fontWeight = FontWeight.SemiBold)
+                }
             }
         }
         TextButton(onClick = onDismiss) {

@@ -29,6 +29,7 @@ SITE = "https://0trustvpn.com"
 PAGES = [
     ("/",                 "index.html",           "1.0", "weekly"),
     ("/trial",            "trial.html",           "0.9", "weekly"),
+    ("/renew",            "renew.html",           "0.6", "monthly"),
     ("/download",         "download.html",        "0.9", "weekly"),
     ("/help",             "help.html",            "0.8", "weekly"),
     ("/audit",            "audit.html",           "0.8", "monthly"),

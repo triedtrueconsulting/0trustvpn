@@ -227,7 +227,8 @@ def graphs():
                      ("terms.html", "/terms"),
                      ("security-policy.html", "/security-policy"),
                      ("status.html", "/status"),
-                     ("trial.html", "/trial")):
+                     ("trial.html", "/trial"),
+                     ("renew.html", "/renew")):
         t, d = page_meta(fn)
         out[fn] = [webpage(path, t, d)]
 

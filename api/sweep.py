@@ -165,11 +165,18 @@ def main():
                     (f"Your trial ends in {days_left} {unit}"
                      if trial else
                      f"Your subscription ends in {days_left} {unit}"),
-                    ("Top up with `0trust topup` or at 0trustvpn.com to keep "
-                     "this account. Paid time stacks on whatever is left, so "
-                     "topping up early costs you nothing. Your token stays the "
-                     "same — there is no new account to create and nothing to "
-                     "re-install."),
+                    # Every surface that can show this notice has to be able
+                    # to act on it. The phone apps show notices and have no
+                    # command line, and the site's Begin flow opens a NEW
+                    # account rather than topping this one up — so a
+                    # phone-only customer was told to run a command they
+                    # cannot run, or visit a page that did not exist.
+                    ("Renew at 0trustvpn.com/renew — paste this account's "
+                     "token and pick a term. On a desktop, `0trust topup` or "
+                     "the app's Extend subscription panel do the same thing. "
+                     "Paid time stacks on whatever is left, so renewing early "
+                     "costs you nothing. Your token stays the same — there is "
+                     "no new account to create and nothing to re-install."),
                     now,
                     # Pointless once the account has expired; the expiry
                     # notice takes over from there.

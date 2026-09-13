@@ -1515,6 +1515,9 @@ render_common_locations() {
     }
 
     location = /trial   { try_files /trial.html =404; }
+    # Renewing an existing account. Rate-limited with signup rather than the
+    # general api zone: it opens an invoice, so it costs the same to abuse.
+    location = /renew   { try_files /renew.html =404; }
 
     # Same branded error pages as production. They existed in the production
     # config and the files themselves did not, so nginx served its own default

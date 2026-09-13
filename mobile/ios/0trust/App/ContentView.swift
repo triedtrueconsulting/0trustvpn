@@ -432,6 +432,29 @@ private struct NoticeBanner: View {
     @EnvironmentObject var state: AppState
     let notice: NoticeInfo
 
+    /// The renewal link out of a notice body, or nil.
+    ///
+    /// The phone shows the sweeper's expiry warning and had nowhere to send
+    /// the customer: no command line for `0trust topup`, and the website's
+    /// Begin flow opens a NEW account rather than extending this one. The
+    /// control plane names a page in the notice itself, so the URL is read
+    /// from the message rather than written down a second time here — change
+    /// it in sweep.py and both apps follow.
+    ///
+    /// Deliberately narrow: our own host only, and a path of unreserved
+    /// characters only. A notice is operator-supplied text, and a banner that
+    /// will open any URL a message asks it to is a phishing surface handed to
+    /// whoever can post one. No "@", so the host cannot be turned into
+    /// userinfo for somewhere else.
+    static func link(in body: String) -> URL? {
+        let pattern = "0trustvpn\\.com(/[A-Za-z0-9/_.-]*)"
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: body, range:
+                        NSRange(body.startIndex..., in: body)),
+              let r = Range(m.range(at: 1), in: body) else { return nil }
+        return URL(string: "https://0trustvpn.com" + String(body[r]))
+    }
+
     /// The same three severities the control plane stores and the desktop GUI
     /// renders, with the same accents.
     private var accent: Color {
@@ -457,6 +480,12 @@ private struct NoticeBanner: View {
                         .font(.ztBody)
                         .foregroundColor(.ztInkDim)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if let url = NoticeBanner.link(in: notice.body) {
+                    Link("Open \(url.host ?? "")\(url.path)", destination: url)
+                        .font(.ztMonoBold)
+                        .foregroundColor(.ztAmber)
+                        .padding(.top, 3)
                 }
             }
             Spacer(minLength: 8)

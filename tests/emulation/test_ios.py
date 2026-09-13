@@ -567,6 +567,71 @@ try:
     check("Android joins by concatenation, unchanged",
           'baseUrl + "/api/v1/devices/" + encoded' in kotlin)
 
+    # ----------------------------------------------------------------------
+    # The renewal link both phone apps put under an expiry notice.
+    #
+    # A phone shows the sweeper's warning and had nowhere to send the
+    # customer: no command line for `0trust topup`, and the site's Begin flow
+    # opens a NEW account instead of extending this one. Both apps now read a
+    # URL out of the notice body — so the destination lives in sweep.py, not
+    # written down twice more here.
+    #
+    # That makes a notice, which is operator-supplied text, into something
+    # that can open a browser. The pattern is what keeps that from being a
+    # phishing surface, and neither app can be executed from this suite, so
+    # the pattern text is lifted out of both sources and exercised here.
+    # ----------------------------------------------------------------------
+    print("\n[notice-link] the same narrow pattern on both phones")
+    main_kt = open(os.path.join(
+        H.REPO, "mobile", "android", "app", "src", "main", "java", "vpn",
+        "zerotrust", "app", "MainActivity.kt")).read()
+    cv_src = open(os.path.join(H.REPO, "mobile", "ios", "0trust", "App",
+                               "ContentView.swift")).read()
+    cv = "\n".join(ln for ln in cv_src.splitlines()
+                   if not ln.lstrip().startswith("///")
+                   and not ln.lstrip().startswith("//"))
+
+    k_pat = re.search(r'NOTICE_LINK = Regex\("""(.+?)"""\)', main_kt)
+    s_pat = re.search(r'let pattern = "(.+?)"', cv)
+    check("Android declares a notice-link pattern", bool(k_pat), main_kt[:200])
+    check("iOS declares one too", bool(s_pat), cv[:200])
+    if k_pat and s_pat:
+        # Swift's string literal doubles every backslash; Kotlin's raw string
+        # does not. Compare what the regex engines each end up with.
+        kp = k_pat.group(1)
+        sp = s_pat.group(1).replace("\\\\", "\\")
+        check("and the two patterns are the same", kp == sp, f"{kp!r} vs {sp!r}")
+
+        rx = re.compile(kp)
+        def link(body):
+            m = rx.search(body)
+            return "https://0trustvpn.com" + m.group(1) if m else None
+
+        # The real notice the sweeper posts has to produce the real page.
+        sweep_src = open(os.path.join(H.REPO, "api", "sweep.py")).read()
+        body = " ".join(re.findall(
+            r'"([^"]*)"', re.search(r'\("Renew at .*?\),\n', sweep_src, re.S).group(0)))
+        check("the sweeper's renewal notice yields the renewal page",
+              link(body) == "https://0trustvpn.com/renew", link(body))
+
+        # And nothing else can be smuggled through it. Each of these is a
+        # notice body an operator could post; none may produce a link off our
+        # own host.
+        for hostile, why in [
+            ("visit 0trustvpn.com@evil.example/x", "userinfo trick"),
+            ("visit evil.example/0trustvpn.com", "our name in someone's path"),
+            ("visit 0trustvpn.com.evil.example/x", "our name as a subdomain"),
+            ("visit not0trustvpn.com/renew", "our name as a suffix"),
+            ("visit javascript:alert(1)", "a script URL"),
+            ("visit http://0trustvpn.com:8080@evil.example/", "port + userinfo"),
+        ]:
+            got = link(hostile)
+            ok = got is None or got.startswith("https://0trustvpn.com/")
+            check(f"a notice cannot link off-site via {why}", ok,
+                  f"{hostile!r} -> {got!r}")
+        check("and an ordinary notice with no URL gets no button",
+              link("buc-01 reboots at 02:00 UTC.") is None)
+
 finally:
     H.shutdown()
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")

@@ -31,7 +31,8 @@ H.boot(DB, workers=2)
 
 class Site(http.server.SimpleHTTPRequestHandler):
     """web/ plus the nginx path rewrites, so /trial and /privacy resolve."""
-    ROUTES = {"/trial": "/trial.html", "/status": "/status.html",
+    ROUTES = {"/trial": "/trial.html", "/renew": "/renew.html",
+              "/status": "/status.html",
               "/download": "/download.html", "/help": "/help.html",
               "/privacy": "/privacy.html", "/terms": "/terms.html",
               "/audit": "/audit.html", "/security-policy": "/security-policy.html"}
@@ -979,6 +980,57 @@ try:
     check("and the desktop top-up panel says the same thing",
           "closing this window does not cancel it" in guijs,
           "two surfaces describing one mechanism must not disagree")
+
+    # -----------------------------------------------------------------------
+    # Every route the sweeper's renewal notice names has to exist.
+    #
+    # This is the third time this exact shape has bitten. sweep.py told
+    # customers to run `0trust topup` before that command existed; a test
+    # asserted the notice CONTAINED the string, so it watched the words and
+    # not whether they meant anything. Then it said "or at 0trustvpn.com" —
+    # true of the domain, false of any page there: the site's Begin flow opens
+    # a NEW account, so a phone-only customer, who has no command line, was
+    # told to pay and given nowhere to do it.
+    #
+    # So this reads the URLs and commands out of the notice text and requires
+    # each one to resolve: a page in web/, a route the installer's nginx
+    # config serves, and a subcommand the CLI's dispatcher actually has.
+    # -----------------------------------------------------------------------
+    print("\n[renewal] the expiry notice points at things that exist")
+    sweep_src = open(os.path.join(H.REPO, "api", "sweep.py")).read()
+    body_m = re.search(r'\("Renew at (.*?)\),\n', sweep_src, re.S)
+    notice = " ".join(re.findall(r'"([^"]*)"', body_m.group(0))) if body_m else ""
+    notice = " ".join(notice.split())
+    check("the renewal notice was found in sweep.py", bool(notice), sweep_src[:200])
+
+    routes = re.findall(r"0trustvpn\.com(/[a-z0-9-]+)", notice)
+    check("it names at least one page to renew on", bool(routes), notice)
+    installer = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
+    for r in set(routes):
+        page = os.path.join(H.REPO, "web", r.lstrip("/") + ".html")
+        check(f"{r} is a page that exists", os.path.exists(page), page)
+        check(f"and nginx serves {r}", f"location = {r} " in installer
+              or f"location = {r}\n" in installer or f"location = {r} {{" in installer,
+              "the installer GENERATES the nginx config; a page it does not "
+              "route is a 404 on a real deployment")
+
+    cmds = set(re.findall(r"`0trust ([a-z]+)`", notice))
+    cli_src = open(os.path.join(H.REPO, "client", "cmd", "0trust", "main.go")).read()
+    for c in cmds:
+        check(f"`0trust {c}` is a command the CLI has",
+              f'case "{c}"' in cli_src, "sweep.py told every expiring customer "
+              "to run a command that did not exist once already")
+
+    renew_html = open(os.path.join(H.REPO, "web", "renew.html")).read()
+    check("the renewal page tops up rather than opening a new account",
+          "/api/v1/account/topup" in renew_html
+          and "/api/v1/account'" not in renew_html,
+          "POST /api/v1/account mints a NEW token; the customer wants theirs "
+          "extended")
+    check("and it authenticates with the token in a header, never a URL",
+          "'X-Account-Token'" in renew_html
+          and "account/status?" not in renew_html,
+          "the request path is logged; the token is the whole credential")
 
     # ---------------------------------------------------------------------------
     # The rights section names commands. They have to exist and do what it says.

@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Renew — 0trustvpn</title>
+<meta name="description" content="Top up an existing 0trustvpn account. Paste your token, pick a term, pay in crypto. New time stacks on whatever is left.">
+<link rel="canonical" href="https://0trustvpn.com/renew">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="0trustvpn">
+<meta property="og:locale" content="en">
+<meta property="og:title" content="Renew — 0trustvpn">
+<meta property="og:description" content="Top up an existing 0trustvpn account. Paste your token, pick a term, pay in crypto. New time stacks on whatever is left.">
+<meta property="og:url" content="https://0trustvpn.com/renew">
+<meta property="og:image" content="https://0trustvpn.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="0trustvpn — encrypted mesh VPN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Renew — 0trustvpn">
+<meta name="twitter:description" content="Top up an existing 0trustvpn account. Paste your token, pick a term, pay in crypto. New time stacks on whatever is left.">
+<meta name="twitter:image" content="https://0trustvpn.com/og.png">
+
+<!-- SEO:JSONLD -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://0trustvpn.com/renew#webpage",
+      "url": "https://0trustvpn.com/renew",
+      "name": "Renew — 0trustvpn",
+      "description": "Top up an existing 0trustvpn account. Paste your token, pick a term, pay in crypto. New time stacks on whatever is left.",
+      "isPartOf": {
+        "@id": "https://0trustvpn.com/#website"
+      },
+      "publisher": {
+        "@id": "https://0trustvpn.com/#organization"
+      },
+      "inLanguage": "en",
+      "breadcrumb": {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Home",
+            "item": "https://0trustvpn.com/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "Renew — 0trustvpn"
+          }
+        ]
+      }
+    }
+  ]
+}
+</script>
+<!-- /SEO:JSONLD -->
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<link rel="stylesheet" href="/site.css">
+<style>
+  :root{--bg:#0c0c0a;--ink:#f4ede0;--amber:#d4a574;--terra:#c44536;--moss:#7d8f5a;--line:#2a2820}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  main{max-width:40rem;margin:0 auto;padding:4rem 1.25rem 6rem}
+  h1{font:400 2.4rem/1.15 "Instrument Serif",Georgia,serif;margin:0 0 .5rem}
+  .sub{color:#a89f8d;margin:0 0 2.5rem}
+  code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+  .card{border:1px solid var(--line);border-radius:10px;padding:1.5rem;background:#111008;
+    background-image:linear-gradient(180deg,rgba(244,237,224,0.035) 0%,transparent 40%);
+    box-shadow:0 4px 16px rgba(0,0,0,0.4),0 1px 2px rgba(0,0,0,0.55);
+    margin-bottom:1.25rem}
+  label{display:block;font:500 .72rem/1.3 "JetBrains Mono",ui-monospace,monospace;
+    text-transform:uppercase;letter-spacing:.08em;color:#6f6858;margin:0 0 .5rem}
+  input{width:100%;padding:.8rem .9rem;background:#0c0c0a;color:var(--ink);
+    border:1px solid var(--line);border-radius:6px;
+    font:1.05rem/1.4 "JetBrains Mono",ui-monospace,monospace;letter-spacing:.08em;
+    text-transform:uppercase}
+  input:focus{outline:none;border-color:var(--amber)}
+  button{font:600 1rem/1 inherit;background:var(--amber);color:#0c0c0a;border:0;
+    border-radius:6px;padding:.85rem 1.4rem;cursor:pointer;margin-top:1rem}
+  button[disabled]{opacity:.5;cursor:progress}
+  .terms{display:flex;gap:.75rem;flex-wrap:wrap;margin:.5rem 0 0}
+  .term{flex:1 1 8rem;text-align:center;border:1px solid var(--line);border-radius:8px;
+    padding:1rem .75rem;cursor:pointer;background:#0c0c0a;color:var(--ink);
+    font:inherit;margin:0}
+  .term:hover{border-color:#4a3a24}
+  .term.sel{border-color:var(--amber);background:rgba(212,165,116,.08)}
+  .term b{display:block;font:700 1.5rem/1.1 "JetBrains Mono",ui-monospace,monospace;
+    color:var(--amber)}
+  .term span{display:block;font-size:.82rem;color:#8a8172;margin-top:.3rem}
+  .kv{display:flex;justify-content:space-between;gap:1rem;padding:.45rem 0;
+    border-bottom:1px solid var(--line);font-size:.95rem}
+  .kv:last-child{border-bottom:0}
+  .kv b{font-weight:500;color:#8a8172}
+  .amount{font:700 1.6rem/1.2 "JetBrains Mono",ui-monospace,monospace;color:var(--amber);
+    text-align:center;margin:.5rem 0 .25rem}
+  .fiat{text-align:center;color:#8a8172;font-size:.9rem;margin-bottom:1rem}
+  .qr{display:flex;justify-content:center;margin:0 0 1rem}
+  .qr canvas,.qr img{background:#fff;padding:10px;border-radius:6px}
+  .addr{background:#0c0c0a;border:1px solid var(--line);border-radius:6px;
+    padding:.75rem .9rem;font-family:"JetBrains Mono",ui-monospace,monospace;
+    font-size:.9rem;word-break:break-all}
+  .coins{display:flex;gap:.5rem;flex-wrap:wrap;margin:0 0 1rem}
+  .coin{flex:1 1 4rem;padding:.6rem;border:1px solid var(--line);border-radius:6px;
+    background:#0c0c0a;color:var(--ink);cursor:pointer;
+    font:600 .8rem/1 "JetBrains Mono",ui-monospace,monospace;margin:0}
+  .coin.sel{background:var(--amber);color:#0c0c0a;border-color:var(--amber)}
+  .warn{border-left:3px solid var(--terra);padding:.6rem 0 .6rem 1rem;margin:1.5rem 0;
+    color:#d8c9b4}
+  .ok{border-left:3px solid var(--moss);padding:.6rem 0 .6rem 1rem;margin:1.5rem 0}
+  .muted{color:#8a8172;font-size:.92rem}
+  .err{color:var(--terra);font-size:.92rem;margin:.75rem 0 0}
+  .status{text-align:center;font:.8rem/1.6 "JetBrains Mono",ui-monospace,monospace;
+    letter-spacing:.06em;text-transform:uppercase;color:#8a8172;margin-top:1rem}
+  a{color:var(--amber)}
+  .hide{display:none}
+  a:focus-visible, button:focus-visible, input:focus-visible {
+    outline: none; border-radius: 2px;
+    box-shadow: 0 0 0 3px rgba(212,165,116,0.3);
+  }
+</style>
+</head>
+<body class="has-sitenav">
+
+<nav class="sitenav">
+  <a class="sitenav-skip" href="#content">Skip to content</a>
+  <a class="sitenav-brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
+  <span class="sitenav-crumb">/ renew</span>
+  <div class="sitenav-links">
+    <a href="/#how">How it works</a>
+    <a href="/#jurisdictions">Jurisdictions</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/audit">Audit</a>
+    <a href="/download">Download</a>
+    <a href="/status">Status</a>
+    <a href="/help">Help</a>
+    <a href="/surf">Surf</a>
+  </div>
+  <a class="sitenav-cta" href="/trial">Free trial</a>
+</nav>
+
+<main id="content" tabindex="-1">
+  <h1>Renew your account</h1>
+  <p class="sub">Paste the token you already have. New time stacks on whatever
+  is left, so renewing early costs you nothing — and the token does not
+  change, so nothing needs reinstalling.</p>
+
+  <!-- STEP 1 — identify the account -->
+  <div class="card" id="cardToken">
+    <label for="tok">Account token</label>
+    <input id="tok" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="19"
+           autocomplete="off" spellcheck="false" autocapitalize="characters">
+    <p class="muted" style="margin:.75rem 0 0">This is the whole credential.
+    We do not store it here, it never goes in a link, and it is sent to the
+    control plane in a header rather than a URL so it cannot land in a log.</p>
+    <button id="lookup">Check this account</button>
+    <p class="err hide" id="tokErr"></p>
+  </div>
+
+  <!-- STEP 2 — confirm and choose a term -->
+  <div class="card hide" id="cardTerm">
+    <div class="kv"><b>Plan</b><span id="acPlan">—</span></div>
+    <div class="kv"><b>Status</b><span id="acStatus">—</span></div>
+    <div class="kv"><b>Expires</b><span class="mono" id="acExp">—</span></div>
+    <div class="kv"><b>Devices</b><span id="acDev">—</span></div>
+    <p class="muted" style="margin:1.25rem 0 .25rem">How long do you want to add?</p>
+    <div class="terms" id="terms"></div>
+    <button id="buy" disabled>Get a payment address</button>
+    <p class="err hide" id="buyErr"></p>
+  </div>
+
+  <!-- STEP 3 — pay -->
+  <div class="card hide" id="cardPay">
+    <p class="muted" style="margin:0 0 1rem">Send the exact amount to the
+    address below. The days are added once the payment confirms — the line
+    underneath says how many confirmations this coin needs.</p>
+    <div class="coins" id="coins"></div>
+    <div class="amount mono" id="payAmount">—</div>
+    <div class="fiat" id="payFiat"></div>
+    <div class="qr" id="qr"></div>
+    <label for="payAddr">Payment address</label>
+    <div class="addr" id="payAddr">—</div>
+    <div class="status" id="payStatus">waiting for payment</div>
+    <p class="muted" style="margin-top:1.25rem">This page updates itself when
+    the payment is seen. Closing it does not cancel the invoice — the days are
+    added on their own, and you already have your token.</p>
+  </div>
+
+  <p class="muted">Prefer the command line? <code>0trust topup</code> does the
+  same thing, and the desktop app has an <em>Extend subscription</em> panel.
+  Lost your token? There is no recovery — that is the trade for us keeping
+  nothing that identifies you. <a href="/#pricing">Start a new account →</a></p>
+</main>
+
+<!-- QR encoder. Self-hosted from /vendor/ — never loaded from a third-party
+     CDN, so the only domain a renewing customer's browser contacts is ours.
+     Pinned + integrity-checked via scripts/vendor-third-party.sh. -->
+<script src="/vendor/qrcode.min.js"
+        integrity="sha256-xUHvBjJ4hahBW8qN9gceFBibSFUzbe9PNttUvehITzY="
+        crossorigin="anonymous"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  // Held in a closure for the life of the page and nowhere else: no
+  // localStorage, no query string, no form GET. Someone renewing on a shared
+  // or borrowed machine leaves nothing behind by closing the tab.
+  let TOKEN = "";
+  let months = null, invoiceId = null, methods = [], poll = null, usd = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g,
+      (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function show(el, on) { el.classList.toggle('hide', !on); }
+  function fail(el, msg) { el.textContent = msg; show(el, true); }
+
+  // Same normalisation the CLI does: people paste with spaces, lowercase, or
+  // without the dashes, and every one of those is the same account.
+  function normalise(raw) {
+    const bare = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return bare.length === 16 ? bare.replace(/(.{4})(?=.)/g, '$1-') : raw.trim();
+  }
+  $('tok').addEventListener('blur', (e) => { e.target.value = normalise(e.target.value); });
+  $('tok').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('lookup').click(); });
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers: Object.assign(
+        {'Content-Type': 'application/json'},
+        TOKEN ? {'X-Account-Token': TOKEN} : {}),
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = {detail: text}; }
+    if (!res.ok) throw new Error((data && data.detail) || `HTTP ${res.status}`);
+    return data;
+  }
+
+  const fmtDate = (s) => {
+    if (!s) return '—';
+    const d = new Date(typeof s === 'number' ? s * 1000 : s);
+    return isNaN(d) ? String(s) : d.toISOString().slice(0, 10);
+  };
+
+  // ---- step 1: check the token before asking anyone for money -------------
+  $('lookup').addEventListener('click', async () => {
+    show($('tokErr'), false);
+    const val = normalise($('tok').value);
+    $('tok').value = val;
+    if (!/^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$/.test(val)) {
+      return fail($('tokErr'), 'That is not a 16-character account token.');
+    }
+    TOKEN = val;
+    $('lookup').disabled = true;
+    try {
+      // require_account, not require_active_account: an expired customer is
+      // exactly who needs this page, and locking them out of the one action
+      // that fixes their account would be the whole bug again.
+      const s = await api('/api/v1/account/status');
+      $('acPlan').textContent = s.plan || 'paid';
+      $('acStatus').textContent = s.status || '—';
+      $('acExp').textContent = fmtDate(s.expires_at);
+      // The cap comes from the response, never from a constant here —
+      // it is 8 paid and 2 on trial and a client that prints one of them
+      // tells half its customers the wrong number.
+      $('acDev').textContent = s.max_devices
+        ? `${s.devices ?? 0} of ${s.max_devices}` : String(s.devices ?? '—');
+      await loadTerms();
+      show($('cardTerm'), true);
+      $('cardTerm').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    } catch (e) {
+      TOKEN = "";
+      fail($('tokErr'), String(e.message || e).includes('401')
+        || /invalid|unknown|not found/i.test(String(e.message || e))
+        ? 'No account with that token. Check it character by character — we '
+          + 'cannot look it up for you.'
+        : String(e.message || e));
+    } finally { $('lookup').disabled = false; }
+  });
+
+  // ---- step 2: terms come from the control plane, never from here ---------
+  async function loadTerms() {
+    const cfg = await api('/api/v1/config');
+    const box = $('terms');
+    box.replaceChildren();
+    const base = (cfg.pricing || []).find((p) => p.months === 1);
+    for (const p of (cfg.pricing || [])) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'term';
+      b.dataset.months = p.months;
+      const saved = base ? base.usd * p.months - p.usd : 0;
+      b.innerHTML = '<b>$' + esc(p.usd.toFixed(0)) + '</b><span>'
+        + esc(p.months) + ' month' + (p.months === 1 ? '' : 's')
+        + (saved > 0 ? ' &middot; save $' + esc(saved.toFixed(0)) : '')
+        + '</span>';
+      b.addEventListener('click', () => {
+        for (const o of box.children) o.classList.remove('sel');
+        b.classList.add('sel');
+        months = p.months;
+        $('buy').disabled = false;
+      });
+      box.appendChild(b);
+    }
+  }
+
+  // ---- step 3: open the invoice and watch it ------------------------------
+  $('buy').addEventListener('click', async () => {
+    show($('buyErr'), false);
+    $('buy').disabled = true;
+    try {
+      const inv = await api('/api/v1/account/topup',
+                            {method: 'POST', body: {months}});
+      invoiceId = inv.invoice_id;
+      usd = inv.amount_usd;
+      const m = await fetch(`/api/v1/payment/${encodeURIComponent(invoiceId)}/methods`)
+                      .then((r) => r.json());
+      methods = m.methods || [];
+      if (!methods.length && m.checkout_url) {
+        location.href = m.checkout_url;
+        return;
+      }
+      renderCoins();
+      selectCoin(0);
+      show($('cardPay'), true);
+      $('cardPay').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      watch();
+    } catch (e) {
+      $('buy').disabled = false;
+      fail($('buyErr'), String(e.message || e));
+    }
+  });
+
+  function renderCoins() {
+    const box = $('coins');
+    box.replaceChildren();
+    methods.forEach((m, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'coin';
+      b.textContent = m.currency;
+      b.addEventListener('click', () => selectCoin(i));
+      box.appendChild(b);
+    });
+    show(box, methods.length > 1);
+  }
+
+  function selectCoin(i) {
+    const m = methods[i];
+    if (!m) return;
+    [...$('coins').children].forEach((c, n) => c.classList.toggle('sel', n === i));
+    $('payAmount').textContent = `${m.amount || ''} ${m.currency}`.trim();
+    // The dollar figure comes from the invoice the control plane opened, not
+    // from anything written down here: a price in a client is bug class #11.
+    $('payFiat').textContent = usd != null ? `≈ $${Number(usd).toFixed(2)} USD` : '';
+    $('payAddr').textContent = m.address || '—';
+    const qr = $('qr');
+    qr.replaceChildren();
+    if (window.QRCode && m.address) {
+      new QRCode(qr, {text: m.uri || m.address, width: 180, height: 180,
+                      correctLevel: QRCode.CorrectLevel.M});
+    }
+  }
+
+  function watch() {
+    if (poll) clearInterval(poll);
+    poll = setInterval(async () => {
+      try {
+        const s = await fetch(
+          `/api/v1/payment/${encodeURIComponent(invoiceId)}/status`)
+          .then((r) => r.json());
+        const el = $('payStatus');
+        if (s.status === 'Settled' || s.status === 'Complete' || s.paid) {
+          clearInterval(poll); poll = null;
+          el.innerHTML = '<span style="color:var(--moss)">paid — '
+            + esc(months) + ' month' + (months === 1 ? '' : 's')
+            + ' added to your subscription</span>';
+        } else if (s.status === 'Expired' || s.status === 'Invalid') {
+          clearInterval(poll); poll = null;
+          el.innerHTML = '<span style="color:var(--terra)">invoice expired — '
+            + 'start again, nothing was charged</span>';
+        } else if (s.underpaid) {
+          // Real coin at an address we control, just not enough. Naming the
+          // shortfall is the difference between finishing the payment and
+          // quietly losing it.
+          el.innerHTML = '<span style="color:var(--amber)">received '
+            + esc(s.confirmed_amount) + ' of ' + esc(s.expected_amount) + ' '
+            + esc(s.currency || '') + ' — send the remaining '
+            + esc(s.short_by) + ' to the same address</span>';
+        } else if (s.awaiting_confirmation || s.seen) {
+          const n = s.confirmations_required || 1;
+          el.innerHTML = '<span style="color:var(--amber)">payment seen — '
+            + 'waiting for ' + esc(String(n)) + ' confirmation'
+            + (n === 1 ? '' : 's') + '. Do not send again.</span>';
+        }
+      } catch (e) { /* transient; the next tick asks again */ }
+    }, 5000);
+  }
+})();
+</script>
+</body>
+</html>
