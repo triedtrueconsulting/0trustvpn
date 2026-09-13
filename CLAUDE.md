@@ -85,6 +85,7 @@ proxy/                            Visitor web proxy (/surf):
 tests/emulation/                  Full-stack suite: boots the product, drives it
 web/                              Landing + status/download/help/audit/privacy/
                                   terms/security + trial.html (free-trial signup)
+                                  + renew.html (top up an existing token)
 docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 ```
 
@@ -198,6 +199,19 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   minute" and which puts the address in a log line a human can act on. `/api/v1/config` publishes `confirmations` so no
   page restates the numbers — the site used to say "activates on the first
   confirmation", which was false for two of the three coins.
+- **A `SETTING_SPECS` entry's `"default"` is a claim the dashboard renders.**
+  An unset field showed as an empty box, which tells the operator nothing —
+  a blank "ZEC confirmations before crediting" could mean 1 or 5, the number
+  the confirmation-depth invariant exists to pin down. The spec carries the
+  fallback and the dashboard shows it as the placeholder, so it is a statement
+  about what the service does and needs a gate like any other.
+  `test_admin.py`'s `[defaults]` block checks every declared default against
+  the RUNNING system — `/api/v1/config`, a provider or watcher built with
+  nothing configured, or a child process with the overrides stripped — and its
+  last check fails if a spec declares a default no case there verifies.
+  Declare one only where that is possible; a second written-down copy is the
+  drift this project keeps finding.
+
 - **The default provider is `watch`, defined once in
   `payments.DEFAULT_PROVIDER` and read through `payments.provider_name()`.**
   The literal `"btcpay"` was the fallback at six call sites and in
@@ -679,14 +693,32 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 - **Renewal exists on every surface that shows the warning.** `sweep.py` told
   every expiring customer to run `0trust topup`; the command did not exist,
   and a test asserted the notice CONTAINED the string, so it watched the words
-  and not whether they meant anything. The CLI has `topup` now and the GUI has
+  and not whether they meant anything. The CLI has `topup` and the GUI has
   an Extend subscription panel. `--status` is a separate path in both:
   checking on a payment must never open a second invoice. Prices come from
   `/api/v1/config`'s `pricing` (from `PRICING`) — a price written into a
-  client is bug class #11 with money attached. **An expired account can still
-  top up** (`require_account`, not `require_active_account`) or the customer
-  is locked out of the one action that fixes their account; routing stays
-  refused until payment actually settles.
+  client is bug class #11 with money attached, and `topup` reads the offered
+  TERMS from there too rather than carrying its own copy. **An expired account
+  can still top up** (`require_account`, not `require_active_account`) or the
+  customer is locked out of the one action that fixes their account; routing
+  stays refused until payment actually settles.
+  **The notice then said "or at 0trustvpn.com", which was true of the domain
+  and false of every page on it** — the site's Begin flow opens a NEW account.
+  A phone has no command line, so a mobile-only customer was warned, told to
+  pay, and given nowhere to do it. `web/renew.html` is that page: token in,
+  account confirmed, term picked from `/api/v1/config`, invoice out. The token
+  is held in a closure — no `localStorage`, no query string, `X-Account-Token`
+  only, because the request path is logged. `test_site.py`'s `[renewal]` block
+  reads the URLs and commands back out of sweep.py's notice and requires each
+  to resolve: a page in `web/`, a route `install.sh` really renders, a
+  subcommand the CLI dispatcher really has.
+  **Both phone apps put a link under a notice that names a page**, reading the
+  URL out of the notice body so the destination lives in sweep.py and not in
+  two more places. A notice is operator-supplied text, so the pattern is
+  narrow — our own host, unreserved path characters, no `@` — or a banner
+  that opens whatever a message asks it to is a phishing surface handed to
+  whoever can post one. `test_ios.py` lifts the pattern out of both sources,
+  requires them identical, and runs six hostile bodies through it.
 
 ## Build & validation commands
 
