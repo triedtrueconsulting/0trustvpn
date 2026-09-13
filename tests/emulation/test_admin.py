@@ -436,6 +436,80 @@ try:
     check("and does not double the subscription", s2["expires_at"] == expires,
           f"expiry moved {expires} -> {s2['expires_at']}")
 
+    print("\n[7b] a refund takes back the time it paid for")
+    # terms.html §4 promises a 30-day refund window and nothing implemented
+    # one. The operator sent the coins back by hand — correctly, we hold no
+    # keys — and the system knew nothing about it, so the account kept every
+    # day the payment had bought. Pay, use it for twenty-nine days, ask for
+    # the money back, keep the service. Nobody chose that; it is what a
+    # contractual promise with no operation behind it does.
+    st, three = H.call("POST", "/api/v1/account", {"months": 3})
+    check("a three-month signup for the refund case", st == 200, three)
+    adm("POST", f"/invoices/{three['invoice_id']}/settle")
+    hdr3 = {"X-Account-Token": three["token"]}
+    before = H.call("GET", "/api/v1/account/status", headers=hdr3)[1]
+    check("three months are credited", before["status"] == "active", before)
+
+    # A second month, so the test can prove the refund takes back THIS
+    # invoice's days and not the whole subscription.
+    st, one = H.call("POST", "/api/v1/account/topup",
+                     {"months": 1}, headers=hdr3)
+    check("the same account tops up by a month", st == 200, one)
+    adm("POST", f"/invoices/{one['invoice_id']}/settle")
+    stacked = H.call("GET", "/api/v1/account/status", headers=hdr3)[1]
+    check("the top-up stacks on top",
+          stacked["expires_at"] > before["expires_at"],
+          f"{before['expires_at']} -> {stacked['expires_at']}")
+
+    st, r = adm("POST", f"/invoices/{one['invoice_id']}/refund",
+                {"reason": "customer asked within the window"})
+    check("a settled invoice can be recorded as refunded", st == 200, r)
+    check("and the response says plainly that no money moved",
+          "moved no money" in (r.get("note") or ""), r)
+
+    after = H.call("GET", "/api/v1/account/status", headers=hdr3)[1]
+    check("exactly the refunded month comes off, not the whole subscription",
+          after["expires_at"] == stacked["expires_at"] - 30 * 86400,
+          f"expiry {stacked['expires_at']} -> {after['expires_at']}, "
+          f"expected {stacked['expires_at'] - 30 * 86400}")
+    check("so the months that were not refunded are still there",
+          after["status"] == "active" and after["expires_at"] > int(time.time()),
+          f"refunding one month of four must not end the subscription: {after}")
+
+    # Bug class #7: a second call must not revoke the days twice, and a
+    # browser retrying a POST is not an unusual event.
+    st, r = adm("POST", f"/invoices/{one['invoice_id']}/refund", {"reason": "again"})
+    check("refunding twice is refused as a duplicate", r.get("duplicate"), r)
+    again = H.call("GET", "/api/v1/account/status", headers=hdr3)[1]
+    check("and takes nothing off the second time",
+          again["expires_at"] == after["expires_at"],
+          f"expiry moved {after['expires_at']} -> {again['expires_at']}")
+
+    # An invoice nobody has paid has nothing to refund.
+    st, unpaid = H.call("POST", "/api/v1/account", {"months": 1})
+    st, r = adm("POST", f"/invoices/{unpaid['invoice_id']}/refund", {})
+    check("an unsettled invoice cannot be refunded", st == 409, f"{st} {r}")
+    st, r = adm("POST", "/invoices/does-not-exist/refund", {})
+    check("nor can one that does not exist", st == 404, f"{st} {r}")
+
+    # And the whole subscription CAN end, when the refund is all the time
+    # there was.
+    st, solo = H.call("POST", "/api/v1/account", {"months": 1})
+    adm("POST", f"/invoices/{solo['invoice_id']}/settle")
+    hdrs = {"X-Account-Token": solo["token"]}
+    check("a one-month account is active before the refund",
+          H.call("GET", "/api/v1/account/status", headers=hdrs)[1]["status"]
+          == "active")
+    adm("POST", f"/invoices/{solo['invoice_id']}/refund", {})
+    ended = H.call("GET", "/api/v1/account/status", headers=hdrs)[1]
+    check("refunding the only month expires the account",
+          ended["status"] == "expired", ended)
+    st, r = H.call("POST", "/api/v1/wg/register",
+                   {"pubkey": H.genkey(), "device_name": "x", "region": "zur"},
+                   headers=hdrs)
+    check("and it stops routing", st == 402,
+          f"{st} — a refunded customer kept their tunnel")
+
     print("\n[8] settings")
     st, cfg = adm("GET", "/settings")
     check("settings load", st == 200 and "ZTV_PAYMENT_PROVIDER" in cfg["settings"], cfg)

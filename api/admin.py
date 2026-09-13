@@ -1048,6 +1048,90 @@ def manual_settle(invoice_id: str, admin: dict = Depends(csrf_guard)):
     return {"ok": True, "account_id": acct["id"], "expires_at": new_expiry}
 
 
+class RefundRequest(BaseModel):
+    reason: str = Field("", max_length=200)
+
+
+@router.post("/invoices/{invoice_id}/refund")
+def record_refund(invoice_id: str, req: RefundRequest,
+                  admin: dict = Depends(csrf_guard)):
+    """
+    Record that a settled invoice has been refunded, and take back the time
+    it bought.
+
+    terms.html §4 promises a 30-day refund window. Nothing implemented it. The
+    operator sent the coins back by hand — correctly, since we hold no keys —
+    and the system knew nothing about it, so the account kept every day the
+    payment had paid for. Pay, use the service for twenty-nine days, ask for
+    the money back, keep the subscription. That is not a policy anyone chose;
+    it is what happens when a promise in a contract has no operation behind it.
+
+    This does NOT move any money. It cannot: the whole design is that the
+    control plane holds no spending authority, and `watch` deployments have no
+    processor to issue a refund through. The operator sends the coins from the
+    wallet the payment went to, then records it here so the books and the
+    subscription agree.
+
+    Guarded on stored state rather than on being called once — bug class #7.
+    A second call must not revoke the time twice, and a browser that retries a
+    POST is not an unusual event.
+    """
+    import main
+    import payments as pay
+    now = int(time.time())
+    with _db(write=True) as conn:
+        inv = conn.execute("SELECT * FROM invoices WHERE id = ?",
+                           (invoice_id,)).fetchone()
+        if not inv:
+            raise HTTPException(404, "No such invoice")
+        if inv["status"] == pay.REFUNDED:
+            return {"ok": True, "duplicate": True,
+                    "note": "Already recorded as refunded; nothing changed."}
+        if inv["status"] != main.SETTLED:
+            raise HTTPException(
+                409,
+                f"Invoice is {inv['status']}, not settled — there is nothing "
+                f"to refund. Money only ever arrived for a settled invoice.")
+
+        acct = conn.execute("SELECT * FROM accounts WHERE id = ?",
+                            (inv["account_id"],)).fetchone()
+        if not acct:
+            raise HTTPException(404, "Invoice has no account")
+
+        cur = conn.execute(
+            "UPDATE invoices SET status=? WHERE id=? AND status=?",
+            (pay.REFUNDED, invoice_id, main.SETTLED))
+        if cur.rowcount == 0:
+            # Someone else got there between the read and the write.
+            return {"ok": True, "duplicate": True}
+
+        # Exactly the days this invoice bought, taken off the end. Not "expire
+        # the account": a customer refunding one month of a stack of three
+        # keeps the other two, and settling this invoice added precisely
+        # months * 30 days (manual_settle above, and the webhook path).
+        bought = inv["months"] * 30 * 86400
+        new_expiry = max(0, acct["expires_at"] - bought)
+        status = acct["status"]
+        if status == "active" and new_expiry <= now:
+            status = "expired"
+        conn.execute("UPDATE accounts SET expires_at=?, status=? WHERE id=?",
+                     (new_expiry, status, acct["id"]))
+
+        # The reason is the operator's own words about their own action. No
+        # account token, no address — ops_events and admin_audit never carry
+        # customer data, and a refund address least of all: it is the one
+        # identifier a crypto customer has.
+        audit(conn, admin, "invoice.refund", invoice_id,
+              f"account:{acct['id']} months={inv['months']} "
+              f"expiry {acct['expires_at']} -> {new_expiry}"
+              + (f" reason={req.reason[:120]}" if req.reason else ""))
+
+    return {"ok": True, "account_id": acct["id"], "expires_at": new_expiry,
+            "status": status,
+            "note": "Recorded. This moved no money — send the coins from the "
+                    "wallet the payment arrived in."}
+
+
 @router.get("/payments/health")
 def payment_health(admin: dict = Depends(current_admin)):
     """

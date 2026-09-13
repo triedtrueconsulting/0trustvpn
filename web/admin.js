@@ -419,6 +419,36 @@ async function loadPayHealth() {
       : null);
 }
 
+// One cell, three states. A settled invoice needs the refund control that
+// terms.html §4 promises and that nothing used to offer — the operator sent
+// the coins back by hand and the account kept every day the payment bought.
+function invoiceAction(i) {
+  if (i.status === 'refunded') {
+    return el('span', { class: 'dim', text: 'refunded' });
+  }
+  if (i.status === 'settled') {
+    return el('button', { class: 'small', text: 'Record refund', onclick: async () => {
+      const reason = prompt(
+        `Record a refund for ${i.id}?\n\n` +
+        `This moves NO money — send the coins yourself, from the wallet the ` +
+        `payment arrived in. It marks the invoice refunded and takes the ` +
+        `${i.months} month(s) it paid for back off the subscription.\n\n` +
+        `Reason (optional, goes in the audit log):`, '');
+      if (reason === null) return;
+      const r = await api(`/invoices/${i.id}/refund`,
+                          { method: 'POST', body: JSON.stringify({ reason }) });
+      toast(r.duplicate ? 'Already refunded'
+                        : 'Recorded — now send the coins');
+      loadInvoices();
+    } });
+  }
+  return el('button', { class: 'small', text: 'Mark paid', onclick: async () => {
+    if (!confirm(`Credit invoice ${i.id} by hand? Use this when the payment landed on chain but the webhook never arrived.`)) return;
+    const r = await api(`/invoices/${i.id}/settle`, { method: 'POST' });
+    toast(r.duplicate ? 'Already settled' : 'Credited'); loadInvoices();
+  } });
+}
+
 async function loadInvoices() {
   const d = await api(`/invoices?status=${$('inv-status').value}&limit=50`);
   $('inv-list').replaceChildren(table(
@@ -428,14 +458,11 @@ async function loadInvoices() {
       { node: el('code', { text: '#' + i.account_id }) },
       String(i.months), fmtMoney(i.amount_usd),
       { node: el('span', {
-          class: 'pill ' + ({ settled: 'ok', pending: 'warn' }[i.status] || 'neutral'),
+          class: 'pill ' + ({ settled: 'ok', pending: 'warn',
+                              refunded: 'neutral' }[i.status] || 'neutral'),
           text: i.status }) },
       fmtDate(i.created_at),
-      { node: i.status === 'settled' ? el('span', { class: 'dim', text: '—' })
-          : el('button', { class: 'small', text: 'Mark paid', onclick: async () => {
-              if (!confirm(`Credit invoice ${i.id} by hand? Use this when the payment landed on chain but the webhook never arrived.`)) return;
-              const r = await api(`/invoices/${i.id}/settle`, { method: 'POST' });
-              toast(r.duplicate ? 'Already settled' : 'Credited'); loadInvoices(); } }) },
+      { node: invoiceAction(i) },
     ])));
 }
 

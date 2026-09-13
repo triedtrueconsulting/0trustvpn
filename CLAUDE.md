@@ -653,6 +653,29 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   must not be able to read the backups it made. Never enable the timer
   without a recipient — a unit that fails every night looks like backups
   exist, which is worse than none.
+- **A refund is an operation, not just a clause.** terms.html §4 promises a
+  30-day refund window and nothing implemented one: the operator sent the
+  coins back by hand — correctly, the control plane holds no spending
+  authority — and the system knew nothing about it, so the account kept every
+  day the payment had bought. Pay, use it for twenty-nine days, ask for the
+  money back, keep the service. Nobody chose that; it is what a contractual
+  promise with no code behind it does.
+  `POST /api/v1/admin/invoices/{id}/refund` marks the invoice `REFUNDED` and
+  takes back exactly `months * 30` days — the same arithmetic settling it
+  added — so refunding one month of three leaves the other two, and refunding
+  the only month expires the account and stops it routing. Guarded on stored
+  state, not on being called once (bug class #7): a retried POST must not
+  revoke twice. **It moves no money and says so in the response**; that stays
+  manual and always will, because we hold no keys.
+  The clause also said refunds went "through our payment processor's dispute
+  flow". The default provider is `watch` — an address derived from the
+  operator's own xpub, watched on an explorer. There is no processor and no
+  dispute flow, so a binding document described a mechanism that does not
+  exist. `test_site.py`'s `[refunds]` block ties the clause, the state, the
+  endpoint, the day-revocation and the dashboard control together, matching
+  against whitespace-collapsed prose because these pages are hard wrapped and
+  a plain substring check misses anything spanning a line break.
+
 - **Renewal exists on every surface that shows the warning.** `sweep.py` told
   every expiring customer to run `0trust topup`; the command did not exist,
   and a test asserted the notice CONTAINED the string, so it watched the words
@@ -931,6 +954,13 @@ encrypted DB backup + DR runbook, abuse/DMCA runbook, legal pages
    instruments (BÜPF/VÜPF, NDG, NSL, FISA) and is the one document
    written to be relied on when it stops appearing. The entity name is
    set (`0trust GmbH`); it must match the Handelsregister entry.
+   Two items in `docs/REQUESTS.md` need the same lawyer and are NOT
+   engineering: whether a Swiss company selling to EU residents needs an
+   art. 27 EU representative, and **VAT** — a Swiss GmbH selling a digital
+   service to EU consumers owes VAT in the customer's country, and this
+   product deliberately does not know which country that is. Whether pricing
+   is VAT-inclusive is a decision to take with an accountant BEFORE the first
+   sale, not after.
 5. Commission a third-party audit (Cure53 / Assured AB) — the audit pack is
    built to be their starting point.
 

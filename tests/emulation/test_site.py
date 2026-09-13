@@ -897,6 +897,108 @@ try:
         check(f"{script} --check passes on this checkout", r.returncode == 0,
               r.stderr[-300:])
 
+    # ---------------------------------------------------------------------------
+    # The refund clause is a promise with an operation behind it.
+    #
+    # terms.html §4 offers a 30-day refund window. Nothing implemented one: the
+    # operator sent the coins back by hand — correctly, the control plane holds no
+    # keys — and the system knew nothing about it, so the account kept every day
+    # the payment had bought. Pay, use it twenty-nine days, ask for the money
+    # back, keep the service. Nobody chose that; it is what a contract clause with
+    # no code behind it does.
+    #
+    # The clause also described "our payment processor's dispute flow". The
+    # default provider is `watch`: it derives an address from the operator's own
+    # extended public key and watches an explorer. There is no processor and no
+    # dispute flow — the clause described a mechanism that does not exist, in a
+    # binding document.
+    # ---------------------------------------------------------------------------
+    print("\n[refunds] the clause and the mechanism agree")
+    terms_raw = open(os.path.join(H.REPO, "web", "terms.html")).read()
+    # Whitespace collapsed before matching. Prose in these pages is hard
+    # wrapped, so "no dispute flow to go through" spans a line break and a
+    # plain substring check misses it — the same trap that made an iOS check
+    # read the wrong answer earlier in this suite.
+    terms = " ".join(terms_raw.split())
+    admin_src = open(os.path.join(H.REPO, "api", "admin.py")).read()
+    pay_src = open(os.path.join(H.REPO, "api", "payments.py")).read()
+    adminjs = open(os.path.join(H.REPO, "web", "admin.js")).read()
+    adminhtml = open(os.path.join(H.REPO, "web", "admin.html")).read()
+
+    check("terms still offers a refund window", "refund" in terms.lower())
+    check("it no longer routes refunds through a processor that does not exist",
+          "dispute flow to go through" in terms
+          and "through our payment processor's dispute flow" not in terms,
+          "the default provider is `watch` — no processor, no dispute flow")
+    check("and it says a refund ends the time it paid for",
+          "refund ends the time it paid for" in terms,
+          "without this the customer keeps the service and the money")
+
+    check("payments defines a refunded invoice state",
+          'REFUNDED = "refunded"' in pay_src)
+    check("the admin API can record one",
+          '@router.post("/invoices/{invoice_id}/refund")' in admin_src,
+          "terms promises a refund; an operator needs somewhere to record it")
+    check("recording it revokes the days that invoice bought",
+          'acct["expires_at"] - bought' in admin_src,
+          "marking an invoice refunded without taking the time back leaves the "
+          "customer paid up on money they got returned")
+    check("and the dashboard exposes it", "Record refund" in adminjs,
+          "an endpoint with no control is not a mechanism an operator has")
+    check("the dashboard can also list refunded invoices",
+          'value="refunded"' in adminhtml,
+          "no filter means the operator cannot find what they refunded")
+
+    # ---------------------------------------------------------------------------
+    # The rights section names commands. They have to exist and do what it says.
+    #
+    # privacy.html had no data-subject-rights section at all, which for a Swiss
+    # GmbH selling into the EU is a gap in the one document customers read to
+    # decide whether to trust us. Writing it surfaced a contradiction: §8 said
+    # flatly that we "cannot perform a per-user data export or deletion on
+    # request", and that was wrong. The token IS the identifier — presented with
+    # one the operator finds exactly one account and the dashboard deletes it.
+    # The true statement is conditional, and a policy that understates what the
+    # system can do is how a lawful erasure request gets wrongly refused.
+    # ---------------------------------------------------------------------------
+    print("\n[rights] the privacy policy's rights section matches the product")
+    priv = " ".join(open(os.path.join(H.REPO, "web", "privacy.html")).read().split())
+    cli = open(os.path.join(H.REPO, "client", "cmd", "0trust", "main.go")).read()
+
+    check("privacy.html has a data-subject-rights section",
+          'id="your-rights"' in priv,
+          "FADP art. 25 and GDPR art. 15 give customers rights; a privacy policy "
+          "for a privacy product should say what they are")
+    check("and a breach section", 'id="if-we-are-breached"' in priv,
+          "GDPR art. 33 and FADP art. 24 both require notification")
+
+    # Every command the section tells a customer to run.
+    for cmd in ("0trust status", "0trust devices", "0trust notices"):
+        check(f"the section tells them to run {cmd!r}, and it exists",
+              cmd in priv and f'case "{cmd.split()[1]}":' in cli,
+              "copy naming a command the binary does not have is the same defect "
+              "as sweep.py telling people to run `0trust topup` before it existed")
+    check("`0trust remove` is real too, since deletion is offered through it",
+          "0trust remove" in priv and 'case "remove":' in cli)
+
+    check("§8 no longer says deletion on request is impossible",
+          "cannot perform a per-user data export or deletion on request" not in priv,
+          "with a token it is entirely possible, and the dashboard does it")
+    check("§8 says instead that the token is what makes it possible",
+          "we can act on a request; if you do not, we cannot" in priv,
+          "the honest statement is conditional, not flat")
+    check("and it is still honest about the customer who lost their token",
+          "lost their token" in priv or "lost your token" in priv,
+          "no recovery flow is a deliberate decision and has to be said")
+
+    check("the operator runbook exists",
+          os.path.exists(os.path.join(H.REPO, "docs", "REQUESTS.md")),
+          "a deadline with no written procedure is improvised under time pressure")
+    reqs = open(os.path.join(H.REPO, "docs", "REQUESTS.md")).read()
+    for topic in ("Right of access", "Right to erasure", "Record refund",
+                  "72 hours", "VAT"):
+        check(f"the runbook covers: {topic}", topic in reqs)
+
 finally:
     srv.shutdown(); H.shutdown()
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")

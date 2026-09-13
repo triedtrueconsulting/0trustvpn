@@ -83,6 +83,8 @@ p strong{color:var(--ink)}
 ul{margin:12px 0 16px 24px}
 li{color:var(--ink-dim);margin:8px 0}
 code{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--amber);background:rgba(212,165,116,.08);padding:1px 6px;border-radius:2px}
+pre{background:var(--bg-elev);border:1px solid var(--line);border-radius:2px;padding:14px 18px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--ink);overflow-x:auto;margin:12px 0;line-height:1.55}
+pre .comment{color:var(--ink-faint)}
 a{color:var(--amber);text-decoration:none}
 a:hover{text-decoration:underline}
 .box{background:var(--bg-elev);border:1px solid var(--line);border-radius:3px;padding:20px 24px;margin:16px 0}
@@ -375,12 +377,21 @@ status</code> shows which of the two you have.</p>
 <p>
   Web access logs: 2 days, then deleted automatically. Application error
   logs: 7 days. Account records: until your subscription expires, plus the
-  refund window, after which expired records are purged by an automated
-  sweeper. You can hasten deletion by simply not renewing — there is no
-  account to "close" because there is no identity attached to it. Because we
-  cannot identify which token is yours, we cannot perform a per-user data
-  export or deletion on request; the privacy architecture that protects you
-  also means we have nothing user-specific to export.
+  30-day refund window, after which an automated sweeper deletes the account
+  row and everything attached to it — devices, invoices, notices. You can
+  hasten deletion by simply not renewing; there is no account to "close",
+  because there is no identity attached to it to close.
+</p>
+<p>
+  <strong>If you hold your token, we can act on a request; if you do not, we
+  cannot.</strong> This paragraph used to say flatly that we could not
+  perform a per-user export or deletion on request, and that was not right.
+  The token IS the identifier: presented with it we can find exactly one
+  account and delete it, and we will, the day you ask. What we cannot do is
+  act for someone who has lost their token, because there is no name, address
+  or email on the account to match them to — and a recovery flow that worked
+  would be a way for anyone else to take the account. Section 12 sets out the
+  rights this gives you and how to use them.
 </p>
 
 <h2 id="children">9. Children</h2>
@@ -408,8 +419,88 @@ status</code> shows which of the two you have.</p>
   matches what the server does.
 </p>
 
+<h2 id="your-rights">12. Your rights, and how to use them</h2>
+<p>
+  Swiss law (FADP art. 25) and, if you are in the EU or UK, the GDPR
+  (art. 15&ndash;21) give you rights over personal data about you: to see it,
+  correct it, have it deleted, and take it with you. This section says how
+  each one works here, including where anonymity cuts against you.
+</p>
+<p>
+  <strong>Access is self-service, and it is complete.</strong> Everything the
+  control plane holds that relates to your account is readable by you, right
+  now, with your token &mdash; there is no request to file and nobody to wait
+  for:
+</p>
+<pre>$ 0trust status          <span class="comment"># plan, expiry, device cap</span>
+$ 0trust devices         <span class="comment"># every device key on the account</span>
+$ 0trust notices         <span class="comment"># anything we have sent you</span></pre>
+<p>
+  That is the whole of it. Section 2 lists the fields and section 8 says how
+  long each survives. There is no profile behind the token, no second table
+  keyed to you, and nothing we could add to that output if you asked us to
+  export it by email &mdash; which is why we would send you back to these
+  commands rather than answer with a file.
+</p>
+<p>
+  <strong>Deletion is self-service too.</strong>
+  <code>0trust remove &lt;pubkey&gt;</code> deletes a device immediately.
+  Stopping paying deletes the account: it expires, and the sweeper erases the
+  row and everything hanging off it 30 days later (section 8). If you want it
+  gone sooner, email us from anywhere with your account token and we will
+  delete it that day. The token is the proof &mdash; we have nothing else to
+  check you against.
+</p>
+<p>
+  <strong>Where anonymity costs you something.</strong> We cannot identify
+  you, so we cannot honour a request from someone who has lost their token.
+  There is no name, address or email on the account to match you to, and a
+  password-reset flow that worked would be a way for anyone else to take your
+  account. If you lose the token, the data stays until it expires on its own.
+  We would rather tell you that plainly than pretend to a recovery process we
+  deliberately did not build.
+</p>
+<p>
+  <strong>Correction and portability</strong> have little to work on here.
+  The only fields you can change are the ones you set &mdash; a device's
+  label &mdash; and there is nothing to port to another provider but an
+  expiry date. We mention them because the law does, not to pad the list.
+</p>
+<p>
+  <strong>Complaints.</strong> If you think we have handled your data wrongly,
+  tell us first at
+  <a href="mailto:0trustvpn@proton.me">0trustvpn@proton.me</a>. You can also
+  complain to the Swiss Federal Data Protection and Information Commissioner
+  (FDPIC), or to the supervisory authority where you live if you are in the
+  EU, EEA or UK. You do not need our permission and you do not have to come
+  to us first.
+</p>
+
+<h2 id="if-we-are-breached">13. If we are breached</h2>
+<p>
+  A privacy service that will not say what happens when it fails is not
+  worth much. If we discover that customer data has been exposed:
+</p>
+<ul>
+  <li>we notify the FDPIC as soon as we can, and any EU supervisory
+      authority that applies, within the deadlines the law sets;</li>
+  <li>we publish what happened on this site and in the warrant canary
+      &mdash; those are the only channels we have, because we do not have
+      your email address;</li>
+  <li>we say what was exposed, when, and what we did, without waiting until
+      the investigation is tidy.</li>
+</ul>
+<p>
+  What is at stake is smaller than at most services, and deliberately so.
+  There is no email list to leak, no payment identity, no browsing history
+  and no connection log &mdash; sections 3 and 7 set out what an attacker
+  who took the whole control plane would actually get, and section 7 covers
+  a seized node separately. That is the point of collecting so little: it
+  bounds the worst day.
+</p>
+
 <div class="footer">
-  <span>Privacy policy v1.0 · 2026-05</span>
+  <span>Privacy policy v1.1 · 2026-09</span>
   <span><a href="/">Home</a> · <a href="/terms">Terms</a> · <a href="/audit">Audit</a> · <a href="/help">Help</a></span>
 </div>
 </div>

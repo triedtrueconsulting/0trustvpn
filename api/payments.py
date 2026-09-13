@@ -104,6 +104,12 @@ def provider_name() -> str:
 SETTLED = "settled"
 PENDING = "pending"
 EXPIRED = "expired"
+# A settled invoice the operator has sent the money back for. terms.html §4
+# promises a 30-day refund window, and until this existed there was nothing to
+# record one: the operator sent the coins from their own wallet and the system
+# knew nothing about it, so the account kept every day the payment had bought.
+# Pay, use it for twenty-nine days, ask for the money back, keep the service.
+REFUNDED = "refunded"
 INVALID = "invalid"
 
 

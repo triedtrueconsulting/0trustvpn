@@ -125,6 +125,7 @@ USER ──▶│ 0trust.  │ ───────────▶   │  Contr
     ├── LAUNCH.md             Concrete operator launch playbook
     ├── AUDIT.md              No-logs audit pack for third-party auditors
     ├── ABUSE.md              DMCA / spam / law-enforcement handling runbook
+    ├── REQUESTS.md           Data requests, deletions, refunds, breaches
     └── DR.md                 Disaster recovery procedures (6 scenarios)
 ```
 
