@@ -170,6 +170,36 @@ try:
                        headers={"X-Account-Token": tok})[1]["days_remaining"]
         check("extending adds the days", after >= before + 29, f"{before} -> {after}")
 
+        print("\n[3b] refunding from the account detail")
+        # A refund request arrives as a token, so this is the screen the
+        # operator is already on. The control existed on both screens and had
+        # never been clicked by anything: it pre-stringified its body into an
+        # api() helper that stringifies, so every click returned 422 and the
+        # operation terms.html §4 promises did not happen.
+        exp_before = H.call("GET", "/api/v1/account/status",
+                            headers={"X-Account-Token": tok})[1]["expires_at"]
+        check("the account detail offers a refund on a settled invoice",
+              page.is_visible("#acct-detail button:has-text('Record refund')"),
+              page.inner_text("#acct-detail")[-400:])
+        page.click("#acct-detail button:has-text('Record refund')")
+        try:
+            page.wait_for_function(
+                "() => document.querySelector('#acct-detail').innerText.includes('refunded')",
+                timeout=15000)
+        except Exception as e:
+            check("clicking Record refund records the refund", False,
+                  f"{type(e).__name__}: still {page.inner_text('#acct-detail')[-200:]}")
+        st, after_acct = H.call("GET", "/api/v1/account/status",
+                                headers={"X-Account-Token": tok})
+        # expires_at is the stored absolute timestamp; days_remaining is derived
+        # from now on every request and ticks between two reads (bug class #10).
+        taken = (exp_before - after_acct["expires_at"]) / 86400.0
+        check("the month the invoice paid for comes back off the subscription",
+              29.9 < taken < 30.1, f"{exp_before} -> {after_acct['expires_at']} ({taken}d)")
+        check("and the invoice is marked refunded on the page",
+              "refunded" in page.inner_text("#acct-detail"),
+              page.inner_text("#acct-detail")[-300:])
+
         print("\n[4] nodes")
         page.click("#tabs button[data-tab=nodes]")
         page.wait_for_selector("#node-list table", timeout=15000)
@@ -314,6 +344,12 @@ try:
         check("payment health renders",
               "provider" in page.inner_text("#pay-health").lower(),
               page.inner_text("#pay-health")[:200])
+        # replaceChildren() stringifies whatever it is handed, so the null
+        # standing in for "no missing settings" printed the word null on the
+        # page — on the correctly-configured path, which is the normal one.
+        check("and prints no literal null under the table",
+              "null" not in page.inner_text("#pay-health"),
+              page.inner_text("#pay-health")[:300])
         page.click("#tabs button[data-tab=audit]")
         page.wait_for_selector("#audit-list table", timeout=15000)
         audit_text = page.inner_text("#audit-list")
@@ -334,6 +370,56 @@ try:
               page.inner_text("#events-webhook"))
         check("the tab exists next to the audit log",
               page.is_visible("#tabs button[data-tab=events]"))
+
+        print("\n[7c] layout")
+        # Each child of a flex container is its own item, so the leading space
+        # of the " — secret" marker collapsed and labels read "API KEY— secret".
+        page.click("#tabs button[data-tab=settings]")
+        page.wait_for_selector("#settings-groups label", timeout=15000)
+        # Measured, not read off a property — getComputedStyle().columnGap
+        # comes back as the empty string in some headless builds, which is not
+        # in ("normal", "0px") and so passed with the rule deleted.
+        #
+        # Two clones of the same label, laid out side by side at max-content
+        # inside the real .set-grid (the rule is a descendant selector, so a
+        # clone parked anywhere else is not styled at all), one with the gap
+        # zeroed. The difference IS the separation. Nothing here depends on
+        # where a line happens to break, which is what made the first version
+        # of this check report 0px on a loaded runner and 3.47px locally.
+        gap = page.eval_on_selector("#settings-groups label:has(.dim)", """
+            e => {
+              const grid = e.closest('.set-grid');
+              if (!grid) return null;
+              const probe = document.createElement('div');
+              probe.style.cssText =
+                  'position:absolute;left:-9999px;top:0;display:block';
+              const a = e.cloneNode(true), b = e.cloneNode(true);
+              for (const c of [a, b]) { c.style.width = 'max-content'; }
+              b.style.columnGap = '0px'; b.style.rowGap = '0px';
+              probe.appendChild(a); probe.appendChild(b);
+              grid.appendChild(probe);
+              const w = a.getBoundingClientRect().width -
+                        b.getBoundingClientRect().width;
+              probe.remove();
+              return Math.round(w * 100) / 100;
+            }""")
+        check("a secret marker is separated from its label",
+              gap is not None and gap >= 2,
+              f"{gap}px of separation the gap rule is responsible for")
+        # A grid item's automatic minimum is its min-content, so a card holding
+        # a table refused to shrink and pushed the page sideways at phone width.
+        # The tables scroll inside .table-wrap; the page must not.
+        page.set_viewport_size({"width": 400, "height": 900})
+        for tab in ("overview", "accounts", "nodes", "payments",
+                    "notices", "settings", "events", "audit"):
+            page.click(f"#tabs button[data-tab={tab}]")
+            page.wait_for_timeout(400)
+            sw, cw = page.evaluate(
+                "[document.documentElement.scrollWidth,"
+                " document.documentElement.clientWidth]")
+            check(f"{tab} does not scroll sideways on a phone", sw <= cw + 1,
+                  f"scrollWidth {sw} > clientWidth {cw}")
+        page.set_viewport_size({"width": 1280, "height": 900})
 
         print("\n[8] session")
         check("no JS errors anywhere in the session", not errors, errors[:3])

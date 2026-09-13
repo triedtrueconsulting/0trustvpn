@@ -137,8 +137,18 @@ main { padding: 1.5rem; max-width: 84rem; margin: 0 auto; }
   font: 400 1.15rem/1.2 var(--serif); margin: 0 0 1rem;
   padding-bottom: .6rem; border-bottom: 1px solid var(--line);
 }
+/* A card with sections — the account detail is Status / Devices / Invoices /
+   Note — needs air above each one. With margin-top 0 the "Devices" rule sat
+   flush against the button row above it and the panel read as one run-on. */
+.card h2 ~ h2 { margin-top: 1.75rem; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
 @media (max-width: 60rem) { .two-col { grid-template-columns: 1fr; } }
+/* A grid item's automatic minimum size is its min-content, so a card holding a
+   table refuses to shrink below the table's natural width and pushes the whole
+   page sideways at phone width — the overview scrolled horizontally for that
+   reason while every other tab, whose tables sit in plain block cards, did not.
+   The table already scrolls on its own inside .table-wrap; the card must not. */
+.two-col > * { min-width: 0; }
 
 /* --- stats --------------------------------------------------------------- */
 .grid.stats {
@@ -220,7 +230,10 @@ td .k { font-family: var(--mono); font-size: .8rem; overflow-wrap: anywhere; }
 .set-grid > div {
   display: flex; flex-direction: column; justify-content: flex-end;
 }
-.set-grid label { min-height: 2.1em; display: flex; align-items: flex-end; }
+/* gap, not a space in the markup: each child of a flex container is its own
+   item, so the leading space of the " — secret" span collapsed and the label
+   read "API KEY— secret". */
+.set-grid label { min-height: 2.1em; display: flex; align-items: flex-end; gap: .5ch; }
 
 /* --- toast --------------------------------------------------------------- */
 .toast {

@@ -6,7 +6,7 @@ This surface can ban customers, hand out free time and change where money
 lands, so it gets tested like it matters — both that the controls work and
 that they cannot be reached without credentials.
 """
-import base64, http.cookiejar, json, os, shutil, sqlite3, sys, time
+import base64, http.cookiejar, json, os, shutil, sqlite3, subprocess, sys, time
 import urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
@@ -654,6 +654,76 @@ try:
           set(ev.get("events", [{}])[0].keys()) != set(
               (aud.get("entries") or [{}])[0].keys())
           if ev.get("events") and aud.get("entries") else True, (ev, aud))
+
+    print("\n[defaults] every default the dashboard shows is the one the "
+          "service uses")
+    # An unset field rendered as an empty box tells the operator nothing, so
+    # SETTING_SPECS carries the fallback and the dashboard renders it as the
+    # placeholder. That makes it a claim, and a claim needs a gate: each one
+    # is checked against what the RUNNING service does, never against a second
+    # written-down copy. A new "default" with no case here fails the last
+    # check in this block rather than shipping unverified.
+    st, cfg = adm("GET", "/settings")
+    check("settings carry their default", st == 200
+          and cfg["settings"]["ZTV_TRIAL_DAYS"].get("default") == "7", st)
+    declared = {k: v["default"] for k, v in cfg["settings"].items() if v.get("default")}
+
+    st, pub = H.call("GET", "/api/v1/config")
+    check("the public config loads", st == 200, pub)
+    covered = set()
+
+    def same(key, actual, what):
+        covered.add(key)
+        check(f"{key} default {declared.get(key)!r} is what {what} does",
+              str(actual) == declared.get(key), f"service says {actual!r}")
+
+    # Published straight out of the control plane, on a deployment where these
+    # have never been set.
+    same("ZTV_TRIAL_DAYS", pub["trial"]["days"], "/api/v1/config")
+    same("ZTV_TRIAL_MAX_DEVICES", pub["trial"]["max_devices"], "/api/v1/config")
+    same("ZTV_TRIAL_ENABLED", int(bool(pub["trial"]["enabled"])), "/api/v1/config")
+
+    sys.path.insert(0, os.path.join(H.REPO, "api"))
+    import payments as _pay                      # noqa: E402
+    import monerowatch as _xmr                   # noqa: E402
+    import main as _main                         # noqa: E402
+    same("ZTV_PAYMENT_PROVIDER", _pay.DEFAULT_PROVIDER, "payments picks by default")
+    # Built with nothing configured: .confirmations is the depth the poller
+    # will actually hold an invoice to, not a copy of it.
+    for k in ("ZTV_BTC_CONFIRMATIONS", "ZTV_ZEC_CONFIRMATIONS"):
+        os.environ.pop(k, None)
+    depths = _pay.WatchOnlyProvider().confirmations
+    same("ZTV_BTC_CONFIRMATIONS", depths["BTC"], "the watch provider requires")
+    same("ZTV_ZEC_CONFIRMATIONS", depths["ZEC"], "the watch provider requires")
+    # This suite sets ZTV_TRIAL_POW_BITS low so the stamps are cheap to grind,
+    # so the constant in this process is the override, not the product's
+    # default. Read it out of a child with the overrides stripped.
+    _clean = {k: v for k, v in os.environ.items()
+              if not k.startswith(("ZTV_", "WALLET_", "MONERO_", "NODE_RPC_"))}
+    _clean["ZTV_DB_PATH"] = os.path.join(TMP, "defaults-probe.db")
+    _probe = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, 'api'); import main;"
+         " print(main.TRIAL_POW_BITS_DEFAULT)"],
+        cwd=H.REPO, env=_clean, capture_output=True, text=True, timeout=60)
+    same("ZTV_TRIAL_POW_BITS", (_probe.stdout.strip() or _probe.stderr[-200:]),
+         "a fresh control plane mints trial stamps at")
+    # Constructed with nothing configured: the object's own attributes are the
+    # effective values, not a copy of them.
+    for k in ("MONERO_ACCOUNT_INDEX", "XMR_CONFIRMATIONS"):
+        os.environ.pop(k, None)
+    w = _xmr.MoneroWatcher()
+    same("MONERO_ACCOUNT_INDEX", w.account, "monero-wallet-rpc is asked for")
+    same("XMR_CONFIRMATIONS", w.confirmations, "the Monero watcher requires")
+    os.environ.pop("SQUARE_ENV", None); os.environ.pop("SQUARE_API_BASE", None)
+    sq = _pay.SquareProvider()
+    covered.add("SQUARE_ENV")
+    check("SQUARE_ENV default 'production' is the host Square talks to",
+          declared.get("SQUARE_ENV") == "production"
+          and sq.base == "https://connect.squareup.com", sq.base)
+
+    check("no setting declares a default this block does not verify",
+          not (set(declared) - covered), sorted(set(declared) - covered))
 
 finally:
     H.shutdown()

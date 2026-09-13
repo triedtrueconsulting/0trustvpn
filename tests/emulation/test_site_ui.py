@@ -242,6 +242,28 @@ try:
                              f"ending at {r['navB']}px")
         check("every in-page nav target is visible after the jump", not under,
               "\n          ".join(under))
+
+        print("\n[legend] the status key actually shows its colours")
+        # The three swatches were styled as `.region .small-dot` and the legend
+        # is not inside a .region, so they had no width, no height and no
+        # background: three state words with nothing beside them. A key that
+        # renders nothing is worse than no key — the reader is told one exists.
+        p3 = ctx.new_page()
+        p3.goto(base + "/status", wait_until="load", timeout=30000)
+        p3.wait_for_timeout(600)
+        dots = p3.evaluate("""() => [...document.querySelectorAll('.legend .small-dot')]
+            .map(e => { const r = e.getBoundingClientRect();
+                        const c = getComputedStyle(e);
+                        return {w: Math.round(r.width), h: Math.round(r.height),
+                                bg: c.backgroundColor}; })""")
+        check("the legend has one swatch per state", len(dots) == 3, dots)
+        check("each swatch is actually painted",
+              all(d["w"] >= 6 and d["h"] >= 6 for d in dots), dots)
+        check("and no two states share a colour",
+              len({d["bg"] for d in dots}) == 3, dots)
+        check("none of them is transparent",
+              not any("rgba(0, 0, 0, 0)" in d["bg"] for d in dots), dots)
+        p3.close()
         ctx.close()
         browser.close()
         browser = None

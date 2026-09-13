@@ -125,7 +125,12 @@ body {
 }
 
 /* INPUTS */
-input[type="text"], select {
+/* `input:not([type])` matters: an <input> with no type attribute behaves as
+   text but is NOT matched by [type="text"], so it falls through to the
+   browser default. That is what happened to the top-up address field — the
+   one element in the whole payment flow a customer must read exactly — which
+   rendered as a cramped white-bordered box in the middle of a dark card. */
+input[type="text"], input:not([type]), select {
   background: var(--bg);
   border: 1px solid var(--line);
   color: var(--ink);
@@ -155,11 +160,11 @@ select {
   cursor: pointer;
 }
 select:hover { border-color: #3a3728; }
-input[type="text"]:focus, select:focus {
+input[type="text"]:focus, input:not([type]):focus, select:focus {
   border-color: var(--amber);
   box-shadow: var(--focus);
 }
-input[type="text"]::placeholder { color: var(--ink-faint); }
+input[type="text"]::placeholder, input:not([type])::placeholder { color: var(--ink-faint); }
 
 /* BUTTONS */
 button {
@@ -237,6 +242,16 @@ button:active:not(:disabled) { transform: translateY(1px); }
   align-self: flex-start;
 }
 .btn-ghost:hover { color: var(--amber); border-color: var(--amber); }
+/* Sign out is not "Manage devices". Its own confirm dialog says the account
+   token is the only way back in, and .danger used to change nothing until the
+   pointer was already on it — at rest it sat in the row looking exactly like
+   the three reversible actions beside it. Recede it instead: no border until
+   hovered, dimmer text, and pushed to the end of the row. */
+.btn-ghost.danger {
+  border-color: transparent;
+  color: var(--ink-faint);
+  margin-left: auto;
+}
 .btn-ghost.danger:hover { color: var(--terra); border-color: var(--terra); }
 
 /* STATUS BLOCK */
@@ -363,22 +378,35 @@ button:active:not(:disabled) { transform: translateY(1px); }
   top: 16px; left: 50%;
   transform: translateX(-50%);
   pointer-events: none;
-  background: var(--bg-elev);
+  /* Filled, not outlined. It used to be --bg-elev with a thin amber border,
+     which is exactly what every card on this page looks like — so a toast
+     sitting in the header band read as chrome: "Signed in" looked like a
+     status badge beside the logo rather than a message about to disappear.
+     Solid amber is the same treatment as the primary button and cannot be
+     mistaken for part of the layout. Position stays at the top: it is the
+     one band with nothing interactive in it, and the previous bottom
+     anchoring covered the account card's buttons and swallowed their clicks. */
+  background: var(--amber);
   border: 1px solid var(--amber);
-  color: var(--ink);
+  color: var(--bg);
+  font-weight: 600;
   padding: 12px 20px;
   border-radius: var(--r-sm);
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
-  box-shadow: var(--shadow-lift);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .7);
   z-index: 100;
   animation: toast-in 0.3s ease-out;
 }
-.toast.error { border-color: var(--terra); }
+.toast.error { background: var(--terra); border-color: var(--terra); color: var(--ink); }
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, -20px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
+
+/* Field labels above their control, not beside it. <label> is inline by
+   default and "Send to" was sharing a line with the address input. */
+label.k { display: block; margin: 14px 0 6px; }
 
 .view { display: flex; flex-direction: column; gap: 16px; }
 .hidden { display: none !important; }

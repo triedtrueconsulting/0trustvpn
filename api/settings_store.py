@@ -34,9 +34,17 @@ from typing import Optional
 # a secret (masked in the UI and in the audit log). An allowlist rather than
 # free-form storage: an admin endpoint that can set arbitrary keys is an admin
 # endpoint that can set the ones we deliberately kept in the environment.
+#
+# "default" is what the service falls back to when nothing is set anywhere. It
+# is here so the dashboard can SHOW it: an unset field rendered as an empty box
+# tells the operator nothing, and "ZEC confirmations before crediting" left
+# blank could mean 1 or 5 — the number the invariant exists to pin down. It is
+# declared only for settings whose effective value the control plane publishes
+# or exposes, so test_admin.py can check each one against what the running
+# service actually does rather than against a second written-down copy.
 SETTING_SPECS: dict[str, dict] = {
     # --- payment provider selection ---
-    "ZTV_PAYMENT_PROVIDER": {"type": "choice", "secret": False,
+    "ZTV_PAYMENT_PROVIDER": {"type": "choice", "secret": False, "default": "watch",
                              "choices": ["watch", "btcpay", "hosted",
                                          "stripe", "square"],
                              "group": "payments",
@@ -78,6 +86,7 @@ SETTING_SPECS: dict[str, dict] = {
     "SQUARE_WEBHOOK_KEY": {"type": "text", "secret": True, "group": "square",
                            "label": "Webhook signature key"},
     "SQUARE_ENV": {"type": "choice", "secret": False, "group": "square",
+                   "default": "production",
                    "choices": ["production", "sandbox"],
                    "label": "Environment"},
 
@@ -101,12 +110,14 @@ SETTING_SPECS: dict[str, dict] = {
     "MONERO_WALLET_RPC": {"type": "url", "secret": False, "group": "monero",
                           "label": "monero-wallet-rpc URL (view-only)"},
     "MONERO_ACCOUNT_INDEX": {"type": "int", "secret": False, "group": "monero",
+                             "default": "0",
                              "label": "Wallet account index"},
     "MONERO_RPC_USER": {"type": "text", "secret": False, "group": "monero",
                         "label": "wallet-rpc username (if --rpc-login)"},
     "MONERO_RPC_PASSWORD": {"type": "text", "secret": True, "group": "monero",
                             "label": "wallet-rpc password"},
     "XMR_CONFIRMATIONS": {"type": "int", "secret": False, "group": "monero",
+                          "default": "10",
                           "label": "Confirmations before crediting (10 typical)"},
 
     # --- public chain endpoints ---
@@ -114,10 +125,12 @@ SETTING_SPECS: dict[str, dict] = {
     "NODE_RPC_BTC": {"type": "url", "secret": False, "group": "chain",
                      "label": "BTC explorer API (Esplora)"},
     "ZTV_BTC_CONFIRMATIONS": {"type": "int", "secret": False, "group": "chain",
+                              "default": "1",
                               "label": "BTC confirmations before crediting"},
     "NODE_RPC_ZEC": {"type": "url", "secret": False, "group": "chain",
                      "label": "ZEC explorer API (Blockchair or Esplora)"},
     "ZTV_ZEC_CONFIRMATIONS": {"type": "int", "secret": False, "group": "chain",
+                              "default": "5",
                               "label": "ZEC confirmations before crediting"},
     "ZTV_PRICE_API": {"type": "url", "secret": False, "group": "chain",
                       "label": "USD price ticker (Kraken by default)"},
@@ -126,12 +139,16 @@ SETTING_SPECS: dict[str, dict] = {
 
     # --- pricing / trials ---
     "ZTV_TRIAL_ENABLED": {"type": "bool", "secret": False, "group": "trial",
+                          "default": "1",
                           "label": "Free trials enabled"},
     "ZTV_TRIAL_DAYS": {"type": "int", "secret": False, "group": "trial",
+                       "default": "7",
                        "label": "Trial length (days)"},
     "ZTV_TRIAL_MAX_DEVICES": {"type": "int", "secret": False, "group": "trial",
+                              "default": "2",
                               "label": "Trial device limit"},
     "ZTV_TRIAL_POW_BITS": {"type": "int", "secret": False, "group": "trial",
+                           "default": "20",
                            "label": "Proof-of-work difficulty (bits)"},
 
     # --- operations ---

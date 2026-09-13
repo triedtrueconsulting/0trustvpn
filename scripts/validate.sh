@@ -274,6 +274,12 @@ check seo-jsonld "structured data matches the pages and the API's prices" -- \
 check vendor-integrity "vendored third-party JS matches its pinned hashes" -- \
     ./scripts/vendor-third-party.sh --check-only
 
+# The GUI's favicon is generated from the same geometry as the MSI icon and
+# the .desktop SVG, then committed. A committed generated file drifts from its
+# generator the moment someone edits one of them.
+check gui-favicon "the GUI favicon matches its generator" -- \
+    ./scripts/gen-favicon.py --check
+
 check json-parse "every .json parses" -- "$PY" -c '
 import json, os, sys
 bad = []

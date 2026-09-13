@@ -214,8 +214,17 @@ function toast(msg, kind = 'info') {
 
 async function refresh() {
   try {
+    const was = state && state.logged_in;
     state = await api('/api/state');
     render();
+    // The signed-out -> signed-in transition, detected in ONE place rather
+    // than bolted onto each button that can cause it. There are two today
+    // (sign in, claim a trial) and adding a third should not be a chance to
+    // forget this. Notices are on a 120-second timer, so without it a
+    // customer who signs in, reads their expiry and closes the window inside
+    // two minutes never saw the renewal warning sweep.py posted — and that
+    // banner is the only way one reaches anyone.
+    if (!was && state.logged_in) refreshNotices();
   } catch (e) {
     console.warn('state poll failed:', e);
   }
@@ -244,11 +253,20 @@ let noticeHandle = null;
 async function refreshNotices() {
   const box = $('notices');
   if (!box) return;
+  // Signed out, there is nothing to ask for and nowhere to show it. This used
+  // to fire on every cold start before anyone had logged in, which 401'd and
+  // put a red line in the console on every single session — noise that hides
+  // the errors worth seeing.
+  if (!state || !state.logged_in) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
   let list;
   try {
     list = await api('/api/notices');
   } catch (e) {
-    return;   // not signed in, or the control plane is unreachable
+    return;   // the control plane is unreachable; try again on the next poll
   }
   if (!Array.isArray(list) || list.length === 0) {
     box.classList.add('hidden');
@@ -322,7 +340,7 @@ $('login-btn').addEventListener('click', async () => {
   try {
     await api('/api/login', { method: 'POST', body: JSON.stringify({ token }) });
     toast('Signed in');
-    await refresh();
+    await refresh();   // picks up notices on the transition
   } catch (e) {
     $('login-err').textContent = e.message;
     $('login-err').classList.remove('hidden');
@@ -336,6 +354,7 @@ $('logout-btn').addEventListener('click', async () => {
     toast('Signed out');
     state = { logged_in: false };
     render();
+    refreshNotices();   // clears the banner; the next account's are not these
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -597,6 +616,11 @@ async function openInvoice(months, btn) {
   // invoices, and the customer pays whichever they happen to send to.
   const all = [...$('topup-terms').querySelectorAll('button')];
   all.forEach(b => b.disabled = true);
+  // Remember the real label. The finally below used to rebuild it as
+  // `${months} months`, dropping the "— $13" the button was created with, so
+  // clicking a term once left it permanently cheaper-looking than its
+  // neighbours and the customer could no longer see what it cost.
+  const label = btn.textContent;
   btn.textContent = 'opening…';
   try {
     const r = await api('/api/topup', {
@@ -624,7 +648,7 @@ async function openInvoice(months, btn) {
     err.classList.remove('hidden');
   } finally {
     all.forEach(b => b.disabled = false);
-    btn.textContent = `${months} month${months === 1 ? '' : 's'}`;
+    btn.textContent = label;
   }
 }
 
@@ -634,10 +658,11 @@ async function pollInvoice(id) {
       '/api/topup/status?invoice=' + encodeURIComponent(id))).json();
     const settled = /settled|paid|complete/i.test(s.status || '');
     $('topup-status').textContent = settled
-      ? 'paid — your account has been extended'
+      ? 'Paid — your account has been extended.'
       : (s.required
-          ? `${s.status} (${s.confirmations}/${s.required} confirmations)`
-          : String(s.status || 'waiting'));
+          ? `Payment ${s.status} — ${s.confirmations} of ${s.required} `
+            + `confirmations so far.`
+          : `Payment ${s.status || 'not seen yet'} — still watching.`);
     if (settled) { stopTopupPoll(); await refresh(); }
   } catch (e) { /* transient; the next tick tries again */ }
 }

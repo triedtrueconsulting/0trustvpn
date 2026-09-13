@@ -197,14 +197,18 @@ h2 {
   color: var(--ink);
   letter-spacing: 0.05em;
 }
-.region .small-dot {
+/* Not scoped to .region: the legend below uses the same dot, and while these
+   rules were `.region .small-dot` it got no size and no colour at all — three
+   state words with no swatch beside them, which is a legend that explains
+   nothing. */
+.small-dot {
   width: 9px; height: 9px;
   border-radius: 50%;
   flex-shrink: 0;
 }
-.region .small-dot.operational { background: var(--moss); }
-.region .small-dot.degraded    { background: var(--amber); }
-.region .small-dot.down        { background: var(--terra); }
+.small-dot.operational { background: var(--moss); }
+.small-dot.degraded    { background: var(--amber); }
+.small-dot.down        { background: var(--terra); }
 .region .label {
   margin-left: auto;
   font-family: 'JetBrains Mono', monospace;

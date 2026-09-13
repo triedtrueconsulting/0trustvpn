@@ -287,10 +287,14 @@ async function showAccount(id) {
             toast('Device removed'); showAccount(id); } }) },
       ])),
     el('h2', { text: 'Invoices' }),
-    table(['ID', 'Months', 'Amount', 'Status', 'Created'],
+    // A refund request arrives as a token, not an invoice id, so the operator
+    // gets here by searching the account. Sending them to the Payments tab to
+    // find the same invoice again is how a promised operation goes unused.
+    table(['ID', 'Months', 'Amount', 'Status', 'Created', ''],
       d.invoices.map((i) => [
         { node: el('code', { text: short(i.id, 20) }) }, String(i.months),
-        fmtMoney(i.amount_usd), i.status, fmtDate(i.created_at)])),
+        fmtMoney(i.amount_usd), i.status, fmtDate(i.created_at),
+        { node: invoiceAction(i, () => showAccount(id)) }])),
     el('h2', { text: 'Note' }), note,
     el('button', { class: 'small', text: 'Save note', onclick: async () => {
         await api(`/accounts/${id}/note`, { method: 'POST', body: { note: note.value } });
@@ -404,7 +408,11 @@ async function loadPayments() { await Promise.all([loadPayHealth(), loadInvoices
 async function loadPayHealth() {
   const h = await api('/payments/health');
   const ok = h.reachable;
-  $('pay-health').replaceChildren(
+  // replaceChildren() stringifies whatever it is handed, so a null argument
+  // becomes the literal text "null" on the page — which is what a correctly
+  // configured provider (nothing missing) rendered under its own table.
+  // el() already drops nulls; this is the one place that bypassed it.
+  $('pay-health').replaceChildren(...[
     table(['Provider', 'Reachable', 'Accepts', 'Detail'], [[
       { node: el('code', { text: h.provider }) },
       { node: el('span', { class: 'pill ' + (ok ? 'ok' : 'bad'),
@@ -416,13 +424,14 @@ async function loadPayHealth() {
       ? el('p', { class: 'note', text:
           'Not configured yet: ' + h.missing_settings.join(', ') +
           ' — set these under Settings, then re-check.' })
-      : null);
+      : null,
+  ].filter((c) => c !== null && c !== undefined));
 }
 
 // One cell, three states. A settled invoice needs the refund control that
 // terms.html §4 promises and that nothing used to offer — the operator sent
 // the coins back by hand and the account kept every day the payment bought.
-function invoiceAction(i) {
+function invoiceAction(i, after = loadInvoices) {
   if (i.status === 'refunded') {
     return el('span', { class: 'dim', text: 'refunded' });
   }
@@ -435,17 +444,21 @@ function invoiceAction(i) {
         `${i.months} month(s) it paid for back off the subscription.\n\n` +
         `Reason (optional, goes in the audit log):`, '');
       if (reason === null) return;
+      // api() stringifies the body itself. Pre-stringifying it here sent the
+      // server a JSON *string* where it wanted an object, so every click on
+      // this button returned 422 — the refund control terms.html §4 relies on
+      // never worked, and no test had ever clicked it.
       const r = await api(`/invoices/${i.id}/refund`,
-                          { method: 'POST', body: JSON.stringify({ reason }) });
+                          { method: 'POST', body: { reason } });
       toast(r.duplicate ? 'Already refunded'
                         : 'Recorded — now send the coins');
-      loadInvoices();
+      after();
     } });
   }
   return el('button', { class: 'small', text: 'Mark paid', onclick: async () => {
     if (!confirm(`Credit invoice ${i.id} by hand? Use this when the payment landed on chain but the webhook never arrived.`)) return;
     const r = await api(`/invoices/${i.id}/settle`, { method: 'POST' });
-    toast(r.duplicate ? 'Already settled' : 'Credited'); loadInvoices();
+    toast(r.duplicate ? 'Already settled' : 'Credited'); after();
   } });
 }
 
@@ -537,15 +550,21 @@ async function loadSettings() {
         let field;
         if (spec.type === 'choice') {
           field = el('select', { id, name: key }, (spec.choices || []).map(
-            (c) => el('option', { value: c, text: c, ...(c === spec.value ? { selected: 'selected' } : {}) })));
+            (c) => el('option', { value: c,
+              text: c === spec.default ? `${c} (default)` : c,
+              ...(c === (spec.value || spec.default) ? { selected: 'selected' } : {}) })));
         } else if (spec.type === 'bool') {
           field = el('select', { id, name: key }, ['1', '0'].map(
             (c) => el('option', { value: c, text: c === '1' ? 'enabled' : 'disabled',
               ...(String(spec.value) === c ? { selected: 'selected' } : {}) })));
         } else {
+          // A blank box tells the operator nothing about what the service is
+          // actually doing. Where the control plane publishes a fallback, show
+          // it — an empty "ZEC confirmations before crediting" could be 1 or 5.
           field = el('input', { id, name: key,
             type: spec.type === 'int' ? 'number' : 'text',
-            placeholder: spec.secret ? 'not set' : '' });
+            placeholder: spec.secret ? 'not set'
+                       : spec.default ? `default: ${spec.default}` : '' });
           field.value = spec.value || '';
         }
         return el('div', {}, [

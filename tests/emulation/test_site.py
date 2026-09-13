@@ -949,6 +949,37 @@ try:
           'value="refunded"' in adminhtml,
           "no filter means the operator cannot find what they refunded")
 
+    index_raw = open(os.path.join(H.REPO, "web", "index.html")).read()
+    index = " ".join(index_raw.split())
+    check("the landing page names what a refund actually requires",
+          "invoice ID" in index and "no reason needed" in index,
+          "'30-day money-back, no questions' promised less friction than "
+          "terms §4 has: the customer must ask, with the invoice id, "
+          "because we cannot reach them first")
+
+    # -----------------------------------------------------------------------
+    # The checkout says what closing the tab does, and it has to be true.
+    #
+    # Settlement is 0trust-poll.timer asking an explorer once a minute, server
+    # side. The page told the customer "DO NOT CLOSE UNTIL YOU SEE
+    # CONFIRMATION", which is false in the direction that costs money: a
+    # Monero invoice is ten confirmations away, and someone who closed the tab
+    # had every reason to think their payment was lost. The desktop GUI's
+    # top-up panel already says the true thing.
+    # -----------------------------------------------------------------------
+    print("\n[checkout] closing the tab does not cancel the invoice")
+    guijs = " ".join(open(os.path.join(
+        H.REPO, "client", "internal", "gui", "assets", "index.html")).read().split())
+    check("the signup checkout does not tell the customer to keep the tab open",
+          "DO NOT CLOSE" not in index.upper(),
+          "the invoice is watched server side; the tab does nothing")
+    check("it says so explicitly",
+          "CLOSING IT DOES NOT CANCEL THE INVOICE" in index.upper(),
+          "silence leaves the customer guessing, which is where they pay twice")
+    check("and the desktop top-up panel says the same thing",
+          "closing this window does not cancel it" in guijs,
+          "two surfaces describing one mechanism must not disagree")
+
     # ---------------------------------------------------------------------------
     # The rights section names commands. They have to exist and do what it says.
     #

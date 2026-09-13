@@ -98,8 +98,72 @@ try:
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
+        # Console errors as well as uncaught exceptions. A failed fetch never
+        # reaches pageerror, so a request that 401s on every cold start was
+        # invisible to this module for its whole life — and console noise is
+        # what hides the errors worth seeing.
+        console_errors = []
+        page.on("console",
+                lambda m: m.type == "error" and console_errors.append(m.text))
+        requests = []
+        page.on("requestfinished",
+                lambda r: requests.append((r.method, r.url)))
         page.goto(f"http://127.0.0.1:{GUI_PORT}/", timeout=30000)
         page.wait_for_selector("#view-login:not(.hidden)", timeout=20000)
+
+        # ------------------------------------------------------------------
+        # Every <input> carries a type, because the stylesheet keys on it.
+        #
+        # app.css styles `input[type="text"]`, and an attribute selector does
+        # not match an element that lacks the attribute. The top-up address
+        # field had no type: it behaved as text and rendered as the browser
+        # default — a cramped white-bordered box in the middle of a dark card,
+        # holding the one string in the payment flow a customer has to read
+        # exactly. Nothing caught it because nobody had looked at that panel.
+        # ------------------------------------------------------------------
+        # The window this GUI serves is a browser tab, and it had no icon:
+        # the browser asked for /favicon.ico, got a 404, and showed the
+        # generic blank-page glyph on the one window that is the product.
+        # Both names are asserted directly rather than inferred from the
+        # console — with the <link> tag present a browser never falls back to
+        # /favicon.ico, so a broken .ico route is invisible from the page.
+        print("[0b] the tab has the brand mark")
+        for path in ("/favicon.png", "/favicon.ico"):
+            resp = page.request.get(f"http://127.0.0.1:{GUI_PORT}{path}")
+            check(f"{path} is served",
+                  resp.status == 200
+                  and resp.headers.get("content-type", "").startswith("image/"),
+                  f"{resp.status} {resp.headers.get('content-type')}")
+            check(f"{path} is a real PNG, not an empty file",
+                  resp.body()[:8] == b"\x89PNG\r\n\x1a\n" and len(resp.body()) > 200,
+                  f"{len(resp.body())} bytes")
+        check("and the document declares it",
+              'rel="icon"' in page.content(),
+              "without the link the browser only tries /favicon.ico")
+
+        print("[0a] no input falls out of the stylesheet")
+        untyped = page.eval_on_selector_all(
+            "input",
+            "els => els.filter(e => !e.getAttribute('type'))"
+            "        .map(e => e.id || e.className || e.outerHTML.slice(0,60))")
+        styled_selector_covers_them = "input:not([type])" in open(
+            os.path.join(H.REPO, "client", "internal", "gui", "assets",
+                         "app.css")).read()
+        check("either every input is typed, or the stylesheet covers untyped ones",
+              not untyped or styled_selector_covers_them,
+              f"untyped inputs: {untyped} — and app.css only styles "
+              f"input[type=\"text\"], so these render as browser defaults")
+
+        print("[0] a cold, signed-out load is quiet")
+        page.wait_for_timeout(1500)
+        check("nothing errors in the console before anyone signs in",
+              not console_errors,
+              f"{console_errors} — this was a 401 from /api/notices, asked "
+              f"for while logged out on every single start")
+        asked = [u for m, u in requests if u.endswith("/api/notices")]
+        check("and notices are not requested while signed out",
+              not asked,
+              "there is no token to send and nowhere to show the result")
 
         print("[1] logged-out view offers the free trial")
         check("login view shown", page.is_visible("#view-login"))
@@ -120,6 +184,21 @@ try:
         dev = page.inner_text("#kv-dev").strip()
         check("device cap shows the trial limit of 2", dev.endswith("/ 2"), dev)
         check("no JS errors so far", not errors, errors)
+        check("and none in the console either", not console_errors,
+              console_errors)
+
+        # refreshNotices' own comment: "this banner is the only way a renewal
+        # warning reaches anyone. If it is not rendered here, it is not
+        # delivered at all." The only fetch used to happen at boot, while
+        # logged out, where it 401'd — after that the next attempt was 120
+        # seconds away, so signing in, reading your expiry and closing the
+        # window inside two minutes showed you nothing.
+        page.wait_for_timeout(1200)
+        after = [u for m, u in requests if u.endswith("/api/notices")]
+        check("signing in fetches notices immediately, not in two minutes",
+              after,
+              "sweep.py posts the renewal warning and this banner is the only "
+              "surface that shows it")
 
         print("\n[3] connect through the GUI")
         # Bringing a tunnel up needs root — wg-quick writes routes — and the

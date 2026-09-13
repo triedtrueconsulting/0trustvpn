@@ -1184,6 +1184,9 @@ def get_settings(admin: dict = Depends(current_admin)):
             "choices": spec.get("choices"),
             "group": spec.get("group", "other"),
             "label": spec.get("label", key),
+            # What the service does when this is blank, so the dashboard can
+            # render it rather than showing an empty box that means nothing.
+            "default": spec.get("default", ""),
             "from_db": key in sources,
             **({"updated": sources[key]} if key in sources else {}),
         }

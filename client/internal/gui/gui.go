@@ -44,6 +44,16 @@ var appCSS []byte
 //go:embed assets/app.js
 var appJS []byte
 
+// The window this serves is a browser tab, and it had no icon: the browser
+// asked for /favicon.ico on every start, got a 404, and showed the generic
+// blank-page glyph on the one window that is the product. Generated from the
+// same geometry as the MSI icon and the .desktop SVG by
+// scripts/gen-favicon.py, so the mark cannot drift between the four places
+// it appears.
+//
+//go:embed assets/favicon.png
+var faviconPNG []byte
+
 // The brand faces, embedded rather than fetched.
 //
 // index.html linked fonts.googleapis.com, which is wrong twice over in a
@@ -95,6 +105,10 @@ func Serve(openBrowser bool) error {
 	mux.HandleFunc("/", handleIndex)
 	mux.HandleFunc("/app.css", handleCSS)
 	mux.HandleFunc("/app.js", handleJS)
+	// Both names: the <link> in index.html points at the PNG, and a browser
+	// asks for /favicon.ico regardless of what the document declares.
+	mux.HandleFunc("/favicon.png", handleFavicon)
+	mux.HandleFunc("/favicon.ico", handleFavicon)
 	// Served straight out of the embedded FS; the paths in faces.css are
 	// /fonts/<file>, the same shape the website uses.
 	mux.Handle("/fonts/", http.StripPrefix("/fonts/",
@@ -232,6 +246,15 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 func handleCSS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	_, _ = w.Write(appCSS)
+}
+
+func handleFavicon(w http.ResponseWriter, r *http.Request) {
+	// Served as PNG under both names. Every browser this GUI runs in reads a
+	// PNG offered at /favicon.ico perfectly well — the extension is a
+	// convention, the Content-Type is what decides.
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "max-age=86400")
+	_, _ = w.Write(faviconPNG)
 }
 
 func handleJS(w http.ResponseWriter, r *http.Request) {
