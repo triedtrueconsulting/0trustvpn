@@ -243,6 +243,32 @@ try:
     rc, out = cli("topup")
     check("topup with no months explains rather than erroring blankly",
           "how many months" in out, out[-300:])
+    # And lists what this deployment actually sells, read from
+    # /api/v1/config. A term written into the binary is bug class #11 with
+    # money attached: an operator changing PRICING would have the CLI quoting
+    # something nobody can buy.
+    for months, usd in sorted(api_main.PRICING.items()):
+        check(f"and offers {months} month(s) at ${usd:.0f}",
+              f"{months} (${usd:.0f})" in out, out[-300:])
+
+    # A term the service does not sell is refused here, with a sentence.
+    # `topup 7` used to reach the API and print FastAPI's nested validation
+    # JSON straight at the customer.
+    bad = max(api_main.PRICING) + 5
+    rc, out = cli("topup", str(bad))
+    check("a term that is not on offer is refused in a sentence",
+          rc != 0 and "not a term this service sells" in out, out[-300:])
+    check("and the refusal shows no raw JSON",
+          '"loc"' not in out and '"ctx"' not in out and "value_error" not in out,
+          out[-400:])
+
+    # The same discipline on an error that does come from the server: the
+    # readable half of the body, not the envelope around it.
+    rc, out = cli("topup", "--status", "no-such-invoice")
+    check("a server-side error reads as a sentence",
+          rc != 0 and "Invoice not found" in out, out[-300:])
+    check("and not as the JSON it arrived in",
+          '{"detail"' not in out and "api 404" not in out, out[-300:])
 
     rc, out = cli("topup", "1")
     check("topup opens an invoice", rc == 0 and "invoice" in out.lower(),
@@ -319,6 +345,17 @@ try:
     # The help has to name it, or nobody finds it from the terminal.
     rc, out = cli("help")
     check("help documents topup", "topup" in out, out[-400:])
+
+    print("\n[13] signing out says it happened")
+    # It wiped the only copy of the credential on this machine and printed
+    # nothing, which reads as "did that work?" at the one moment it matters.
+    rc, out = cli("logout")
+    check("logout confirms rather than going silent",
+          rc == 0 and out.strip() != "", repr(out))
+    check("and says the account itself is untouched",
+          "account" in out.lower() and "untouched" in out.lower(), out)
+    rc, out = cli("status")
+    check("and the token really is gone", "not logged in" in out, out)
 
 finally:
     H.shutdown()

@@ -293,7 +293,16 @@ func cmdLogout() error {
 			_ = wg.Down()
 		}
 	}
-	return config.Clear()
+	if err := config.Clear(); err != nil {
+		return err
+	}
+	// Say it happened. Every other command answers; this one wiped the only
+	// copy of the credential on this machine and said nothing, which reads
+	// as "did that work?" at exactly the moment it matters — and the token
+	// cannot be recovered from us if it turns out they had not saved it.
+	fmt.Println("✓ signed out — local state wiped")
+	fmt.Println("  the account itself is untouched; sign back in with your token")
+	return nil
 }
 
 func cmdStatus() error {

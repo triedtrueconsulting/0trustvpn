@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -86,8 +87,65 @@ type APIError struct {
 	Body   string
 }
 
+// Error renders what the customer should read, not what the wire carried.
+//
+// FastAPI answers a rejected field with a nested list — {"detail":[{"loc":
+// ["body","months"],"msg":"Value error, months must be one of [1, 3, 12]",
+// ...}]} — and the CLI printed that verbatim, so asking to top up for seven
+// months answered with a wall of JSON containing the one sentence that
+// mattered. Both of FastAPI's shapes carry a human message; this finds it.
 func (e *APIError) Error() string {
+	if msg := detailOf(e.Body); msg != "" {
+		return msg
+	}
 	return fmt.Sprintf("api %d: %s", e.Status, e.Body)
+}
+
+// detailOf pulls the readable half out of a FastAPI error body, or "" when
+// the body is not one — a proxy's HTML 502 page, say, which is better shown
+// with its status code than paraphrased.
+func detailOf(body string) string {
+	var envelope struct {
+		Detail json.RawMessage `json:"detail"`
+	}
+	if json.Unmarshal([]byte(body), &envelope) != nil || len(envelope.Detail) == 0 {
+		return ""
+	}
+	var plain string
+	if json.Unmarshal(envelope.Detail, &plain) == nil {
+		return plain
+	}
+	var items []struct {
+		Loc []json.RawMessage `json:"loc"`
+		Msg string            `json:"msg"`
+	}
+	if json.Unmarshal(envelope.Detail, &items) != nil {
+		return ""
+	}
+	var parts []string
+	for _, it := range items {
+		if it.Msg == "" {
+			continue
+		}
+		// "Value error, " is framework noise in front of the real sentence.
+		msg := strings.TrimPrefix(it.Msg, "Value error, ")
+		// The last path element names the field; "body" alone names nothing.
+		if field := lastField(it.Loc); field != "" && !strings.HasPrefix(msg, field) {
+			msg = field + ": " + msg
+		}
+		parts = append(parts, msg)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func lastField(loc []json.RawMessage) string {
+	for i := len(loc) - 1; i >= 0; i-- {
+		var s string
+		if json.Unmarshal(loc[i], &s) == nil && s != "body" && s != "query" {
+			return s
+		}
+	}
+	return ""
 }
 
 type Status struct {
@@ -253,6 +311,24 @@ type PayStatus struct {
 }
 
 // Topup opens an invoice that extends this account.
+// Config is the public /api/v1/config, narrowed to what the CLI needs. The
+// terms and their prices belong to the control plane: an operator can change
+// PRICING, and a client that has them written down starts quoting a price
+// nobody can pay (bug class #11, which has already shipped three times with
+// the device cap).
+type Config struct {
+	Pricing []struct {
+		Months int     `json:"months"`
+		USD    float64 `json:"usd"`
+	} `json:"pricing"`
+}
+
+func (c *Client) Config() (*Config, error) {
+	var out Config
+	err := c.do("GET", "/api/v1/config", nil, &out)
+	return &out, err
+}
+
 func (c *Client) Topup(req TopupReq) (*TopupResp, error) {
 	var out TopupResp
 	if err := c.do("POST", "/api/v1/account/topup", req, &out); err != nil {

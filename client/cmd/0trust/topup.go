@@ -72,8 +72,21 @@ func cmdTopup(args []string) error {
 		fmt.Println()
 	}
 
+	// The terms and their prices belong to the control plane, so ask it
+	// rather than printing what this binary was compiled believing. An
+	// operator who changes PRICING should not have to ship a new client, and
+	// a price written into one is bug class #11 with money attached.
+	//
+	// Checking here also means a bad term costs no round trip and reads like
+	// a sentence: `topup 7` used to reach the API and come back as FastAPI's
+	// nested validation JSON, printed verbatim at the customer.
+	offered, offerErr := c.Config()
 	if months == 0 {
-		return fmt.Errorf("how many months? try: 0trust topup 1   (or 3, or 12)")
+		return fmt.Errorf("how many months? %s", termsHint(offered, offerErr))
+	}
+	if offerErr == nil && len(offered.Pricing) > 0 && !offers(offered, months) {
+		return fmt.Errorf("%s is not a term this service sells — %s",
+			plural(months, "month"), termsHint(offered, nil))
 	}
 
 	resp, err := c.Topup(api.TopupReq{Months: months, Currency: currency})
@@ -179,4 +192,29 @@ func cmdTopupStatus(id string) error {
 	}
 	fmt.Println()
 	return nil
+}
+
+func offers(cfg *api.Config, months int) bool {
+	for _, p := range cfg.Pricing {
+		if p.Months == months {
+			return true
+		}
+	}
+	return false
+}
+
+// termsHint lists what this deployment actually sells, with prices. If the
+// control plane could not be reached it says so rather than inventing a
+// list — a guess here is a customer told to pay an amount that is not on
+// offer.
+func termsHint(cfg *api.Config, err error) string {
+	if err != nil || cfg == nil || len(cfg.Pricing) == 0 {
+		return "could not reach the control plane to ask what is on offer; " +
+			"try again, or see 0trustvpn.com/renew"
+	}
+	parts := make([]string, 0, len(cfg.Pricing))
+	for _, p := range cfg.Pricing {
+		parts = append(parts, fmt.Sprintf("%d ($%.0f)", p.Months, p.USD))
+	}
+	return "months on offer: " + strings.Join(parts, ", ")
 }
