@@ -63,6 +63,15 @@
 #   --skip-preflight         skip the host checks (disk, ports, DNS,
 #                            WireGuard support) that run before anything
 #                            is changed
+#   --cloudflare             (production) Cloudflare proxies this origin.
+#                            Installs the realip config so nginx takes the
+#                            client address from CF-Connecting-IP, and only
+#                            from Cloudflare's own ranges. Without it every
+#                            rate limit, the admin lockout and the access log
+#                            see a Cloudflare edge instead of the visitor.
+#   --cloudflare-lock-origin (production) the above, and firewall 80/443 to
+#                            Cloudflare's ranges so nobody reaches the origin
+#                            directly. Implies --cloudflare.
 #   --backup-key <age1...>   (production) encrypt nightly backups to this age
 #                            PUBLIC key and enable the timer. Without it the
 #                            backup unit stays installed and disabled, as it
@@ -87,6 +96,11 @@ MODE="" DOMAIN="" EMAIL=""
 # nothing.
 INTERACTIVE="${ZTV_INTERACTIVE:-auto}"
 DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1 SKIP_PREFLIGHT=0
+# Cloudflare in front of the origin. Off by default: turning it on when it is
+# not true would have nginx believe a CF-Connecting-IP header from an address
+# that is not Cloudflare's, and the script refuses to write a list it could
+# not fetch, so the wrong answer here fails loudly rather than quietly.
+BEHIND_CLOUDFLARE=0 CF_LOCK_ORIGIN=0
 # Set when a post-install check found the box not actually serving.
 INSTALL_DEGRADED=0
 # Set when the mesh step could not bring the WireGuard interfaces up, so the
@@ -197,6 +211,8 @@ while [[ $# -gt 0 ]]; do
         --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         --no-ssh-hardening) DO_SSH=0; shift ;;
         --no-vpn) DO_VPN=0; shift ;;
+        --cloudflare) BEHIND_CLOUDFLARE=1; shift ;;
+        --cloudflare-lock-origin) BEHIND_CLOUDFLARE=1; CF_LOCK_ORIGIN=1; shift ;;
         --wallet) WALLET_BTC="${2:-}"; shift 2 ;;
         --backup-key) BACKUP_RECIPIENT="${2:-}"; shift 2 ;;
         --control-url) CONTROL_URL="${2:-}"; shift 2 ;;
@@ -1905,6 +1921,36 @@ if [[ $DRY_RUN -eq 0 ]]; then
     ln -sf "$NGINX_SITE" /etc/nginx/sites-enabled/0trust
     rm -f /etc/nginx/sites-enabled/default
 
+    # --- Cloudflare: take the client address from the edge, not the socket ---
+    #
+    # Everything that reads $remote_addr is wrong behind a proxy, and this
+    # deployment reads it four times: the six limit_req zones, X-Real-IP (the
+    # admin lockout and the audit log), and the anonymising log map. The
+    # script fetches Cloudflare's published ranges and refuses to write a list
+    # it could not verify, so a failure here leaves the box attributing every
+    # request to a Cloudflare edge — which is bad enough to stop the install.
+    if [[ $BEHIND_CLOUDFLARE -eq 1 ]]; then
+        log "Cloudflare: restoring the real client address"
+        install -m 0755 "$REPO_DIR/scripts/cloudflare-ips.sh" \
+                "$PREFIX/scripts/cloudflare-ips.sh"
+        if "$PREFIX/scripts/cloudflare-ips.sh"; then
+            install -m 0644 "$REPO_DIR/systemd/0trust-cloudflare-ips.service" \
+                    /etc/systemd/system/0trust-cloudflare-ips.service
+            install -m 0644 "$REPO_DIR/systemd/0trust-cloudflare-ips.timer" \
+                    /etc/systemd/system/0trust-cloudflare-ips.timer
+            systemctl daemon-reload
+            systemctl enable --now 0trust-cloudflare-ips.timer >/dev/null 2>&1 || true
+            ok "client addresses restored; weekly refresh timer enabled"
+        else
+            die "could not install the Cloudflare trust list (see above).
+    Without it every rate limit, the admin lockout and the access log see a
+    Cloudflare edge address instead of the visitor — the signup and trial
+    limits stop limiting anyone, and eight failed logins from anywhere lock
+    the operator out. Fix outbound HTTPS on this box and re-run, or drop
+    --cloudflare if this origin is not actually behind Cloudflare."
+        fi
+    fi
+
     if [[ "$MODE" == "production" && ! -d "/etc/letsencrypt/live/$DOMAIN" ]]; then
         log "Obtaining a Let's Encrypt certificate for $DOMAIN"
         # The TLS server block references a certificate that does not exist
@@ -2027,11 +2073,44 @@ if [[ $DRY_RUN -eq 0 ]]; then
     ufw --force default deny incoming
     ufw --force default allow outgoing
     ufw allow 22/tcp comment 'ssh'
-    ufw allow 80/tcp comment 'http'
-    [[ "$MODE" == "production" ]] && ufw allow 443/tcp comment 'https'
-    ufw --force enable
+    if [[ $CF_LOCK_ORIGIN -eq 1 ]]; then
+        # Only Cloudflare may reach the web tier. Two reasons, and the second
+        # is the one that matters here: a visitor who finds the origin address
+        # bypasses the WAF and the rate limiting Cloudflare does, AND their
+        # request arrives without CF-Connecting-IP, so nginx falls back to the
+        # socket address — correct, but it means the origin is reachable by a
+        # path nothing in front of it is watching. Publishing an AAAA/A record
+        # that points at the origin defeats this; keep the record proxied.
+        #
+        # Port 22 stays open to everything on purpose: locking ssh to
+        # Cloudflare's ranges would lock YOU out, because Cloudflare does not
+        # proxy ssh. fail2ban and harden_sshd cover that port.
+        cf_ranges="$($PREFIX/scripts/cloudflare-ips.sh --print 2>/dev/null \
+                     | grep -oP '(?<=^set_real_ip_from )[^;]+' || true)"
+        if [[ -z "$cf_ranges" ]]; then
+            die "--cloudflare-lock-origin needs Cloudflare's ranges and they
+    could not be fetched. Opening 80/443 to the whole internet while you
+    believe they are locked is worse than not asking for the lock, so
+    nothing has been changed here."
+        fi
+        n=0
+        while read -r cidr; do
+            [[ -n "$cidr" ]] || continue
+            ufw allow from "$cidr" to any port 80 proto tcp \
+                comment 'cloudflare http' >/dev/null
+            [[ "$MODE" == "production" ]] && ufw allow from "$cidr" to any \
+                port 443 proto tcp comment 'cloudflare https' >/dev/null
+            n=$((n+1))
+        done <<< "$cf_ranges"
+        ufw --force enable
+        ok "ufw: 22 open, 80/443 restricted to $n Cloudflare prefixes"
+    else
+        ufw allow 80/tcp comment 'http'
+        [[ "$MODE" == "production" ]] && ufw allow 443/tcp comment 'https'
+        ufw --force enable
+        ok "ufw: 22, 80$([[ "$MODE" == production ]] && echo ', 443')"
+    fi
 fi
-ok "ufw: 22, 80$([[ "$MODE" == production ]] && echo ', 443')"
 fi
 
 # ----------------------------------------------------------------------------

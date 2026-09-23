@@ -380,6 +380,56 @@ check node-nat-table "Exit NAT table is loaded (mesh nodes)" -- bash -c "
     }
 "
 
+check cdn-disclosed "A CDN in front of the origin is disclosed to customers" -- bash -c "
+    # Cloudflare terminates TLS, so it reads every request it fronts. For a
+    # product whose pitch is that we cannot hand over what we never collected,
+    # a third party that CAN hand it over is not a footnote.
+    #
+    # The gate runs both ways on purpose. Behind a CDN with no disclosure is
+    # the drift; a disclosure on a deployment that has no CDN is a claim about
+    # a company that is not in the path, which is its own kind of false.
+    realip=/etc/nginx/conf.d/0trust-realip.conf
+    priv=\$(ls /var/www/0trust/privacy.html /opt/0trust/web/privacy.html 2>/dev/null | head -1)
+    [[ -n \$priv ]] || exit 77
+    behind=0; [[ -f \$realip ]] && behind=1
+    said=0; grep -q 'content-delivery-network' \$priv && said=1
+    if (( behind == 1 && said == 0 )); then
+        echo 'this origin sits behind a CDN and privacy.html does not say so'
+        echo 'a third party reads every request and the policy denies there is one'
+        exit 1
+    fi
+    if (( behind == 0 && said == 1 )); then
+        echo 'privacy.html discloses a CDN this deployment is not behind'
+        exit 1
+    fi
+    (( behind == 1 )) && echo 'behind a CDN, and privacy.html §5a says what it sees'
+    (( behind == 0 )) && echo 'no CDN in front of this origin, and none claimed'
+    exit 0
+"
+
+check cdn-realip-not-wildcard "The CDN trust list cannot be the whole internet" -- bash -c "
+    # set_real_ip_from decides who is believed when they send CF-Connecting-IP.
+    # A wildcard there turns the header into 'pick your own address': every
+    # rate limit stops applying, the admin lockout can be dodged one forged
+    # address at a time, and the audit log records whoever the attacker felt
+    # like being. It is one line away from the correct config and invisible
+    # once written, so it gets its own check.
+    conf=/etc/nginx/conf.d/0trust-realip.conf
+    [[ -f \$conf ]] || exit 77
+    if grep -Eq '^[[:space:]]*set_real_ip_from[[:space:]]+(0\.0\.0\.0/0|::/0)[[:space:]]*;' \$conf; then
+        echo 'set_real_ip_from trusts every address - CF-Connecting-IP is forgeable'
+        exit 1
+    fi
+    n=\$(grep -c '^set_real_ip_from' \$conf || true)
+    (( n > 0 )) || { echo 'no trusted ranges: client addresses are not restored'; exit 1; }
+    grep -q '^real_ip_header CF-Connecting-IP' \$conf || {
+        echo 'the realip header is not CF-Connecting-IP'
+        exit 1
+    }
+    echo \"\$n Cloudflare prefixes trusted, no wildcard\"
+    exit 0
+"
+
 check node-dns-no-query-log "In-tunnel resolver keeps no query log (mesh nodes)" -- bash -c "
     # privacy.html \u00a74d says the resolver on the node does not log what
     # customers look up. That is a claim about a config file, so check it.

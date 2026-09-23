@@ -697,6 +697,7 @@ is fixed; a backup cannot contain data the schema doesn't store.
 | Service | Hosted by | What it sees |
 |---------|-----------|--------------|
 | BTCPay Server | 0trust (separate host) | Crypto addresses, TX IDs, USD amounts. Sends webhook to control plane on settle. |
+| **Cloudflare** | Cloudflare, Inc. (US) | **Everything it carries, in clear.** TLS terminates at their edge, so for every request they front they see the URL, the headers and the visitor's real IP. For the marketing site that is which pages were read and from where. **If `/api/v1/` is served from a proxied hostname they also see `X-Account-Token` — the whole customer credential — and the admin session cookie and password on login.** The VPN tunnel is NOT in this path: it runs device → mesh node over WireGuard and never touches Cloudflare. Disclosed in privacy.html §5a. The origin restores the true client address from `CF-Connecting-IP` (`scripts/cloudflare-ips.sh`), trusted only from Cloudflare's published ranges, so rate limiting, the admin lockout and the anonymised log key on the visitor rather than an edge. Verified by `cdn-disclosed` and `cdn-realip-not-wildcard`. |
 | Let's Encrypt | LE / EFF | The domain `0trustvpn.com`. No customer data. |
 | DNS provider | (operator's choice) | DNS queries for `0trustvpn.com`. No customer data. |
 | Quad9 (`9.9.9.9`) | Upstream for the in-tunnel resolver, over DNS-over-TLS (RFC 7858, port 853), authenticated against `dns.quad9.net` | Customer DNS queries, sourced from the exit node's address. Not attributable to an account, and not readable by anyone between the node and Quad9. Configurable per deployment (`ZTV_DNS_TLS_UPSTREAM`); `ZTV_DNS_ENCRYPTED=0` reverts to cleartext UDP 53 and the resolver config says so in a comment. Verified by `node-dns-encrypted-upstream`. |
@@ -794,6 +795,8 @@ document. If one fails, the claim above it is the one that needs answering.
 |-------|--------------------|
 | `node-egress-filter` | Abuse egress filter is loaded (mesh nodes) |
 | `node-nat-table` | Exit NAT table is loaded (mesh nodes) |
+| `cdn-disclosed` | A CDN in front of the origin is disclosed to customers |
+| `cdn-realip-not-wildcard` | The CDN trust list cannot be the whole internet |
 | `node-dns-no-query-log` | In-tunnel resolver keeps no query log (mesh nodes) |
 | `node-dns-encrypted-upstream` | Upstream DNS leaves the node over TLS (mesh nodes) |
 

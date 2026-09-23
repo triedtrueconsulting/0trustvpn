@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly refresh of Cloudflare's published IP ranges
+
+[Timer]
+# Cloudflare adds prefixes occasionally, not often. Weekly is frequent
+# enough that a new range is trusted within days, and the randomised delay
+# keeps every 0trust deployment from asking at the same instant.
+OnBootSec=10min
+OnCalendar=weekly
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

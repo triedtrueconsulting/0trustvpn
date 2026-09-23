@@ -330,9 +330,11 @@ status</code> shows which of the two you have.</p>
 <h2 id="we-use-no-third-party-trackers">5. We use no third-party trackers</h2>
 <p>
   Our website serves no advertising, no analytics, and no third-party
-  scripts. Our pages contact no external origin at all: the typefaces used
-  to come from Google Fonts and are now served from this site, so loading
-  any page here tells nobody but us. We do not use cookies for tracking. The single piece of
+  scripts. Your browser contacts no external origin at all: the typefaces used
+  to come from Google Fonts and are now served from this site, so no other
+  company is told which of our pages you opened. Our
+  content delivery network is the one exception, and &sect;5a says exactly
+  what it sees. We do not use cookies for tracking. The single piece of
   client-side state is your account token, which never leaves your device
   except as a hash sent to authenticate API requests.
 </p>
@@ -347,6 +349,55 @@ status</code> shows which of the two you have.</p>
   arrived from, or what they clicked. There is no script and no identifier
   anywhere on this site that could answer that, and we would rather not be
   able to answer it than install one.
+</p>
+
+<h2 id="content-delivery-network">5a. Our content delivery network</h2>
+<p>
+  This website is served through <strong>Cloudflare</strong>, and being
+  precise about that matters more here than the convenience is worth
+  glossing over. Cloudflare is a content delivery network: your browser
+  connects to a Cloudflare server near you rather than to ours, and
+  Cloudflare opens a second connection to our origin. That means
+  <strong>the encryption between you and this page ends at Cloudflare, not
+  at us</strong>. They can see every request they carry, in clear, and they
+  see your real IP address because they are the ones you connected to.
+</p>
+<p>
+  What that covers, honestly: which pages you read on this site, when, and
+  from what address. Cloudflare is a United States company, and a US company
+  can be compelled by US process. We chose it anyway because the alternative
+  &mdash; a single origin server absorbing traffic and denial-of-service
+  attempts directly &mdash; is a worse outage risk for a service people rely
+  on to get online, and because what it carries is a public marketing site.
+  You are entitled to disagree with that trade, which is why it is written
+  here in as many words rather than left in a subprocessor list.
+</p>
+<p>
+  <strong>What it does not cover, and this is the part that matters.</strong>
+  Your VPN traffic never touches Cloudflare. The tunnel runs from your device
+  to a mesh node in Zurich, Reykjavik or Bucharest over WireGuard, and
+  Cloudflare is not in that path at any point &mdash; it fronts the website,
+  not the network. Reading this page and using the VPN are two different
+  connections to two different places.
+</p>
+<p>
+  Whether Cloudflare also sees your <em>account token</em> depends on one
+  deployment choice, so here is how to tell rather than taking our word for
+  it. If <code>api.0trustvpn.com</code> resolves to an address that is not
+  Cloudflare's, the control plane is reached directly and your token never
+  crosses them. If the API is served from this same proxied hostname, then
+  Cloudflare does carry your token on every authenticated request, because
+  it carries the whole request. Run <code>dig api.0trustvpn.com</code> and
+  compare against <a href="https://www.cloudflare.com/ips/">Cloudflare's
+  published ranges</a>; our audit pack documents the same check, and
+  <code>scripts/audit-verify.sh</code> reports which of the two this
+  deployment is doing.
+</p>
+<p>
+  We keep no logs at the origin beyond the two-day anonymised access log
+  described above. Cloudflare keeps its own logs under its own policy, on
+  its own schedule, and we cannot make a promise on their behalf &mdash; so
+  we do not.
 </p>
 
 <h2 id="legal-requests-and-the-warrant-canary">6. Legal requests &amp; the warrant canary</h2>

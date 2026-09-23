@@ -1,0 +1,26 @@
+[Unit]
+Description=Refresh the Cloudflare ranges nginx takes the client address from
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Root: it writes /etc/nginx/conf.d and reloads nginx. The script tests the
+# config before replacing it and reverts if nginx refuses, because this runs
+# unattended and a bad conf.d file takes the whole web tier down on reload.
+ExecStart=/opt/0trust/scripts/cloudflare-ips.sh
+
+# A failed refresh leaves the previous list in place, which is the right
+# outcome: a stale list still restores nearly every address, and a guessed
+# one would trust ranges that are not Cloudflare's.
+SuccessExitStatus=0
+
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
