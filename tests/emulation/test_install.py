@@ -1318,6 +1318,71 @@ http {{
           and "region/role   buc / both" in out,
           out[-600:])
 
+    print("\n[9] the box patches itself, and the token stays out of argv")
+    # A mesh node exposes sshd and a WireGuard port to the whole internet and
+    # is built to run untouched for months -- the RAM-only design means nobody
+    # logs in. Nobody logging in and nobody patching are the same sentence
+    # unless something applies updates on its own.
+    src = open(INSTALL).read()
+    for role, args in (("node", ("--mode", "node", "--control-url", "https://c.example",
+                                 "--region", "zur", "--provision-token",
+                                 "ztvp-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
+                       ("control plane", ("--mode", "production", "--domain",
+                                          "example.com", "--email", "a@example.com"))):
+        rc, out = run_installer(*args)
+        check(f"a {role} install enables unattended security upgrades",
+              "unattended security upgrades" in out,
+              out[-400:] + "\n  an unpatched box is the ordinary way a fleet gets owned")
+
+    # Security origins only, and no surprise reboot. Upgrading everything on
+    # its own means WireGuard or nftables behaviour can change overnight on a
+    # box whose correctness rests on both; rebooting on its own drops every
+    # tunnel the node was carrying.
+    conf = src[src.index("51-0trust-unattended"):src.index("AUEOF")]
+    check("only the security pockets are configured",
+          "-security" in conf and "Origins-Pattern" in conf, conf[:200])
+    check("and nothing reboots itself",
+          'Automatic-Reboot "false"' in conf,
+          "a node reboot is a rejoin, but it still drops live tunnels")
+    check("unused kernels are removed so /boot cannot fill",
+          'Remove-Unused-Kernel-Packages "true"' in conf,
+          "a full /boot makes apt fail silently for everything else")
+    # systemctl enable returning 0 says nothing about whether the config
+    # parses -- the standard the rest of this installer is held to.
+    # Matched as the CONDITIONAL, not as a bare substring: the first version
+    # of this check looked for "unattended-upgrades --dry-run" anywhere, and
+    # the note telling the operator what to run when it fails contains that
+    # string too. Deleting the real verification left the check green,
+    # reading back the help text about itself -- bug class #17, met while
+    # writing the guard against it.
+    check("the config is proven to parse, not just enabled",
+          re.search(r"if\s+unattended-upgrades\s+--dry-run", src) is not None,
+          "enabling a unit is not evidence it can do anything")
+
+    # A token in argv is in the shell history afterwards and in `ps` for any
+    # local user while the install runs.
+    tokfile = os.path.join(TMP, "tok")
+    open(tokfile, "w").write("ztvp-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n")
+    rc, out = run_installer("--mode", "node", "--control-url", "https://c.example",
+                  "--region", "zur", "--provision-token-file", tokfile)
+    check("a node can take its token from a file", rc == 0, out[-400:])
+    rc, out = run_installer("--mode", "node", "--control-url", "https://c.example",
+                  "--region", "zur", "--provision-token-file",
+                  os.path.join(TMP, "does-not-exist"))
+    check("and an unreadable one is refused rather than ignored",
+          rc != 0 and "cannot read" in out, out[-300:])
+    env = {**os.environ, "TERM": "dumb",
+           "ZTV_PROVISION_TOKEN": "ztvp-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}
+    r = subprocess.run(["bash", INSTALL, "--dry-run", "--mode", "node",
+                        "--control-url", "https://c.example", "--region", "zur"],
+                       capture_output=True, text=True, timeout=180, env=env)
+    check("cloud-init can pass it in the environment instead",
+          r.returncode == 0, (r.stdout + r.stderr)[-400:])
+    rc, out = run_installer("--mode", "node", "--control-url", "https://c.example",
+                  "--region", "zur")
+    check("and with no token from any source the install still refuses",
+          rc != 0 and "provisioning token" in out, out[-300:])
+
 finally:
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL: print("  failures: " + ", ".join(FAIL))

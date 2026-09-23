@@ -49,6 +49,10 @@
 #   --control-url <url>      (node) the control plane to join
 #   --provision-token <tok>  (node) minted on the control plane — see
 #                            api/mint-provision-token.py or the dashboard
+#   --provision-token-file <p>  (node) read it from a file instead, so the
+#                            credential is not in argv, `ps` or the shell
+#                            history. ZTV_PROVISION_TOKEN does the same for
+#                            cloud-init.
 #   --region <code>          (node) zur | rey | buc
 #   --role entry|exit|both   (node) default both
 #   --wg-port <port>         (node) default 51820
@@ -146,6 +150,72 @@ install_fail2ban_jail() {
 # Was production-only. Mesh nodes run `ufw allow 22/tcp` and got none of it,
 # which left password auth open on the boxes that carry customer traffic and
 # have no operator watching them.
+# install_auto_updates — unattended security patching, on every role.
+#
+# A mesh node exposes sshd and a WireGuard port to the whole internet and is
+# designed to run untouched for months: the whole point of the RAM-only build
+# is that nobody logs into it. "Nobody logs in" and "nobody patches it" are
+# the same sentence unless something applies updates on its own, and a box
+# that has not taken a security update since it was provisioned is the most
+# ordinary way a fleet gets owned.
+#
+# Security origins only. A node that upgrades everything on its own is a node
+# whose WireGuard or nftables behaviour can change overnight without anyone
+# watching, and this deployment's correctness rests on both.
+#
+# Automatic REBOOT is deliberately off, and the two roles want it off for
+# opposite reasons. On the control plane a surprise reboot is an outage.
+# On a node a reboot is cheap by design — the disk is tmpfs and boot IS a
+# rejoin — but it still drops every tunnel the node was carrying, and doing
+# that at 06:00 unannounced to paying customers is a decision for the
+# operator, not the package. The summary reports when one is pending.
+install_auto_updates() {
+    local role="$1"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        note "would enable unattended security upgrades ($role)"
+        return 0
+    fi
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y -qq unattended-upgrades >/dev/null 2>&1 || {
+        note "unattended-upgrades did not install — this box will not self-patch"
+        return 0
+    }
+    cat > /etc/apt/apt.conf.d/51-0trust-unattended <<'UUEOF'
+// 0trust: security updates only, applied automatically, never rebooting.
+// See install_auto_updates() in scripts/install.sh for why each line is here.
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Ubuntu,archive=${distro_codename}-security";
+    "origin=UbuntuESMApps,archive=${distro_codename}-apps-security";
+    "origin=UbuntuESM,archive=${distro_codename}-infra-security";
+};
+// Nothing here reboots itself. A node reboot is a rejoin and costs little,
+// but it still drops live tunnels; the operator picks the moment.
+Unattended-Upgrade::Automatic-Reboot "false";
+// Removes kernels and headers that no longer have a package depending on
+// them. Left off, /boot on a small VPS fills and then apt fails silently
+// for everything else.
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+// No mail: there is no mail transport on these boxes and a unit that fails
+// to send every night is noise that trains an operator to ignore it.
+Unattended-Upgrade::Mail "";
+UUEOF
+    cat > /etc/apt/apt.conf.d/20auto-upgrades <<'AUEOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+AUEOF
+    systemctl enable --now unattended-upgrades.service >/dev/null 2>&1 || true
+    # `systemctl enable` returning 0 says nothing about whether the config
+    # parses — same standard the rest of this installer is held to.
+    if unattended-upgrades --dry-run --debug >/dev/null 2>&1; then
+        ok "unattended security upgrades enabled ($role, no auto-reboot)"
+    else
+        note "unattended-upgrades is installed but refused a dry run;"
+        note "check: unattended-upgrades --dry-run --debug"
+    fi
+}
+
 harden_sshd() {
     [[ $DO_SSH -eq 1 ]] || return 0
     if [[ $DRY_RUN -eq 1 ]]; then
@@ -166,7 +236,9 @@ harden_sshd() {
     fi
 }
 
-CONTROL_URL="" PROVISION_TOKEN="" REGION="" NODE_ROLE="both" WG_PORT="51820"
+# ZTV_PROVISION_TOKEN lets cloud-init and CI pass the token without it
+# appearing in argv. A --provision-token flag still wins over it.
+CONTROL_URL="" PROVISION_TOKEN="${ZTV_PROVISION_TOKEN:-}" REGION="" NODE_ROLE="both" WG_PORT="51820"
 OBFS_PORT="0" WG_PORT_GIVEN=0
 # An age PUBLIC key (age1…) to encrypt nightly backups to. Empty leaves the
 # backup timer installed and disabled, which is what it has always been.
@@ -217,6 +289,14 @@ while [[ $# -gt 0 ]]; do
         --backup-key) BACKUP_RECIPIENT="${2:-}"; shift 2 ;;
         --control-url) CONTROL_URL="${2:-}"; shift 2 ;;
         --provision-token) PROVISION_TOKEN="${2:-}"; shift 2 ;;
+        # A token on the command line is in the shell history afterwards and
+        # in `ps` for any local user while the install runs. It is IP-pinned
+        # on first use and revocable, so the exposure is bounded rather than
+        # fatal, but neither is a reason to put a credential in argv when a
+        # file costs one flag. cloud-init should use ZTV_PROVISION_TOKEN.
+        --provision-token-file)
+            [[ -r "${2:-}" ]] || { echo "  cannot read ${2:-}" >&2; exit 1; }
+            PROVISION_TOKEN="$(tr -d '\r\n[:space:]' < "$2")"; shift 2 ;;
         --region) REGION="${2:-}"; shift 2 ;;
         --role) NODE_ROLE="${2:-}"; shift 2 ;;
         --wg-port) WG_PORT="${2:-}"; WG_PORT_GIVEN=1; shift 2 ;;
@@ -626,7 +706,10 @@ collect_missing
     || die "--mode must be test, production or node (see --help)"
 if [[ "$MODE" == "node" ]]; then
     [[ -n "$CONTROL_URL" ]] || die "node needs --control-url https://<control plane>"
-    [[ -n "$PROVISION_TOKEN" ]] || die "node needs --provision-token (mint one on the control plane: api/mint-provision-token.py, or the dashboard)"
+    [[ -n "$PROVISION_TOKEN" ]] || die "node needs a provisioning token. Mint one on the control plane
+    (api/mint-provision-token.py, or the dashboard), then pass it as
+    --provision-token, --provision-token-file <path>, or the
+    ZTV_PROVISION_TOKEN environment variable."
     [[ -n "$REGION" ]] || die "node needs --region (zur|rey|buc)"
     [[ "$CONTROL_URL" =~ ^https?://[^[:space:]/]+ ]] \
         || die "--control-url must be a URL, e.g. https://0trustvpn.com"
@@ -880,6 +963,7 @@ JCONF
     # ------------------------------------------------------------------
     install_fail2ban_jail
     harden_sshd "node"
+    install_auto_updates "node"
 
     # ------------------------------------------------------------------
     log "Enrolment credentials"
@@ -2123,6 +2207,7 @@ if [[ "$MODE" == "production" ]]; then
 log "Hardening sshd"
 install_fail2ban_jail
 harden_sshd "control plane"
+install_auto_updates "control plane"
 fi
 
 # ----------------------------------------------------------------------------
