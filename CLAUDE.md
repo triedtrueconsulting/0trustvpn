@@ -86,6 +86,8 @@ tests/emulation/                  Full-stack suite: boots the product, drives it
 web/                              Landing + status/download/help/audit/privacy/
                                   terms/security + trial.html (free-trial signup)
                                   + renew.html (top up an existing token)
+                                  + proxy.html / crypto-vpn.html (the two
+                                    search landing pages), llms.txt, robots.txt
 docs/                             README, LAUNCH, AUDIT, ABUSE, DR
 ```
 
@@ -719,6 +721,71 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   that opens whatever a message asks it to is a phishing surface handed to
   whoever can post one. `test_ios.py` lifts the pattern out of both sources,
   requires them identical, and runs six hostile bodies through it.
+
+- **Behind a CDN, `$remote_addr` is the edge and four things read it.** The
+  six `limit_req` zones, `X-Real-IP` (which feeds `admin._login_attempts` and
+  the admin audit log), and the `$remote_addr_anon` log map. Without the
+  realip config every visitor behind one Cloudflare edge shares a rate-limit
+  bucket, eight failed logins from anywhere lock the operator out, and the
+  anonymised log truncates an edge address to a /24. `install.sh --cloudflare`
+  runs `scripts/cloudflare-ips.sh`, which **fetches Cloudflare's ranges and
+  refuses to write a list it could not verify** — same fail-closed reasoning
+  as the node's resolver and the Tor control channel. It also refuses
+  `0.0.0.0/0`, a list shorter than Cloudflare publishes, and anything that is
+  not a CIDR: permissive there turns `CF-Connecting-IP` into "pick your own
+  address", which voids every rate limit and lets the audit log record a
+  fiction. A weekly timer refreshes it. `--cloudflare-lock-origin` firewalls
+  80/443 to those ranges and deliberately leaves 22 open, because Cloudflare
+  does not proxy ssh.
+  **Cloudflare terminates TLS, so it reads everything it fronts** — including
+  `X-Account-Token` if `/api/v1/` is on a proxied hostname. privacy.html §5a
+  and AUDIT.md §9 say so; `cdn-disclosed` fires BOTH ways (behind a CDN with
+  no disclosure, and disclosing one that is not there) and
+  `cdn-realip-not-wildcard` refuses a forgeable trust list. docs/DEPLOY.md
+  carries the DNS records, the cache rules and the proxy-the-API decision.
+
+- **Every box patches itself, and nothing reboots itself.**
+  `install_auto_updates` configures unattended-upgrades on the control plane
+  and every node. A RAM-only node is built so nobody logs in, and "nobody logs
+  in" and "nobody patches it" are the same sentence otherwise. Security
+  origins ONLY — a box that upgrades everything on its own is one where
+  WireGuard or nftables behaviour changes overnight, and correctness rests on
+  both. `Automatic-Reboot "false"` on both roles for opposite reasons: on the
+  control plane a surprise reboot is an outage; on a node a reboot is cheap by
+  design but still drops every tunnel it was carrying. Unused kernels are
+  removed or /boot fills and apt fails silently for everything else.
+
+- **A provisioning token does not have to go in argv.**
+  `--provision-token-file` and `ZTV_PROVISION_TOKEN` exist because a flag
+  leaves the credential in the shell history and in `ps` for any local user
+  during the install. It is IP-pinned on first use and revocable, so the
+  exposure is bounded — not a reason to put it in argv anyway.
+
+- **The SEO generators own more than the JSON-LD now.** A title lives in
+  `<title>`, `og:title` and `twitter:title`, and a description in three more;
+  hand-maintained they drift, and og:title is what share cards and several
+  crawlers read. `gen-seo.py` mirrors them from the canonical pair and
+  `--check` catches it. `gen-sitemap.py` owns the route table AND `llms.txt`,
+  generated from each page's own description so it cannot describe a page
+  that moved.
+  **`faq_entries(fn)` works on any page with `.q` blocks**, and the FAQPage
+  check in `test_site.py` is PER PAGE — it used to take the first FAQPage
+  found anywhere and compare it against help.html's question count, so it
+  silently stopped measuring the page it was named after the moment a second
+  one existed.
+
+- **The search landing pages are `/proxy` and `/crypto-vpn`, and the currency
+  gate covers them by a structural rule.** `/surf` is noindex and Disallow'd
+  because it renders other people's pages under our origin, so `/proxy` is the
+  indexable page ABOUT it and the nav points there — pointing the nav at
+  `/surf` made every page carry a crawler dead end. A page naming a coin the
+  floor (`currencies_for("watch")`, i.e. BTC) cannot issue must render the
+  accepted set live from `/api/v1/config` AND say availability depends on the
+  deployment; a word ban would make `/crypto-vpn` impossible to write, and no
+  rule at all is a hole you drive a page through. **Ranking for "free vpn" is
+  not the goal and should not be** — this is a paid product, that SERP belongs
+  to affiliate farms, and the bounce would cost more than the traffic is
+  worth. The winnable queries are the ones the product genuinely answers.
 
 ## Build & validation commands
 
