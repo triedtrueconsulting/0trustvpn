@@ -313,6 +313,108 @@ sudo ./scripts/install.sh --mode node \
      --provision-token ztvp-...
 ```
 
+## Cloudflare
+
+Cloudflare in front of the origin changes one thing that matters and one thing
+that matters a great deal, so both are here rather than in a footnote.
+
+### Why the install needs to be told
+
+Behind a proxy every connection to the origin comes *from* the proxy, so
+`$remote_addr` is a Cloudflare edge address and not the visitor. Four things
+in this deployment read it, and all four are wrong without the realip config:
+
+| Reads `$remote_addr` | What breaks |
+|---|---|
+| the six `limit_req` zones | every visitor behind one edge shares a bucket, so the signup and trial limits stop limiting anyone in particular and start throttling strangers at random |
+| `X-Real-IP` → `admin._login_attempts` | eight failed guesses from anywhere lock the operator out — an admin-lockout DoS for anyone who can reach the login endpoint |
+| the admin audit log | records a Cloudflare address for every failed login, on the one record read after an intrusion attempt |
+| `$remote_addr_anon` | truncates an edge address to a /24, which is privacy-preserving the way a blank page is |
+
+So:
+
+```bash
+sudo ./scripts/install.sh --mode production \
+     --domain 0trustvpn.com --email you@example.com \
+     --cloudflare
+```
+
+That fetches Cloudflare's published ranges, writes
+`/etc/nginx/conf.d/0trust-realip.conf`, and enables a weekly refresh timer.
+It **stops the install** if the list cannot be fetched: a guessed or stale
+trust list is worse than none, and a box silently attributing every request
+to an edge is the failure this flag exists to prevent.
+
+`--cloudflare-lock-origin` does the same and firewalls 80/443 to Cloudflare's
+ranges, so nobody reaches the origin directly. Port 22 stays open to
+everything — Cloudflare does not proxy ssh, and locking it would lock you out;
+`fail2ban` and the sshd hardening cover that port.
+
+Check it later with:
+
+```bash
+sudo /opt/0trust/scripts/cloudflare-ips.sh --check
+sudo ./scripts/audit-verify.sh | grep cdn-
+```
+
+### DNS records
+
+| Name | Type | Value | Proxy |
+|---|---|---|---|
+| `0trustvpn.com` | A | origin IPv4 | **Proxied** (orange) |
+| `www` | CNAME | `0trustvpn.com` | **Proxied** (orange) |
+| `api` | A | origin IPv4 | see below |
+
+Do not publish any record that points at the origin unproxied unless you
+intend to — a grey-cloud `AAAA`, a stray `mail` or `cpanel` A record, or an
+old record from a previous host all defeat `--cloudflare-lock-origin` by
+handing out the address it is protecting.
+
+### The decision you actually have to make
+
+Cloudflare terminates TLS. It can read everything it carries, in clear. For
+the marketing site that is which pages someone read and from where. **If
+`/api/v1/` is served from a proxied hostname, it also carries
+`X-Account-Token` — the entire customer credential — and the admin password
+on login.**
+
+For a product whose pitch is that we cannot hand over what we never
+collected, a third party that *can* hand it over is not a detail. Two
+defensible answers:
+
+1. **Proxy everything.** Simplest, and you get the WAF and DDoS absorption on
+   the API too. Cloudflare sees customer tokens. This is disclosed in
+   privacy.html §5a, and the `cdn-disclosed` gate fails the audit if the
+   disclosure is ever removed while the realip config is present.
+2. **Leave the API unproxied.** Point `api.0trustvpn.com` at the origin with
+   the orange cloud off, issue its certificate on the origin, and set
+   `ZTV_API_BASE` accordingly in the clients. Tokens never cross Cloudflare.
+   The cost is that the origin address is published, so the lock-origin
+   firewall no longer buys you anything and the control plane absorbs its own
+   traffic.
+
+Whichever you choose, privacy.html §5a tells the customer how to check which
+one is in force (`dig api.0trustvpn.com` against Cloudflare's ranges) rather
+than asking them to take it on faith. Keep that paragraph true.
+
+### Cache and page rules
+
+The site is static and tiny, so most of the defaults are fine. Three that are
+not:
+
+- **`/api/*` — cache bypass.** The API is dynamic and some of it is
+  authenticated. A cached `/api/v1/account/status` served to the wrong person
+  would be the worst bug this product could have.
+- **`/canary.txt` and `/canary.txt.sig` — no cache.** A cached canary cannot
+  stop appearing, and not appearing is the only thing a canary does. The
+  origin already sends `no-store`; make sure nothing overrides it.
+- **`/admin*` — cache bypass, and restrict it.** It can ban customers and
+  move money. The nginx config ships `allow`/`deny` lines commented out; use
+  them, or put it behind Cloudflare Access.
+
+Leave "Always Online" off. Serving a stale cached copy of the status page or
+the canary while the origin is down tells people the opposite of the truth.
+
 ## Verifying a deployment
 
 ```bash

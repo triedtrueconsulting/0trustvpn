@@ -389,7 +389,10 @@ check cdn-disclosed "A CDN in front of the origin is disclosed to customers" -- 
     # the drift; a disclosure on a deployment that has no CDN is a claim about
     # a company that is not in the path, which is its own kind of false.
     realip=/etc/nginx/conf.d/0trust-realip.conf
-    priv=\$(ls /var/www/0trust/privacy.html /opt/0trust/web/privacy.html 2>/dev/null | head -1)
+    # awk, not head: head exits after the first line, ls takes SIGPIPE, and
+    # under \`set -o pipefail\` that becomes a failed assignment. awk consumes
+    # the whole stream. (validate.sh's pipefail-head gate caught this here.)
+    priv=\$(ls /var/www/0trust/privacy.html /opt/0trust/web/privacy.html 2>/dev/null | awk 'NR==1')
     [[ -n \$priv ]] || exit 77
     behind=0; [[ -f \$realip ]] && behind=1
     said=0; grep -q 'content-delivery-network' \$priv && said=1
