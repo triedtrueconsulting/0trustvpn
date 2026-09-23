@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Free Web Proxy — No Signup, No Extension, No Log</title>
+<meta name="description" content="Read a blocked page in your browser with nothing installed and no account. Paste a URL and go. Honest about what it is not: one tab, pages only, not a VPN.">
+<link rel="canonical" href="https://0trustvpn.com/proxy">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="0trustvpn">
+<meta property="og:locale" content="en">
+<meta property="og:title" content="Free Web Proxy — No Signup, No Extension, No Log">
+<meta property="og:description" content="Read a blocked page in your browser with nothing installed and no account. Paste a URL and go. Honest about what it is not: one tab, pages only, not a VPN.">
+<meta property="og:url" content="https://0trustvpn.com/proxy">
+<meta property="og:image" content="https://0trustvpn.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="0trustvpn — encrypted mesh VPN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Free Web Proxy — No Signup, No Extension, No Log">
+<meta name="twitter:description" content="Read a blocked page in your browser with nothing installed and no account. Paste a URL and go. Honest about what it is not: one tab, pages only, not a VPN.">
+<meta name="twitter:image" content="https://0trustvpn.com/og.png">
+<!-- SEO:JSONLD -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://0trustvpn.com/proxy#webpage",
+      "url": "https://0trustvpn.com/proxy",
+      "name": "Free Web Proxy — No Signup, No Extension, No Log",
+      "description": "Read a blocked page in your browser with nothing installed and no account. Paste a URL and go. Honest about what it is not: one tab, pages only, not a VPN.",
+      "isPartOf": {
+        "@id": "https://0trustvpn.com/#website"
+      },
+      "publisher": {
+        "@id": "https://0trustvpn.com/#organization"
+      },
+      "inLanguage": "en",
+      "breadcrumb": {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Home",
+            "item": "https://0trustvpn.com/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "Free Web Proxy — No Signup, No Extension, No Log"
+          }
+        ]
+      }
+    },
+    {
+      "@type": "FAQPage",
+      "@id": "https://0trustvpn.com/proxy#faq",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Is this really free?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes, and there is no account to make. It exists because it is the cheapest honest way to show you we can build something that works before asking you for money. The VPN is the paid product; this is not a trial of it and does not expire."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do you log what I read?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. We keep a per-page view counter and nothing that ties a page to a person — no address, no session, no history. The audit pack documents what the service stores, and ships a verifier you can run against a live server rather than taking our word for it."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why will it not load the site I want?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Most likely one of three things. The page needs you to be logged in, and we deliberately do not carry your cookies. The page is built entirely by JavaScript, which we do not run. Or the destination is not a public web address — we refuse private and internal ranges outright, so a proxy pointed at somebody’s router cannot become our problem."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is a free proxy safe?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Depends entirely on who runs it, and that is the honest answer for every one of them including this one. A proxy sees your requests while it serves them. Most free proxies pay for themselves by injecting adverts, selling traffic data, or both. We do neither, we publish what we keep , and the code is open so the claim is checkable. Treat any proxy that will not tell you how it is funded as one that is funded by you."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Proxy or VPN — which do I need?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "If you want to read one page and move on, the proxy above is enough and costs nothing. If you want every app on the device covered, your ISP kept out of your destinations, and something that keeps working on a phone and on public wi-fi, that is a VPN. Try ours free for one week with no card."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
+<!-- /SEO:JSONLD -->
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<link rel="stylesheet" href="/site.css">
+
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<link rel="stylesheet" href="/site.css">
+<style>
+  :root{--bg:#0c0c0a;--ink:#f4ede0;--amber:#d4a574;--terra:#c44536;--moss:#7d8f5a;--line:#2a2820}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  main{max-width:40rem;margin:0 auto;padding:4rem 1.25rem 6rem}
+  h1{font:400 2.4rem/1.15 "Instrument Serif",Georgia,serif;margin:0 0 .5rem}
+  .sub{color:#a89f8d;margin:0 0 2.5rem}
+  code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+  .card{border:1px solid var(--line);border-radius:10px;padding:1.5rem;background:#111008}
+  button{font:600 1rem/1 inherit;background:var(--amber);color:#0c0c0a;border:0;
+    border-radius:6px;padding:.85rem 1.4rem;cursor:pointer}
+  button[disabled]{opacity:.5;cursor:progress}
+  .token{font:700 1.4rem/1.5 "JetBrains Mono",ui-monospace,monospace;color:var(--amber);
+    letter-spacing:.06em;word-break:break-all;margin:.5rem 0 1rem}
+  .warn{border-left:3px solid var(--terra);padding:.6rem 0 .6rem 1rem;margin:1.5rem 0;
+    color:#d8c9b4}
+  .ok{border-left:3px solid var(--moss);padding:.6rem 0 .6rem 1rem;margin:1.5rem 0}
+  ul{padding-left:1.1rem}
+  li{margin:.35rem 0}
+  .muted{color:#8a8172;font-size:.92rem}
+  a{color:var(--amber)}
+  .bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin:1rem 0 0}
+  .bar>i{display:block;height:100%;background:var(--amber);width:0;transition:width .2s}
+  .hide{display:none}
+
+/* Keyboard focus. :focus-visible so a mouse click does not leave a ring
+   behind, but anyone navigating by keyboard can always see where they are. */
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: none; border-radius: 2px;
+  box-shadow: 0 0 0 3px rgba(212,165,116,0.3);
+}
+
+/* Surfaces. A flat fill a shade off the page background reads as nothing at
+   all on a dark layout; a top highlight and a real shadow give it an edge
+   without lightening the palette. Matches the client and the dashboard. */
+.card {
+  background-image: linear-gradient(180deg, rgba(244,237,224,0.035) 0%, transparent 40%);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.55);
+}
+</style>
+<style>
+  .lbl{display:block;font:500 .72rem/1.3 "JetBrains Mono",ui-monospace,monospace;
+    text-transform:uppercase;letter-spacing:.08em;color:#6f6858;margin:0 0 .6rem}
+  .surf-form{display:flex;gap:.6rem;flex-wrap:wrap}
+  .surf-form input{flex:1 1 16rem;min-width:0;padding:.8rem .9rem;background:#0c0c0a;
+    color:var(--ink);border:1px solid var(--line);border-radius:6px;
+    font:1rem/1.4 "JetBrains Mono",ui-monospace,monospace}
+  .surf-form input:focus{outline:none;border-color:var(--amber)}
+  .surf-form button{flex:0 0 auto;margin-top:0}
+  h2{font:400 1.6rem/1.2 "Instrument Serif",Georgia,serif;margin:2.75rem 0 .75rem}
+  h3{font:600 1rem/1.4 inherit;margin:0 0 .4rem}
+  .q{border-top:1px solid var(--line);padding:1.1rem 0}
+  .q p{margin:0;color:#a89f8d}
+  table.cmp{width:100%;border-collapse:collapse;font-size:.95rem;margin:.5rem 0 0}
+  table.cmp th{text-align:left;font:600 .72rem/1.3 "JetBrains Mono",ui-monospace,monospace;
+    text-transform:uppercase;letter-spacing:.07em;color:#6f6858;
+    padding:.5rem .6rem;border-bottom:1px solid var(--line)}
+  table.cmp td{padding:.55rem .6rem;border-bottom:1px solid var(--line)}
+  table.cmp td.y{color:var(--moss);font-weight:600}
+  table.cmp td.n{color:var(--terra)}
+  .cta{display:inline-block;background:var(--amber);color:#0c0c0a;
+    font-weight:600;padding:.8rem 1.3rem;border-radius:6px;text-decoration:none}
+  .cta:hover{background:#e0b689}
+  .table-wrap{overflow-x:auto}
+</style>
+</head>
+<body class="has-sitenav">
+
+<nav class="sitenav">
+  <a class="sitenav-skip" href="#content">Skip to content</a>
+  <a class="sitenav-brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
+  <span class="sitenav-crumb">/ free proxy</span>
+  <div class="sitenav-links">
+    <a href="/#how">How it works</a>
+    <a href="/#jurisdictions">Jurisdictions</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/audit">Audit</a>
+    <a href="/download">Download</a>
+    <a href="/status">Status</a>
+    <a href="/help">Help</a>
+    <a href="/proxy" aria-current="page">Free proxy</a>
+  </div>
+  <a class="sitenav-cta" href="/trial" aria-current="page">Free trial</a>
+</nav>
+<main id="content" tabindex="-1">
+  <h1>Free web proxy</h1>
+  <p class="sub">Paste a link. We fetch the page and show it to you, so the
+  site you are reading sees us instead of you. No account, nothing to
+  install, no extension, and we keep no record of what you read.</p>
+
+  <div class="card" id="startCard">
+    <label class="lbl" for="u">Page to read</label>
+    <form action="/surf" method="get" class="surf-form">
+      <input id="u" name="url" type="text" inputmode="url" autocomplete="off"
+             spellcheck="false" placeholder="example.com/article" required>
+      <button type="submit">Read it &rarr;</button>
+    </form>
+    <p class="muted" style="margin:.9rem 0 0">Free, and free of the usual
+    catch: no sign-up wall, no e-mail, no advert injected into the page, and
+    no log of the address you asked for.</p>
+  </div>
+
+  <h2>What this actually is</h2>
+  <p>It is a <strong>page reader</strong>. Your browser asks us for a URL, we
+  fetch that page from our own servers, rewrite its links so images and
+  styles come back through us too, and hand you the result with a small
+  banner on top. The site you are visiting sees a request from our
+  infrastructure. It does not see your IP address, and it cannot set a
+  cookie in your browser that it will recognise later.</p>
+
+  <div class="warn">
+    <strong>And here is what it is not</strong>, because most &ldquo;free
+    proxy&rdquo; pages will not tell you and the difference matters:
+    <ul>
+      <li><strong>It covers one browser tab, not your device.</strong>
+        Everything outside this tab &mdash; your other tabs, your apps, your
+        system updates &mdash; goes out over your normal connection, from
+        your normal address.</li>
+      <li><strong>It reads pages. It is not a tunnel.</strong> No video
+        streaming, no logging in to things, no downloads, no torrents. It
+        fetches documents and images over ordinary web ports and refuses
+        everything else.</li>
+      <li><strong>It is not encryption between you and the site.</strong>
+        The hop from us to them is theirs; the hop from you to us is ours.
+        We can see what you asked for while we are fetching it. We do not
+        write it down, and our <a href="/privacy#the-surf-visitor-proxy">privacy
+        policy</a> says so in detail, but a proxy you cannot see inside is
+        still a proxy you are trusting.</li>
+      <li><strong>Your employer or ISP still sees that you contacted us.</strong>
+        They cannot see which page you then read, but the connection to this
+        domain is visible to whoever carries it.</li>
+    </ul>
+  </div>
+
+  <h2>When the proxy is enough, and when it is not</h2>
+  <table class="cmp">
+    <thead><tr><th>What you want to do</th><th>Proxy</th><th>VPN</th></tr></thead>
+    <tbody>
+      <tr><td>Read one article that is blocked where you are</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+      <tr><td>Check how a site looks from another country</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+      <tr><td>Do it with nothing installed</td><td class="y">Yes</td><td class="n">No</td></tr>
+      <tr><td>Cover every app and tab on the device</td><td class="n">No</td><td class="y">Yes</td></tr>
+      <tr><td>Log in to an account safely</td><td class="n">No</td><td class="y">Yes</td></tr>
+      <tr><td>Stream video, download, use a phone app</td><td class="n">No</td><td class="y">Yes</td></tr>
+      <tr><td>Hide the destination from your ISP</td><td class="n">No</td><td class="y">Yes</td></tr>
+      <tr><td>Keep working when the network blocks it</td><td class="n">No</td><td class="y">Yes</td></tr>
+    </tbody>
+  </table>
+
+  <div class="ok">
+    <strong>If you need the second column, the VPN is free to try for
+    <span data-trial="label">one week</span>.</strong> No credit card, no email
+    address, no form &mdash; the same anonymous token a paying customer gets.
+    <p style="margin:1rem 0 0">
+      <a href="/trial" class="cta">Start the free trial &rarr;</a>
+    </p>
+  </div>
+
+  <h2>Common questions</h2>
+  <div class="q">
+    <h3>Is this really free?</h3>
+    <p>Yes, and there is no account to make. It exists because it is the
+    cheapest honest way to show you we can build something that works before
+    asking you for money. The VPN is the paid product; this is not a trial of
+    it and does not expire.</p>
+  </div>
+  <div class="q">
+    <h3>Do you log what I read?</h3>
+    <p>No. We keep a per-page view counter and nothing that ties a page to a
+    person &mdash; no address, no session, no history. The
+    <a href="/audit">audit pack</a> documents what the service stores, and
+    ships a verifier you can run against a live server rather than taking our
+    word for it.</p>
+  </div>
+  <div class="q">
+    <h3>Why will it not load the site I want?</h3>
+    <p>Most likely one of three things. The page needs you to be logged in,
+    and we deliberately do not carry your cookies. The page is built entirely
+    by JavaScript, which we do not run. Or the destination is not a public
+    web address &mdash; we refuse private and internal ranges outright, so a
+    proxy pointed at somebody&rsquo;s router cannot become our problem.</p>
+  </div>
+  <div class="q">
+    <h3>Is a free proxy safe?</h3>
+    <p>Depends entirely on who runs it, and that is the honest answer for
+    every one of them including this one. A proxy sees your requests while it
+    serves them. Most free proxies pay for themselves by injecting adverts,
+    selling traffic data, or both. We do neither, we publish
+    <a href="/privacy">what we keep</a>, and the
+    <a href="https://github.com/0trust/cli">code is open</a> so the claim is
+    checkable. Treat any proxy that will not tell you how it is funded as one
+    that is funded by you.</p>
+  </div>
+  <div class="q">
+    <h3>Proxy or VPN &mdash; which do I need?</h3>
+    <p>If you want to read one page and move on, the proxy above is enough
+    and costs nothing. If you want every app on the device covered, your ISP
+    kept out of your destinations, and something that keeps working on a
+    phone and on public wi-fi, that is a VPN.
+    <a href="/trial">Try ours free for <span data-trial="label">one week</span></a>
+    with no card.</p>
+  </div>
+
+  <p class="muted" style="margin-top:2.5rem">
+    <a href="/">0trustvpn</a> &middot; <a href="/trial">Free trial</a> &middot;
+    <a href="/crypto-vpn">Pay in crypto</a> &middot;
+    <a href="/audit">No-logs audit</a> &middot; <a href="/help">Help</a>
+  </p>
+</main>
+<script src="/trial-config.js"></script>
+</body>
+</html>

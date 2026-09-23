@@ -68,3 +68,8 @@ Disallow: /surf
 Disallow: /admin
 
 Sitemap: https://0trustvpn.com/sitemap.xml
+
+# What this site is and which pages answer what, in the llmstxt.org format,
+# for the assistants above. Generated from the same table as the sitemap and
+# from each page's own description, so it cannot describe a page that moved.
+# https://0trustvpn.com/llms.txt

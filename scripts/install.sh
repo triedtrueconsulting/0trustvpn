@@ -1534,6 +1534,11 @@ render_common_locations() {
     # Renewing an existing account. Rate-limited with signup rather than the
     # general api zone: it opens an invoice, so it costs the same to abuse.
     location = /renew   { try_files /renew.html =404; }
+    # Landing pages. /proxy is the indexable page ABOUT the reader; /surf is
+    # the reader itself and stays noindex, because it renders other people's
+    # pages under our origin.
+    location = /proxy      { try_files /proxy.html =404; }
+    location = /crypto-vpn { try_files /crypto-vpn.html =404; }
 
     # Same branded error pages as production. They existed in the production
     # config and the files themselves did not, so nginx served its own default

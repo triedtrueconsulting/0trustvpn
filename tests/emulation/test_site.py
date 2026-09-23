@@ -32,6 +32,7 @@ H.boot(DB, workers=2)
 class Site(http.server.SimpleHTTPRequestHandler):
     """web/ plus the nginx path rewrites, so /trial and /privacy resolve."""
     ROUTES = {"/trial": "/trial.html", "/renew": "/renew.html",
+              "/proxy": "/proxy.html", "/crypto-vpn": "/crypto-vpn.html",
               "/status": "/status.html",
               "/download": "/download.html", "/help": "/help.html",
               "/privacy": "/privacy.html", "/terms": "/terms.html",
@@ -110,7 +111,13 @@ try:
     print("\n[3] the funnel has a door")
     _, index = get("/index.html")
     check("landing page links to the free trial", "/trial" in index)
-    check("landing page links to /surf", "/surf" in index)
+    # The nav used to point at /surf, which is noindex and Disallow'd — a dead
+    # end for a crawler on every page that carried it. /proxy is the page
+    # ABOUT the reader: indexable, and it opens the reader itself.
+    check("landing page offers the free proxy", "/proxy" in index)
+    check("and the proxy page reaches the reader itself",
+          'action="/surf"' in open(os.path.join(H.REPO, "web", "proxy.html")).read(),
+          "the landing page has to be able to actually start a read")
     check("trial page reachable", get("/trial")[0] == 200)
 
     print("\n[4] claims match the code")
@@ -388,7 +395,7 @@ try:
     if distinct:
         hrefs = [h for h, _ in next(iter(distinct))]
         for want in ("/", "/#how", "/#jurisdictions", "/#pricing", "/audit",
-                     "/download", "/status", "/help", "/surf", "/trial"):
+                     "/download", "/status", "/help", "/proxy", "/trial"):
             check(f"the nav offers {want}", want in hrefs, hrefs)
 
     # The page you are on should say so, and should not offer to take you
@@ -504,6 +511,35 @@ try:
                  if code not in floor and name.lower() in body.lower()]
         check(f"{page} names no coin this deployment cannot take", not named,
               f"{named} — a fresh install can only issue a BTC address")
+
+    # A page whose SUBJECT is crypto payment cannot follow the rule above by
+    # never naming a coin — /crypto-vpn exists to explain what Monero and
+    # Zcash do and do not hide. So the rule for it is structural instead of a
+    # word ban, and it is a stricter rule, not a carve-out: name a coin the
+    # floor cannot issue and the page must (a) render the ACCEPTED set live
+    # from the API rather than asserting one, and (b) say in the visible copy
+    # that availability depends on the deployment.
+    #
+    # Without this the gate had an obvious hole: add a page, name every coin,
+    # and nothing in the suite looks at it. That is bug class #17 with the
+    # currency claim attached, and the currency claim has already shipped
+    # wrong once.
+    for page in ("/proxy.html", "/crypto-vpn.html"):
+        _, raw = get(page)
+        body = visible(raw)
+        named = [n for n, c in others.items()
+                 if c not in floor and n.lower() in body.lower()]
+        if not named:
+            check(f"{page} names no coin this deployment cannot take", True)
+            continue
+        check(f"{page} renders the accepted coins live, not as a claim",
+              'data-pay="codes"' in raw,
+              f"names {named} with no element that the API can correct")
+        low = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).lower()
+        check(f"{page} says availability depends on the deployment",
+              ("depends on" in low and "configur" in low)
+              or "shows the real list" in low,
+              f"names {named} without saying this server may not take them")
 
     # And the page has to be able to say more when there IS more, or the
     # honesty runs the other way the day BTCPay goes up.
@@ -877,18 +913,21 @@ try:
           offers == {int(k): float(v) for k, v in api_main.PRICING.items()},
           f"schema {offers} vs API {api_main.PRICING}")
 
-    faq = next((n for g in graphs.values() for n in g
-                if n["@type"] == "FAQPage"), None)
-    check("the help page publishes a FAQPage", faq is not None)
-    if faq:
-        on_page = len(re.findall(r'<div class="q">',
-                                 pages["help.html"]))
-        check(f"and it carries every question on the page ({on_page})",
+    # Per page, not "the first FAQPage anywhere". Three pages carry one now,
+    # and the old form compared whichever the dict yielded first against
+    # help.html's question count — a check that silently stopped measuring
+    # the page it was named after the moment a second FAQPage existed.
+    faq_pages = {fn: n for fn, g in graphs.items() for n in g
+                 if n["@type"] == "FAQPage"}
+    check("the help page publishes a FAQPage", "help.html" in faq_pages)
+    for fn, faq in sorted(faq_pages.items()):
+        on_page = len(re.findall(r'<div class="q">', pages[fn]))
+        check(f"{fn} schema carries every question on the page ({on_page})",
               len(faq["mainEntity"]) == on_page,
               f"schema {len(faq['mainEntity'])} vs page {on_page}")
         empty = [q["name"] for q in faq["mainEntity"]
                  if len(q["acceptedAnswer"]["text"]) < 40]
-        check("with a real answer on each", not empty, empty)
+        check(f"{fn} gives a real answer to each", not empty, empty)
 
     # The generators are the only thing keeping all of the above in step, so
     # assert they are still able to say "out of date".

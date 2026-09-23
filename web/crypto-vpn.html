@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN That Accepts Bitcoin, Monero and Zcash</title>
+<meta name="description" content="Pay for a VPN in Bitcoin, Monero or Zcash with no account anywhere. Non-custodial: coins go straight to the operator's wallet. No email, no card, no name.">
+<link rel="canonical" href="https://0trustvpn.com/crypto-vpn">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="0trustvpn">
+<meta property="og:locale" content="en">
+<meta property="og:title" content="VPN That Accepts Bitcoin, Monero and Zcash">
+<meta property="og:description" content="Pay for a VPN in Bitcoin, Monero or Zcash with no account anywhere. Non-custodial: coins go straight to the operator&#x27;s wallet. No email, no card, no name.">
+<meta property="og:url" content="https://0trustvpn.com/crypto-vpn">
+<meta property="og:image" content="https://0trustvpn.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="0trustvpn — encrypted mesh VPN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="VPN That Accepts Bitcoin, Monero and Zcash">
+<meta name="twitter:description" content="Pay for a VPN in Bitcoin, Monero or Zcash with no account anywhere. Non-custodial: coins go straight to the operator&#x27;s wallet. No email, no card, no name.">
+<meta name="twitter:image" content="https://0trustvpn.com/og.png">
+<!-- SEO:JSONLD -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://0trustvpn.com/crypto-vpn#webpage",
+      "url": "https://0trustvpn.com/crypto-vpn",
+      "name": "VPN That Accepts Bitcoin, Monero and Zcash",
+      "description": "Pay for a VPN in Bitcoin, Monero or Zcash with no account anywhere. Non-custodial: coins go straight to the operator's wallet. No email, no card, no name.",
+      "isPartOf": {
+        "@id": "https://0trustvpn.com/#website"
+      },
+      "publisher": {
+        "@id": "https://0trustvpn.com/#organization"
+      },
+      "inLanguage": "en",
+      "breadcrumb": {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Home",
+            "item": "https://0trustvpn.com/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "VPN That Accepts Bitcoin, Monero and Zcash"
+          }
+        ]
+      }
+    },
+    {
+      "@type": "FAQPage",
+      "@id": "https://0trustvpn.com/crypto-vpn#faq",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Monero (XMR) — the private one",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The chain publishes neither the recipient nor the amount. Nobody reading it can see that you paid us or how much. We detect payment with a view-only wallet that can see incoming funds and cannot spend them. If payment privacy is the reason you are on this page, this is the coin."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Bitcoin (BTC) — public, but unlinked",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Bitcoin’s ledger is fully public. We derive a fresh receive address for every invoice from an extended public key, so no two customers share one and the control plane holds nothing that could spend your money. What the chain still shows is that some address paid some other address. If the coins you send are traceable to an exchange account in your name, that link exists on the chain whatever we do."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Zcash (ZEC) — transparent addresses only",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "We accept t-addresses, which behave like Bitcoin’s. We do not accept shielded z-addresses, and we would rather say so than imply a privacy property we cannot deliver: a shielded payment cannot be watched from a public key, so we could not tell that it had arrived."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I pay anonymously without KYC?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "There is nobody here to KYC you. We never ask for a name, an email address or a document, and there is no third-party processor in the path that could. What we cannot control is where your coins came from — if you bought them on an exchange that verified your identity, that part of the trail exists before it reaches us."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What if I send the wrong amount?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Send too little and the checkout says so, names the shortfall, and keeps the same address open so you can finish. Send too much and the invoice settles; we do not keep the difference as a rule, so get in touch ."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I get a refund in crypto?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes, within 30 days. Email your invoice ID and an address and we send the full amount back by hand, from the wallet it arrived in — there is no processor in the middle and so no dispute flow. Refunding a month takes that month back off the subscription; the terms spell it out."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do you take Ethereum, Litecoin or anything else?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Ethereum is supported through a BTCPay or hosted-gateway deployment; Litecoin is not supported at all. What any given server can take depends on how it is configured, and the checkout shows the real list rather than a wish list — it reads the addresses the server can actually issue. Bitcoin is always there. If a coin is not on the checkout, we cannot take it today, whatever this page says the software can do."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is there a free trial before I pay?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes — one week , no card, no email, no crypto either. Your browser solves a small puzzle instead of a captcha and you get an ordinary anonymous token. Paying later converts the same account and stacks the months on whatever the trial had left. Start one here."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
+<!-- /SEO:JSONLD -->
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<link rel="stylesheet" href="/site.css">
+
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<link rel="stylesheet" href="/site.css">
+<style>
+  :root{--bg:#0c0c0a;--ink:#f4ede0;--amber:#d4a574;--terra:#c44536;--moss:#7d8f5a;--line:#2a2820}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  main{max-width:40rem;margin:0 auto;padding:4rem 1.25rem 6rem}
+  h1{font:400 2.4rem/1.15 "Instrument Serif",Georgia,serif;margin:0 0 .5rem}
+  .sub{color:#a89f8d;margin:0 0 2.5rem}
+  code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+  .card{border:1px solid var(--line);border-radius:10px;padding:1.5rem;background:#111008}
+  button{font:600 1rem/1 inherit;background:var(--amber);color:#0c0c0a;border:0;
+    border-radius:6px;padding:.85rem 1.4rem;cursor:pointer}
+  button[disabled]{opacity:.5;cursor:progress}
+  .token{font:700 1.4rem/1.5 "JetBrains Mono",ui-monospace,monospace;color:var(--amber);
+    letter-spacing:.06em;word-break:break-all;margin:.5rem 0 1rem}
+  .warn{border-left:3px solid var(--terra);padding:.6rem 0 .6rem 1rem;margin:1.5rem 0;
+    color:#d8c9b4}
+  .ok{border-left:3px solid var(--moss);padding:.6rem 0 .6rem 1rem;margin:1.5rem 0}
+  ul{padding-left:1.1rem}
+  li{margin:.35rem 0}
+  .muted{color:#8a8172;font-size:.92rem}
+  a{color:var(--amber)}
+  .bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin:1rem 0 0}
+  .bar>i{display:block;height:100%;background:var(--amber);width:0;transition:width .2s}
+  .hide{display:none}
+
+/* Keyboard focus. :focus-visible so a mouse click does not leave a ring
+   behind, but anyone navigating by keyboard can always see where they are. */
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: none; border-radius: 2px;
+  box-shadow: 0 0 0 3px rgba(212,165,116,0.3);
+}
+
+/* Surfaces. A flat fill a shade off the page background reads as nothing at
+   all on a dark layout; a top highlight and a real shadow give it an edge
+   without lightening the palette. Matches the client and the dashboard. */
+.card {
+  background-image: linear-gradient(180deg, rgba(244,237,224,0.035) 0%, transparent 40%);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.55);
+}
+</style>
+<style>
+  .lbl{display:block;font:500 .72rem/1.3 "JetBrains Mono",ui-monospace,monospace;
+    text-transform:uppercase;letter-spacing:.08em;color:#6f6858;margin:0 0 .6rem}
+  .surf-form{display:flex;gap:.6rem;flex-wrap:wrap}
+  .surf-form input{flex:1 1 16rem;min-width:0;padding:.8rem .9rem;background:#0c0c0a;
+    color:var(--ink);border:1px solid var(--line);border-radius:6px;
+    font:1rem/1.4 "JetBrains Mono",ui-monospace,monospace}
+  .surf-form input:focus{outline:none;border-color:var(--amber)}
+  .surf-form button{flex:0 0 auto;margin-top:0}
+  h2{font:400 1.6rem/1.2 "Instrument Serif",Georgia,serif;margin:2.75rem 0 .75rem}
+  h3{font:600 1rem/1.4 inherit;margin:0 0 .4rem}
+  .q{border-top:1px solid var(--line);padding:1.1rem 0}
+  .q p{margin:0;color:#a89f8d}
+  table.cmp{width:100%;border-collapse:collapse;font-size:.95rem;margin:.5rem 0 0}
+  table.cmp th{text-align:left;font:600 .72rem/1.3 "JetBrains Mono",ui-monospace,monospace;
+    text-transform:uppercase;letter-spacing:.07em;color:#6f6858;
+    padding:.5rem .6rem;border-bottom:1px solid var(--line)}
+  table.cmp td{padding:.55rem .6rem;border-bottom:1px solid var(--line)}
+  table.cmp td.y{color:var(--moss);font-weight:600}
+  table.cmp td.n{color:var(--terra)}
+  .cta{display:inline-block;background:var(--amber);color:#0c0c0a;
+    font-weight:600;padding:.8rem 1.3rem;border-radius:6px;text-decoration:none}
+  .cta:hover{background:#e0b689}
+  .table-wrap{overflow-x:auto}
+</style>
+</head>
+<body class="has-sitenav">
+
+<nav class="sitenav">
+  <a class="sitenav-skip" href="#content">Skip to content</a>
+  <a class="sitenav-brand" href="/"><span class="zero">0</span><span>trustvpn</span></a>
+  <span class="sitenav-crumb">/ pay in crypto</span>
+  <div class="sitenav-links">
+    <a href="/#how">How it works</a>
+    <a href="/#jurisdictions">Jurisdictions</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/audit">Audit</a>
+    <a href="/download">Download</a>
+    <a href="/status">Status</a>
+    <a href="/help">Help</a>
+    <a href="/proxy">Free proxy</a>
+  </div>
+  <a class="sitenav-cta" href="/trial" aria-current="page">Free trial</a>
+</nav>
+<main id="content" tabindex="-1">
+  <h1>A VPN you can pay for in crypto</h1>
+  <p class="sub">Bitcoin, Monero or Zcash, straight to the operator&rsquo;s
+  own wallet. There is no account to make, no card, no email address and no
+  name &mdash; you get a sixteen-character token and that is the whole
+  relationship.</p>
+
+  <div class="ok">
+    <strong>The short answer, if that is all you came for:</strong> this
+    server takes <span data-pay="codes">Bitcoin</span> right now, it is
+    non-custodial, it never asks for identity, and you can try it for
+    <span data-trial="label">one week</span> free before paying anything.
+    The software also implements Monero and Zcash; whether a given server
+    offers them depends on the wallets its operator has configured, and the
+    checkout shows the real list rather than a wish list.
+    <p style="margin:1rem 0 0">
+      <a href="/trial" class="cta">Start free, no card &rarr;</a>
+      &nbsp;<a href="/#pricing">or see the prices</a>
+    </p>
+  </div>
+
+  <h2>Why crypto only, and what that actually buys you</h2>
+  <p>A card payment identifies you. The processor knows your name, your bank
+  and your billing address, and it keeps a record linking that person to a
+  VPN subscription. It does not matter how good the provider&rsquo;s no-logs
+  policy is if a third party is holding the one record that matters, and it
+  does not matter that the provider promises not to look.</p>
+  <p>Crypto removes that record from the picture &mdash; but only if it is
+  done a particular way, and most providers do not do it that way. Three
+  things to check, of any provider, including this one:</p>
+
+  <table class="cmp">
+    <thead><tr><th>Question</th><th>Here</th><th>Why it matters</th></tr></thead>
+    <tbody>
+      <tr><td>Who holds the coins?</td><td class="y">You pay the operator directly</td>
+        <td>A custodial gateway holds the money and its own records, and most are KYC&rsquo;d. Then you have a card payment with extra steps.</td></tr>
+      <tr><td>Is there an account anywhere?</td><td class="y">No</td>
+        <td>A payment processor account is a business relationship with your identity attached to it.</td></tr>
+      <tr><td>A fresh address per invoice?</td><td class="y">Yes</td>
+        <td>A reused address puts every customer&rsquo;s payment on one public ledger entry that anyone can total up.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What each coin does and does not hide</h2>
+  <p>This is where most pages wave their hands, so here it is plainly. These
+  are the three the software implements &mdash; check the list above for what
+  <em>this</em> server is currently able to issue an address for.</p>
+  <div class="q">
+    <h3>Monero (XMR) &mdash; the private one</h3>
+    <p>The chain publishes neither the recipient nor the amount. Nobody
+    reading it can see that you paid us or how much. We detect payment with a
+    <em>view-only</em> wallet that can see incoming funds and cannot spend
+    them. If payment privacy is the reason you are on this page, this is the
+    coin.</p>
+  </div>
+  <div class="q">
+    <h3>Bitcoin (BTC) &mdash; public, but unlinked</h3>
+    <p>Bitcoin&rsquo;s ledger is fully public. We derive a fresh receive
+    address for every invoice from an extended <em>public</em> key, so no two
+    customers share one and the control plane holds nothing that could spend
+    your money. What the chain still shows is that some address paid some
+    other address. If the coins you send are traceable to an exchange account
+    in your name, that link exists on the chain whatever we do.</p>
+  </div>
+  <div class="q">
+    <h3>Zcash (ZEC) &mdash; transparent addresses only</h3>
+    <p>We accept t-addresses, which behave like Bitcoin&rsquo;s. We do
+    <strong>not</strong> accept shielded z-addresses, and we would rather say
+    so than imply a privacy property we cannot deliver: a shielded payment
+    cannot be watched from a public key, so we could not tell that it had
+    arrived.</p>
+  </div>
+
+  <h2>How paying works</h2>
+  <ol class="steps">
+    <li><strong>Pick a term.</strong> One, three or twelve months. No
+      subscription, nothing stored to charge again, nothing to cancel.</li>
+    <li><strong>Get an address.</strong> We open an invoice and show a fresh
+      address and the exact amount, with a QR code.</li>
+    <li><strong>Send it.</strong> Your account activates on confirmation. The
+      page updates itself &mdash; closing it does not cancel the invoice, and
+      the token from step one is all you need.</li>
+    <li><strong>That is the end of it.</strong> When the time runs out the
+      account stops. If you want more,
+      <a href="/renew">renew with another payment</a> and the new days stack
+      on whatever is left.</li>
+  </ol>
+
+  <h2>Common questions</h2>
+  <div class="q">
+    <h3>Can I pay anonymously without KYC?</h3>
+    <p>There is nobody here to KYC you. We never ask for a name, an email
+    address or a document, and there is no third-party processor in the path
+    that could. What we cannot control is where your coins came from &mdash;
+    if you bought them on an exchange that verified your identity, that part
+    of the trail exists before it reaches us.</p>
+  </div>
+  <div class="q">
+    <h3>What if I send the wrong amount?</h3>
+    <p>Send too little and the checkout says so, names the shortfall, and
+    keeps the same address open so you can finish. Send too much and the
+    invoice settles; we do not keep the difference as a rule, so
+    <a href="/help">get in touch</a>.</p>
+  </div>
+  <div class="q">
+    <h3>Can I get a refund in crypto?</h3>
+    <p>Yes, within 30 days. Email your invoice ID and an address and we send
+    the full amount back by hand, from the wallet it arrived in &mdash; there
+    is no processor in the middle and so no dispute flow. Refunding a month
+    takes that month back off the subscription; the
+    <a href="/terms#refunds">terms</a> spell it out.</p>
+  </div>
+  <div class="q">
+    <h3>Do you take Ethereum, Litecoin or anything else?</h3>
+    <p>Ethereum is supported through a BTCPay or hosted-gateway deployment;
+    Litecoin is not supported at all. What any given server can take depends
+    on how it is configured, and the checkout shows the real list rather than
+    a wish list &mdash; it reads the addresses the server can actually issue.
+    Bitcoin is always there. If a coin is not on the checkout, we cannot take
+    it today, whatever this page says the software can do.</p>
+  </div>
+  <div class="q">
+    <h3>Is there a free trial before I pay?</h3>
+    <p>Yes &mdash; <span data-trial="label">one week</span>, no card, no
+    email, no crypto either. Your browser solves a small puzzle instead of a
+    captcha and you get an ordinary anonymous token. Paying later converts
+    the same account and stacks the months on whatever the trial had left.
+    <a href="/trial">Start one here.</a></p>
+  </div>
+
+  <div class="ok" style="margin-top:2.5rem">
+    <strong>Try it before you send anyone money.</strong>
+    <span data-trial="label-cap">One week</span> free, no card, no email.
+    <p style="margin:1rem 0 0">
+      <a href="/trial" class="cta">Get a free token &rarr;</a>
+    </p>
+  </div>
+
+  <p class="muted" style="margin-top:2.5rem">
+    <a href="/">0trustvpn</a> &middot; <a href="/proxy">Free proxy</a> &middot;
+    <a href="/audit">No-logs audit</a> &middot; <a href="/help">Help</a> &middot;
+    <a href="/download">Download</a>
+  </p>
+</main>
+<script src="/trial-config.js"></script>
+</body>
+</html>

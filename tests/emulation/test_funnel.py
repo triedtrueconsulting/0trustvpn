@@ -100,7 +100,9 @@ try:
         page.goto(f"http://127.0.0.1:{WEB_PORT}/trial?from=surf", timeout=30000)
         # The headline is assembled from /api/v1/config after load, so wait for
         # it rather than reading whatever the served fallback said.
-        headline = api_main.duration_label(api_main.TRIAL_DAYS_DEFAULT).capitalize() + ", free"
+        headline = ("Free VPN trial. "
+                    + api_main.duration_label(api_main.TRIAL_DAYS_DEFAULT).capitalize()
+                    + ", no card.")
         try:
             page.wait_for_function("t => document.querySelector('h1').innerText === t",
                                    arg=headline, timeout=8000)

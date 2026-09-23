@@ -50,9 +50,14 @@ def strip_tags(s):
     return re.sub(r"\s+", " ", html.unescape(s)).strip()
 
 
-def faq_entries():
-    """Every .q block in help.html, as question and answer text."""
-    src = open(os.path.join(WEB, "help.html"), encoding="utf-8").read()
+def faq_entries(fn="help.html"):
+    """Every .q block on a page, as question and answer text.
+
+    Extracted rather than hand-copied: a pasted FAQPage answers whatever the
+    page said the day it was pasted, and an answer engine will quote the
+    stale one back at people. Any page that writes its Q&A as .q blocks gets
+    schema for free, and editing the prose edits the schema."""
+    src = open(os.path.join(WEB, fn), encoding="utf-8").read()
     out = []
     for block in re.findall(r'(?s)<div class="q">(.*?)</div>', src):
         q = re.search(r"(?s)<h3[^>]*>(.*?)</h3>", block)
@@ -206,6 +211,31 @@ def page_meta(fn):
     return title, html.unescape(desc.group(1)) if desc else ""
 
 
+# The same title lives in three tags and the same description in three more.
+# Hand-maintained, they drift: a rewritten <title> leaves og:title quoting the
+# old one, and the old one is what a share card and several crawlers read. The
+# page's own <title> and <meta name="description"> are the source; these are
+# copies, so the generator keeps them honest.
+MIRRORED = [
+    ('<meta property="og:title" content="',      "title"),
+    ('<meta name="twitter:title" content="',     "title"),
+    ('<meta property="og:description" content="', "desc"),
+    ('<meta name="twitter:description" content="', "desc"),
+]
+
+
+def mirror_meta(src, title, desc):
+    """Rewrite the og:/twitter: copies to match the canonical pair."""
+    want = {"title": title, "desc": desc}
+    for prefix, which in MIRRORED:
+        i = src.find(prefix)
+        if i == -1:
+            continue
+        j = src.index('"', i + len(prefix))
+        src = src[:i + len(prefix)] + html.escape(want[which], quote=True) + src[j:]
+    return src
+
+
 def graphs():
     pricing, trial_days = api_constants()
     out = {}
@@ -228,9 +258,23 @@ def graphs():
                      ("security-policy.html", "/security-policy"),
                      ("status.html", "/status"),
                      ("trial.html", "/trial"),
-                     ("renew.html", "/renew")):
+                     ("renew.html", "/renew"),
+                     ("proxy.html", "/proxy"),
+                     ("crypto-vpn.html", "/crypto-vpn")):
         t, d = page_meta(fn)
         out[fn] = [webpage(path, t, d)]
+
+    # The two landing pages answer a specific question people type, and each
+    # carries its own Q&A. A FAQPage block is how an answer engine gets those
+    # answers from us rather than from a review site that guessed.
+    for fn, path in (("proxy.html", "/proxy"), ("crypto-vpn.html", "/crypto-vpn")):
+        entries = faq_entries(fn)
+        if entries:
+            out[fn].append({
+                "@type": "FAQPage",
+                "@id": f"{SITE}{path}#faq",
+                "mainEntity": entries,
+            })
 
     # The trial is an offer in its own right, and it is the one an answer
     # engine is most likely to be asked about ("is there a free VPN trial
@@ -276,6 +320,9 @@ def apply(check_only):
     for fn, nodes in graphs().items():
         p = os.path.join(WEB, fn)
         s = open(p, encoding="utf-8").read()
+        t, d = page_meta(fn)
+        s_before_mirror = s
+        s = mirror_meta(s, t, d)
         block = render(nodes)
         if BEGIN in s:
             i, j = s.index(BEGIN), s.index(END) + len(END)
@@ -286,13 +333,14 @@ def apply(check_only):
                 print(f"{fn}: no anchor to insert at", file=sys.stderr)
                 return 1
             new = s.replace(anchor, block + "\n" + anchor, 1)
-        if new == s:
+        if new == s_before_mirror:
             continue
         if check_only:
             stale.append(fn)
         else:
             open(p, "w", encoding="utf-8").write(new)
-            print(f"  wrote {len(nodes)} node(s) into {fn}")
+            drifted = "" if s == s_before_mirror else ", og/twitter resynced"
+            print(f"  wrote {len(nodes)} node(s) into {fn}{drifted}")
     if check_only:
         if stale:
             print("structured data is out of date in: " + ", ".join(stale)
