@@ -1420,6 +1420,85 @@ http {{
     check("and with no token from any source the install still refuses",
           rc != 0 and "provisioning token" in out, out[-300:])
 
+
+    print("\n[12] the installer does not need iproute2 to tell you it needs it")
+    # Found by running --mode test --dry-run on a minimal image. The script
+    # exited 127 after writing the plan as far as the mesh step, with no error
+    # and no summary, because:
+    #
+    #   PRIMARY_IF="$(ip -o -4 route show to default | awk ...)"
+    #   PRIMARY_IF="${PRIMARY_IF:-eth0}"     <- never reached
+    #
+    # `ip` absent makes the pipeline exit 127, pipefail carries that out of
+    # the command substitution, and `set -e` kills the installer one line
+    # before the fallback written for exactly this case. preflight_host had
+    # already fixed the same shape twice on its getent/ip pair, with a comment
+    # naming it; this was the instance that got missed.
+    inst = open(INSTALL).read()
+    m = re.search(r'^PRIMARY_IF="\$\(ip .*$', inst, re.M)
+    check("[12] the PRIMARY_IF probe cannot abort the install",
+          m is not None and "|| true" in m.group(0),
+          m.group(0) if m else "PRIMARY_IF assignment not found")
+
+    # The tool the installer reads after this point is named, not assumed.
+    # It is Essential on a stock Ubuntu image and absent from minimal bases.
+    for label, pat in (("control plane", r"PACKAGES=\((?:[^)]*)\)"),
+                       ("node", r"NODE_PACKAGES=\((?:[^)]*)\)")):
+        mm = re.search(pat, inst, re.S)
+        check(f"[12] iproute2 is in the {label} package list",
+              mm is not None and "iproute2" in mm.group(0),
+              (mm.group(0)[:160] if mm else "list not found"))
+
+    # Behavioural, not just textual: hide `ip` and require the dry run to
+    # finish. A symlink farm rather than trimming /usr/sbin from PATH —
+    # merged-usr puts ip in /usr/bin, so the obvious version of this test
+    # hides nothing and passes against the unfixed script.
+    nobin = os.path.join(TMP, "nobin")
+    os.makedirs(nobin, exist_ok=True)
+    for d in ("/usr/bin", "/bin", "/usr/sbin", "/sbin"):
+        if not os.path.isdir(d):
+            continue
+        for b in os.listdir(d):
+            if b == "ip":
+                continue
+            dst = os.path.join(nobin, b)
+            if not os.path.lexists(dst):
+                try:
+                    os.symlink(os.path.join(d, b), dst)
+                except OSError:
+                    pass
+    check("[12] the probe environment really does hide ip",
+          shutil.which("ip", path=nobin) is None, shutil.which("ip", path=nobin))
+
+    rd = os.path.join(TMP, "render-noip")
+    r = subprocess.run(["bash", INSTALL, "--dry-run", "--mode", "test",
+                        "--non-interactive"],
+                       capture_output=True, text=True, timeout=180,
+                       env={"PATH": nobin, "TERM": "dumb", "ZTV_RENDER_TO": rd})
+    noip_out = r.stdout + r.stderr
+    check("[12] the dry run completes with no iproute2 at all",
+          r.returncode == 0, f"rc={r.returncode}\n{noip_out[-500:]}")
+    check("[12] and it reaches the end rather than stopping mid-plan",
+          "What this box is NOT" in noip_out, noip_out[-300:])
+
+    # The diagnosis has to name the real cause. Both failures land on the same
+    # `ip link add` probe, and collapsing them sends an operator whose box is
+    # missing a package off to buy a different VPS — on --mode node it is
+    # fatal, so that is the whole install.
+    check("[12] a missing package is reported as a missing package",
+          "iproute2 is not installed" in noip_out
+          and "apt-get install -y iproute2" in noip_out, noip_out[:600])
+    check("[12] and is NOT misreported as a kernel limitation",
+          "cannot create a WireGuard interface" not in noip_out,
+          [l for l in noip_out.splitlines() if "WireGuard interface" in l])
+
+    # The masquerade interface is a guess once `ip` is gone, and guessing
+    # wrong is the silent failure this product already has an invariant
+    # about: traffic enters the tunnel and dies while the node heartbeats on.
+    check("[12] the guessed masquerade interface is stated out loud",
+          "no default route found" in noip_out,
+          [l for l in noip_out.splitlines() if "masquerade" in l][:3])
+
 finally:
     print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL: print("  failures: " + ", ".join(FAIL))

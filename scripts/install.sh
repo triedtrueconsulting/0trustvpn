@@ -847,7 +847,15 @@ preflight_host() {
     # the operator should hear it now rather than after the install claims a
     # mesh it could not build.
     if [[ "$MODE" == "node" || ( "$MODE" == "test" && $DO_VPN -eq 1 ) ]]; then
-        if ! ip link add dev ztvwgprobe type wireguard >/dev/null 2>&1; then
+        if ! command -v ip >/dev/null 2>&1; then
+            # Distinguished from the kernel case on purpose. Both make the
+            # probe below fail, and collapsing them tells an operator whose
+            # box is missing a package to go and buy a different VPS.
+            printf '%s[!] iproute2 is not installed — cannot probe WireGuard%s\n' "$RED" "$NC" >&2
+            note "this is a missing package, not a kernel limitation:"
+            note "  apt-get install -y iproute2"
+            [[ "$MODE" == "node" ]] && fatal=1
+        elif ! ip link add dev ztvwgprobe type wireguard >/dev/null 2>&1; then
             printf '%s[!] this kernel cannot create a WireGuard interface%s\n' "$RED" "$NC" >&2
             note "common on LXC and OpenVZ VPSes. A node needs a KVM host."
             [[ "$MODE" == "node" ]] && fatal=1
@@ -907,7 +915,7 @@ if [[ "$MODE" == "node" ]]; then
     # stubby is the DNS-over-TLS stub dnsmasq forwards to; ca-certificates is
     # what authenticates the resolver to it, so neither is optional.
     NODE_PACKAGES=(wireguard wireguard-tools nftables dnsmasq stubby python3
-                   curl ca-certificates)
+                   curl ca-certificates iproute2)
     # fail2ban here for the same reason as on the control plane: sshd is the
     # one service on a node that takes credentials from the whole internet.
     # It was missing, while `ufw allow 22/tcp` below opens that port on every
@@ -1206,8 +1214,11 @@ fi
 # ----------------------------------------------------------------------------
 log "Installing packages"
 # ----------------------------------------------------------------------------
+# iproute2 is Essential on a stock Ubuntu image and absent from minimal
+# container bases. The install reads `ip` after this point to pick the
+# interface it masquerades on, so it is named rather than assumed.
 PACKAGES=(nginx python3 python3-venv python3-pip sqlite3 curl jq openssl
-          wireguard-tools ca-certificates)
+          wireguard-tools ca-certificates iproute2)
 [[ $DO_FIREWALL -eq 1 ]] && PACKAGES+=(ufw fail2ban)
 [[ "$MODE" == "production" ]] && PACKAGES+=(certbot python3-certbot-nginx)
 
@@ -2285,8 +2296,20 @@ fi
 ok "keys + meshd units for ${#LOCAL_NODES[@]} local nodes"
 
 # --- NAT and the abuse filter, identical to a real node -------------------
-PRIMARY_IF="$(ip -o -4 route show to default 2>/dev/null | awk 'NR==1{print $5}')"
-PRIMARY_IF="${PRIMARY_IF:-eth0}"
+# `|| true` for the same reason as the getent/ip pair in preflight_host: a
+# missing iproute2 makes the pipeline exit 127, pipefail propagates it out of
+# the command substitution, and `set -e` kills the installer HERE — one line
+# before the fallback written to handle exactly this. Silently, mid-install,
+# after the database and the units are already on disk.
+PRIMARY_IF="$(ip -o -4 route show to default 2>/dev/null | awk 'NR==1{print $5}' || true)"
+if [[ -z "$PRIMARY_IF" ]]; then
+    PRIMARY_IF=eth0
+    # Masquerading the wrong interface is the silent failure this product
+    # already has an invariant about: traffic enters the tunnel and dies while
+    # the node goes on heartbeating. Say which interface was guessed.
+    note "no default route found — assuming $PRIMARY_IF for masquerade"
+    note "if that is wrong, customer traffic will not leave this box"
+fi
 if [[ $DRY_RUN -eq 0 ]]; then
     mkdir -p /etc/nftables.d
     ztv_nat_ruleset "$PRIMARY_IF" | nft -f -
