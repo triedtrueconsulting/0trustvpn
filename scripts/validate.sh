@@ -288,6 +288,37 @@ check vendor-integrity "vendored third-party JS matches its pinned hashes" -- \
 check secret-scan "no new secrets in the tree or in git history" -- \
     ./scripts/secret-scan.sh
 
+# Static analysis against this codebase's own documented bug classes, not a
+# generic pack: semgrep.dev is unreachable from the build environment, and
+# the local rules know things a generic pack does not — that a blocking call
+# in an `async def` is an invariant here, that this product fails closed on
+# TLS rather than open. Every rule is mutation-tested; tests/sast/ztv.yml
+# says so and names the two ways the SQL rule was dead on arrival.
+# Skips when semgrep is absent: the tool genuinely is not there. That is a
+# different thing from the SKIP-as-a-pass this project has been bitten by,
+# where the component WAS present and only our config was missing.
+check sast "no async-blocking, unbound SQL, or fail-open TLS" -- bash -c '
+    command -v semgrep >/dev/null 2>&1 || exit 77
+    j=$(mktemp); trap "rm -f $j" EXIT
+    semgrep --metrics=off --config tests/sast/ztv.yml --json -o "$j" \
+            api proxy wireguard btcpay canary support >/dev/null 2>&1 || true
+    # Report the findings, not semgrep is own run summary: a gate whose
+    # failure output does not name the file and line is one the next person
+    # re-runs by hand to find out what it meant.
+    python3 - "$j" <<"PYEOF"
+import json, sys
+try:
+    rows = json.load(open(sys.argv[1]))["results"]
+except Exception as e:
+    print("semgrep produced no parseable report:", e); sys.exit(1)
+for r in rows:
+    print("  %s:%s  [%s]" % (r["path"], r["start"]["line"],
+                             r["check_id"].split(".")[-1]))
+    print("      " + " ".join(r["extra"]["message"].split())[:140])
+sys.exit(1 if rows else 0)
+PYEOF
+'
+
 # The GUI's favicon is generated from the same geometry as the MSI icon and
 # the .desktop SVG, then committed. A committed generated file drifts from its
 # generator the moment someone edits one of them.

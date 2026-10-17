@@ -1,0 +1,142 @@
+# ============================================================================
+# 0trust — static analysis rules for THIS codebase's own bug classes
+# ============================================================================
+# semgrep's registry (semgrep.dev) is unreachable from the build environment,
+# so these are local rules. That turned out to be the better trade anyway:
+# the generic packs do not know that an `async def` blocking the event loop is
+# a documented invariant here, or that a silent TLS downgrade is the specific
+# failure this product fails closed against.
+#
+#   semgrep --metrics=off --config tests/sast/ztv.yml api proxy wireguard
+#
+# Every rule below has been mutation-tested: the offending shape was planted
+# and the rule was watched going red. A rule nobody has seen fail is a rule
+# nobody has tested — see CLAUDE.md bug class #17.
+#
+# Deliberately NOT a broad "SQL built with an f-string" rule. The codebase
+# uses two safe interpolation idioms heavily — a literal fragment carrying a
+# `?`, and `",".join("?" * len(xs))` for an IN clause — and a rule that
+# flags those produces 19 findings, all false. A gate that is always red gets
+# switched off, and then the next real one goes in unnoticed. The rule below
+# matches the mistake instead: a VALUE interpolated into the fragment.
+# ============================================================================
+rules:
+
+  # --- an async def handler must not block (CLAUDE.md invariant) ---------
+  # FastAPI runs a plain `def` in the threadpool and an `async def` on the
+  # event loop. /surf was an async def around a urllib fetch with a
+  # 12s-per-hop timeout, so one unauthenticated GET froze the whole service.
+  - id: ztv-async-blocking-http
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Blocking HTTP inside an async def: this stalls every other request on
+      the worker. Use run_in_threadpool, or make the handler a plain def.
+    patterns:
+      - pattern-inside: |
+          async def $F(...):
+              ...
+      - pattern-either:
+          - pattern: urllib.request.urlopen(...)
+          - pattern: requests.$M(...)
+          - pattern: httpx.Client(...)
+      - pattern-not-inside: |
+          await run_in_threadpool(...)
+
+  - id: ztv-async-blocking-sleep
+    languages: [python]
+    severity: ERROR
+    message: time.sleep in an async def blocks the event loop; use asyncio.sleep.
+    patterns:
+      - pattern-inside: |
+          async def $F(...):
+              ...
+      - pattern: time.sleep(...)
+
+  - id: ztv-async-blocking-subprocess
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Blocking subprocess in an async def. payment_webhook stays async only
+      to read the raw body for its signature; its blocking half goes through
+      run_in_threadpool.
+    patterns:
+      - pattern-inside: |
+          async def $F(...):
+              ...
+      - pattern-either:
+          - pattern: subprocess.run(...)
+          - pattern: subprocess.check_output(...)
+          - pattern: subprocess.call(...)
+
+  # --- a value interpolated into a SQL fragment --------------------------
+  # The safe idiom appends a literal carrying a placeholder and binds the
+  # value:  where.append("status = ?"); args.append(status)
+  # The bug appends the value itself. Matching the quote is what separates
+  # the two: a bound fragment never needs one.
+  - id: ztv-sql-value-in-fragment
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A value interpolated into a SQL fragment instead of bound. Append a
+      literal carrying `?` and put the value in the args list.
+    # A regex, not a pattern. semgrep matches an f-string as a whole value
+    # and will not match "a quote, then an interpolation" inside one, so the
+    # structural version of this rule parsed, loaded, reported zero findings
+    # on planted input, and would have shipped as a rule that cannot fire.
+    # (The YAML matters too: a `|` block scalar keeps its trailing newline,
+    # which semgrep matches literally and which also made the rule dead.)
+    #
+    # Scoped to execute() and to the names SQL fragment lists actually have.
+    # A bare `.append(f'...="{v}"')` is the same shape as HTML attribute
+    # serialisation — proxy/rewrite.py builds exactly that, correctly escaped
+    # — and a rule that cannot tell SQL from HTML reports it forever.
+    pattern-either:
+      - pattern-regex: |-
+          \.(?:execute|executemany)\(\s*f(?:"[^"\n]*'\{|'[^'\n]*"\{)
+      - pattern-regex: |-
+          \b(?:where|clause|clauses|cond|conds|conditions|filters|fields|sets|predicates)\.append\(\s*f(?:"[^"\n]*'\{|'[^'\n]*"\{)
+
+  # --- failing open on TLS ------------------------------------------------
+  # The node's resolver, the Tor control channel and the Cloudflare range
+  # fetch all fail CLOSED on purpose: a silent downgrade restores the signal
+  # precisely when someone is interfering.
+  - id: ztv-tls-verify-disabled
+    languages: [python]
+    severity: ERROR
+    message: TLS verification disabled — this product fails closed instead.
+    pattern-either:
+      - pattern: $P(..., verify=False, ...)
+      - pattern: ssl._create_unverified_context(...)
+      - pattern: $CTX.check_hostname = False
+
+  # --- shell metacharacters from an interpolated value --------------------
+  # A node's public_ip is interpolated into an `nft -f` rule and a device
+  # pubkey into a `wg syncconf` config, both parsed as root.
+  - id: ztv-subprocess-shell-true
+    languages: [python]
+    severity: WARNING
+    message: shell=True makes any interpolated value shell syntax.
+    pattern: $P(..., shell=True, ...)
+
+  - id: ztv-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: eval/exec.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+
+  # --- credential compared byte-by-byte -----------------------------------
+  - id: ztv-timing-unsafe-secret-compare
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Credential compared with ==, which short-circuits on the first
+      differing byte. Use hmac.compare_digest.
+    pattern-either:
+      - pattern: $A.token == $B
+      - pattern: $A.psk == $B
+      - pattern: $A.secret == $B
+      - pattern: $A.signature == $B
+      - pattern: $A.token_hash == $B
