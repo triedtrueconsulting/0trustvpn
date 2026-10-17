@@ -130,7 +130,9 @@ block scalar keeps a trailing newline that semgrep then matches literally.
 
 ## 5. Post-audit state
 
-`./scripts/validate.sh` — **26 checks, 26 passed, 0 failed, 0 skipped.**
+`./scripts/validate.sh` — **26 checks, 26 passed, 0 failed, 0 skipped**, with
+the emulation suite contributing **2,380 assertions across 30 modules, 0
+failed**.
 
 Full results, including what could not be tested here and why, are in
 TEST-RESULTS.md and WIREGUARD-TEST-RESULTS.md.
