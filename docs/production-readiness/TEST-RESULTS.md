@@ -11,7 +11,7 @@ rather than being omitted.
 | | |
 |---|---|
 | `./scripts/validate.sh` | **26 passed, 0 failed, 0 skipped** |
-| Emulation suite | **2,380 assertions, 0 failed**, across 30 modules |
+| Emulation suite | **2,389 assertions, 0 failed**, across 30 modules |
 | Active security probe (written for this audit) | **48 assertions, 0 failed** |
 | SAST (`tests/sast/ztv.yml`, 8 rules) | **0 findings** |
 | Secret scan (tree + 1,096 blobs over 152 commits) | **0 new**, 2 known exposures outstanding |
@@ -63,7 +63,7 @@ $ ./scripts/validate.sh
 | Module | Assertions | |
 |---|---:|---|
 | test_site | 384 | 0 failed |
-| test_install | 315 | 0 failed |
+| test_install | 324 | 0 failed |
 | test_admin | 168 | 0 failed |
 | test_ios | 137 | 0 failed |
 | test_watchpay | 124 | 0 failed |
@@ -92,8 +92,9 @@ $ ./scripts/validate.sh
 | test_chainwatch | 25 | 0 failed |
 | test_concurrency | 15 | 0 failed |
 | test_integration | 7 | 0 failed |
-| **TOTAL** | **2,380** | **0 failed** |
+| **TOTAL** | **2,389** | **0 failed** |
 
+`test_install` rose from 315 to 324 — the iproute2 block in §9b.
 `test_payments` rose from 37 to 56 in this audit — the money-path abuse
 block. `test_audit` rose from 68 to 79 — the history-aware secret scan and
 its mutation test.
@@ -189,7 +190,36 @@ product generated itself) plus stdlib, built with go1.24.7. This is a real
 gap and is listed in REMAINING-RISKS.md R11; it must be run from a host
 with access before launch.
 
-## 9. `audit-verify.sh` in this environment
+## 9b. A real install, and audit-verify against it
+
+`install.sh --mode test` was run for real on this container. It stopped
+loudly at `systemctl` (no systemd here, `RC=1`) after completing packages,
+users, code, venv, secrets, database, units, website and nginx — and with
+`systemctl` stubbed to simulate an LXC VPS it completed while still
+reporting `nginx is NOT serving on port 80` and `The VPN is NOT up`. It
+probes rather than trusting the service manager. Full detail, including the
+customer flow driven against the installed stack, is in
+WIREGUARD-TEST-RESULTS.md §3b.
+
+Against that real deployment:
+
+```
+audit-verify.sh:  PASS: 28    FAIL: 2    SKIP: 11
+```
+
+The nginx privacy checks pass **against the deployed config** rather than
+the reference file. The two failures are the verifier working on a test rig
+— three nodes sharing a TEST-NET-1 address are correctly called
+placeholders, and `cdn-disclosed` correctly fires because privacy.html
+names a CDN this deployment is not behind.
+
+That run also found two installer defects, now fixed: a `set -e` +
+`pipefail` abort that killed the script mid-install on a host without
+iproute2, one line before its own fallback, and a probe that reported a
+missing package as a kernel limitation — fatal on `--mode node`, so it
+would send an operator to buy a different VPS.
+
+## 9. `audit-verify.sh` in a bare repository
 
 ```
 PASS: 13    FAIL: 1    SKIP: 27

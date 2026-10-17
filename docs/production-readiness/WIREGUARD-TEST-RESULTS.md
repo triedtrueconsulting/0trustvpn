@@ -164,6 +164,99 @@ precisely why both nginx and uvicorn drop that request path from their logs.
 The property that actually matters is that the id is unguessable, and the
 default provider derives it from `secrets.token_urlsafe(18)` — 144 bits.
 
+## 3b. A real `install.sh --mode test` run, end to end
+
+Run on this container (Ubuntu 24.04, root, no systemd, no WireGuard kernel
+module) against the real script — not the render path.
+
+**Where it got to.** Packages, service user and directories, application
+code and venv, fresh secrets (`api.env`, `proxy.env`, `backup.env`), the
+database with all 16 tables, systemd unit files, the website, and the nginx
+configuration — `nginx -t` passed on the generated config. It then stopped
+at `systemctl`, loudly, with `RC=1`:
+
+```
+[+] Installing systemd units
+System has not been booted with systemd as init system (PID 1). Can't operate.
+```
+
+No claim of success, no partial-success summary. Correct.
+
+**The interesting run.** Stubbing `systemctl` to return success for
+everything simulates the realistic case this maps to — an **LXC VPS, which
+has systemd but no WireGuard module**. The installer completed, and did not
+believe the stub:
+
+```
+[✓] 0trust-api answering, sweep + poll timers armed
+[!] nginx is NOT serving on port 80
+...
+[!] WireGuard interface(s) NOT up: wg0 wg1 wg2
+...
+  The VPN is NOT up. The control plane, website, admin dashboard
+  and /surf proxy all work — but meshd could not create the WireGuard
+  interfaces, so `0trust connect` will hand out a config that cannot carry
+  traffic.
+```
+
+It probed `ip link show` and port 80 rather than trusting a zero exit
+status from the service manager. That is bug class #16 holding under a
+service manager that was actively lying to it.
+
+**The customer flow, against the installed stack.** The API was started
+from `/opt/0trust/api/.venv` with the installed `api.env`, exactly as the
+unit would:
+
+| Step | Result |
+|---|---|
+| `GET /api/v1/config` | pricing from `PRICING`, `trial.label` "one week" |
+| `GET /api/v1/status/public` | `service: down` before nodes existed — honest |
+| Trial challenge → 20-bit PoW → redeem | token issued, 16 chars in 4-char groups |
+| `GET /api/v1/account/status` | `plan: trial`, `max_devices: 2` — the trial cap, published not hardcoded |
+| `POST /api/v1/wg/register` | `10.64.0.2/32`, DNS `10.64.0.1`, MTU 1420 |
+| peers returned | **exactly one**, `allowed_ips: ["0.0.0.0/0", "::/0"]` |
+| v6 address | none issued — no node reports v6 egress, which is the safe branch |
+
+Several invariants are visible in that one response: one peer and never a
+list, both families claimed, the MTU published by the server rather than
+computed in the client, and the device cap coming from the API.
+
+**`audit-verify.sh` against a real deployment** — the first chance in this
+audit to run it anywhere but a bare repo:
+
+```
+PASS: 28    FAIL: 2    SKIP: 11      (bare repo was 13 / 1 / 27)
+```
+
+The nginx privacy checks now **pass against the deployed config**, not the
+reference file: `nginx-anonymizes-ip`, `nginx-no-user-agent`,
+`nginx-log-no-secret-paths`, `nginx-canary-no-cache`, `api-no-access-log`.
+That is the gap CLAUDE.md calls the worst claim-vs-reality defect the
+product has had, confirmed closed on a real install.
+
+Both failures are the verifier working, not defects:
+
+- `juris-public-ip-geolocate` — all three nodes share `192.0.2.2`
+  (TEST-NET-1), so it reports them as placeholders rather than three
+  countries. Exactly what `--mode test` says about itself.
+- `cdn-disclosed` — fires in the *other* direction: privacy.html discloses
+  a CDN this deployment is not behind, because it was installed without
+  `--cloudflare`.
+
+**A suspicion checked and dismissed.** After node registration,
+`/status/public` reported `operational` for all three regions while the
+installer had just said the VPN was not up. The heartbeat body carries only
+`node_id` and `ipv6` — nothing about interface state — so a node that
+cannot build its tunnel heartbeating its way to "operational" would be the
+documented NAT failure all over again. It does not happen:
+`bootstrap_interface()` runs **before** the loop's first `heartbeat()` and
+uses `check=True`, so meshd dies rather than reporting itself alive. Run
+directly, it exits 1 with `CalledProcessError` on
+`ip link add wg0 type wireguard`. The `operational` reading came from the
+registration timestamp and ages out after `NODE_STALE_SECS` (300s), the
+same window as any node death. Safe direction, bounded window, no change
+made.
+
 ## 4. Static analysis
 
 `tests/sast/ztv.yml`, 8 rules, run over `api proxy wireguard btcpay canary
