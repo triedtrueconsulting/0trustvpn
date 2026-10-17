@@ -49,6 +49,68 @@ try:
 finally:
     H.shutdown()
 
+print("\n=== the price is the server's, whatever the client sends ===")
+# PRICING is the only place a term costs anything. Nothing in the suite
+# checked that, so a request that named its own amount, or ordered a term
+# that is not for sale, was never tried against the running system — on the
+# one path in this product that moves money.
+H.boot(DB, workers=1)
+try:
+    import main as _m
+    check("the signup model has no amount field to override",
+          not ({"amount", "amount_usd", "price", "usd"}
+               & set(_m.AccountCreateRequest.model_fields)),
+          list(_m.AccountCreateRequest.model_fields))
+
+    # Terms that are not for sale. 2 and 13 are the realistic ones: adjacent
+    # to a real term, and the shape a client would send if it built the
+    # number itself instead of reading /api/v1/config.
+    for bad in (0, -1, 2, 13, 999999, 2 ** 40, 1.5, None, "abc"):
+        st, body = H.call("POST", "/api/v1/account", {"months": bad})
+        check(f"months={bad!r} is refused", st in (400, 422), f"{st} {str(body)[:90]}")
+
+    # A planted price must not reach the invoice. Pydantic ignores the unknown
+    # field, which is the correct outcome and is also the silent one — so the
+    # check is on the amount that was STORED, not on the status code.
+    for months in sorted(_m.PRICING):
+        st, acct = H.call("POST", "/api/v1/account",
+                          {"months": months, "amount_usd": 0.01, "price": 0.01})
+        check(f"{months}-month signup succeeds with a planted price", st == 200,
+              f"{st} {str(acct)[:120]}")
+        if st != 200:
+            continue
+        import sqlite3 as _sq
+        with _sq.connect(DB) as _c:
+            _c.row_factory = _sq.Row
+            row = _c.execute("SELECT months, amount_usd FROM invoices WHERE id = ?",
+                             (acct["invoice_id"],)).fetchone()
+        check(f"the {months}-month invoice is priced from PRICING, not the request",
+              row is not None and abs(row["amount_usd"] - _m.PRICING[months]) < 0.001,
+              f"stored={dict(row) if row else None} expected={_m.PRICING[months]}")
+
+    # The invoice id is deliberately a bearer capability — that is why nginx
+    # and uvicorn both drop this request path from their logs. So the property
+    # to hold is not that the route is authenticated (it is not) but that the
+    # id cannot be guessed and buys nothing except payment state.
+    st, acct = H.call("POST", "/api/v1/account", {"months": 1})
+    if st == 200:
+        st2, body2 = H.call("GET", f"/api/v1/payment/{acct['invoice_id']}/status")
+        check("the invoice id returns payment state and no account token",
+              st2 == 200 and acct["token"] not in json.dumps(body2)
+              and "token" not in body2, f"{st2} {str(body2)[:120]}")
+        st3, _ = H.call("GET", "/api/v1/payment/btc-1-guessed-invoice-id/status")
+        check("a guessed invoice id gets nothing", st3 in (401, 403, 404), st3)
+
+    import inspect, re as _re
+    import payments as _p
+    wsrc = inspect.getsource(_p.WatchOnlyProvider.create_invoice)
+    m = _re.search(r"secrets\.token_urlsafe\((\d+)\)", wsrc)
+    check("the default provider's invoice id is 16+ bytes of secrets entropy",
+          bool(m) and int(m.group(1)) >= 16,
+          m.group(1) if m else "no secrets.token_urlsafe literal found")
+finally:
+    H.shutdown()
+
 print("\n=== provider: hosted gateway (no blockchain infrastructure at all) ===")
 gw = subprocess.Popen([sys.executable, os.path.join(os.path.dirname(
     os.path.abspath(__file__)), "fake_gateway.py"), str(GATEWAY_PORT)],
