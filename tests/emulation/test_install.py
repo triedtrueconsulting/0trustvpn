@@ -848,12 +848,49 @@ http {{
     check("the failure is reported, not a silent non-zero exit",
           "[!]" in out, f"exit {rc} with no diagnostic:\n{out[-300:]}")
 
-    rc, out = run_installer("--mode", "production", "--domain", "example.com",
-                            "--email", "a@b.c")
-    check("a domain resolving elsewhere warns but proceeds", rc == 0,
-          "behind NAT or a proxy this is legitimate; refusing would be wrong")
-    check("and prints both sides so the operator can compare",
-          "resolves to" in out and "this box has" in out, out[-400:])
+    # A name that resolves SOMEWHERE ELSE. This used to use example.com and
+    # so needed working external DNS: on an air-gapped runner the name did
+    # not resolve, the installer took the "does not resolve" branch instead,
+    # and both assertions below failed for a reason that had nothing to do
+    # with the product. A hosts entry makes getent — which is what the
+    # installer actually calls — return a controlled answer with no network
+    # and no third-party domain.
+    #
+    # 198.51.100.9 is TEST-NET-2 (RFC 5737), reserved for documentation, so
+    # it cannot be an address this box holds and cannot route anywhere.
+    HOSTS, STUB = "/etc/hosts", "ztv-elsewhere.test"
+    _hosts_before = None
+    try:
+        try:
+            _hosts_before = open(HOSTS).read()
+            with open(HOSTS, "a") as fh:
+                fh.write(f"\n198.51.100.9 {STUB}\n")
+            _resolvable = subprocess.run(["getent", "ahostsv4", STUB],
+                                         capture_output=True).returncode == 0
+        except OSError:
+            _resolvable = False
+
+        if _resolvable:
+            rc, out = run_installer("--mode", "production", "--domain", STUB,
+                                    "--email", "a@b.c")
+            check("a domain resolving elsewhere warns but proceeds", rc == 0,
+                  "behind NAT or a proxy this is legitimate; refusing would "
+                  "be wrong")
+            check("and prints both sides so the operator can compare",
+                  "resolves to" in out and "this box has" in out, out[-400:])
+        else:
+            # Honest about what did not run. Saying PASS here would be the
+            # SKIP-standing-in-for-a-pass failure this repo keeps finding.
+            print("  SKIP  a domain resolving elsewhere warns but proceeds"
+                  "  <- cannot write /etc/hosts to stage a resolvable name")
+            print("  SKIP  and prints both sides so the operator can compare"
+                  "  <- same")
+    finally:
+        if _hosts_before is not None:
+            try:
+                open(HOSTS, "w").write(_hosts_before)
+            except OSError:
+                pass
 
     rc, out = run_installer("--skip-preflight", "--mode", "production",
                             "--domain", "nope.invalid", "--email", "a@b.c")

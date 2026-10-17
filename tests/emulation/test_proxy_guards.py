@@ -52,8 +52,32 @@ refuses("https://bad.example/", "blocklisted host", ("bad.example",))
 refuses("https://deep.sub.bad.example/", "blocklisted subdomain", ("bad.example",))
 
 print("\n[public sites still work]")
-allows("https://example.com/")
-allows("http://example.com/path?q=1")
+# A literal address first, because it needs no resolver. check_url has to
+# resolve a hostname to decide whether its address is public, so the two
+# cases below are the only assertions in this module that depend on DNS --
+# and they FAILED the whole module on an air-gapped runner, which is a test
+# that protects nothing in exactly the environment a release is cut in.
+# This one proves "a public unicast destination is allowed" with no network
+# at all.
+allows("https://8.8.8.8/")
+allows("http://1.1.1.1:80/path?q=1")
+
+# The hostname path as well, when a resolver exists. Reported as skipped
+# rather than passed when it does not: a name that cannot resolve says
+# nothing either way about whether the guard would have allowed it.
+import socket as _socket
+try:
+    _socket.getaddrinfo("example.com", None)
+    _HAVE_DNS = True
+except OSError:
+    _HAVE_DNS = False
+
+if _HAVE_DNS:
+    allows("https://example.com/")
+    allows("http://example.com/path?q=1")
+else:
+    print("  SKIP  allows https://example.com/  <- no resolver on this host")
+    print("  SKIP  allows http://example.com/path?q=1  <- no resolver on this host")
 
 print("\n[_is_public]")
 for a, want in (("8.8.8.8", True), ("1.1.1.1", True), ("2606:4700::1111", True),

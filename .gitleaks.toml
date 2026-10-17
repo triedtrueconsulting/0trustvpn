@@ -1,0 +1,53 @@
+# gitleaks configuration for 0trust.
+#
+# Run by scripts/secret-scan.sh, which scans the whole of git HISTORY and not
+# just the working tree. That distinction is the point of the file: a key
+# committed once and deleted in the next commit is still in the pack, still
+# handed to everyone who clones, and for this product that is the failure with
+# no recovery — an extended public key cannot be rotated without moving the
+# funds.
+#
+# ALLOWLISTS BELOW ARE DELIBERATELY NARROW. Each one names a specific literal
+# or a specific constant, never a whole file and never a whole rule: allowlist
+# tests/ wholesale and the next real credential pasted into a fixture passes
+# in silence. If you add one, pin it to the exact string and say why.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "ztv-extended-key"
+description = "A BIP32 extended key. The public half exposes the operator's entire balance and payment history, permanently and unrotatably; the private half spends."
+# Non-capturing on purpose: gitleaks reports the capture GROUP as the
+# secret, so a group here reduces every finding to the string "zpub" and the
+# known-exposure register can never match one.
+regex = '''\b(?:[xyz]pub|[xyz]prv)[1-9A-HJ-NP-Za-km-z]{70,}'''
+keywords = ["xpub", "ypub", "zpub", "xprv", "yprv", "zprv"]
+
+[[rules]]
+id = "ztv-age-secret"
+description = "An age identity. Whoever holds it reads every encrypted backup this deployment has ever made."
+regex = '''AGE-SECRET-KEY-1[0-9A-Z]{50,}'''
+keywords = ["AGE-SECRET-KEY"]
+
+[[rules]]
+id = "ztv-wireguard-private"
+description = "A WireGuard private key on a PrivateKey= line."
+regex = '''(?i)privatekey\s*=\s*[A-Za-z0-9+/]{42}[A-Za-z0-9+/=]{2}'''
+keywords = ["privatekey"]
+
+[allowlist]
+description = "Known-benign literals, each pinned exactly."
+regexes = [
+  # The token alphabet, in both languages. A fixed Crockford-ish base32
+  # alphabet with no 0/O/1/I/L — high entropy by construction, secret by
+  # nothing. Pinned to the literal so a different constant is not covered.
+  '''ABCDEFGHJKLMNPQRSTUVWXYZ23456789''',
+  # The fixture that PROVES secrets are masked: test_admin_ui.py writes it
+  # into STRIPE_SECRET_KEY and then asserts it does not appear in the audit
+  # log. Removing it would delete the test that stops a real key leaking.
+  '''sk_live_supersecret''',
+  # An illustrative account token in a docs terminal transcript. Tokens are
+  # 16 chars of the alphabet above; this one was never issued.
+  '''7K2M-9X4P-AQ8R-J3WN''',
+]

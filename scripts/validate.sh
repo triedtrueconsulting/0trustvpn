@@ -274,6 +274,20 @@ check seo-jsonld "structured data matches the pages and the API's prices" -- \
 check vendor-integrity "vendored third-party JS matches its pinned hashes" -- \
     ./scripts/vendor-third-party.sh --check-only
 
+# Secrets, in HISTORY and not just the tree.
+#
+# test_audit.py already refuses an extended key in the working tree, and that
+# check was green for months over a history containing two of them: a key
+# committed once and deleted in the next commit stays in the pack and is
+# handed to everyone who clones. For an extended public key there is no
+# recovery — it cannot be rotated, only outrun by moving the funds.
+#
+# The built-in pass has no dependencies so it cannot silently not run;
+# gitleaks adds breadth when installed. Exposures already registered in
+# scripts/secret-scan.known are reprinted as outstanding, not waved through.
+check secret-scan "no new secrets in the tree or in git history" -- \
+    ./scripts/secret-scan.sh
+
 # The GUI's favicon is generated from the same geometry as the MSI icon and
 # the .desktop SVG, then committed. A committed generated file drifts from its
 # generator the moment someone edits one of them.

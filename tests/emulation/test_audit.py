@@ -252,6 +252,107 @@ r = subprocess.run(["git", "grep", "-nIE", r'\b[xyz]pub[1-9A-HJ-NP-Za-km-z]{60,}
 check("no extended key is committed anywhere outside the tests",
       r.returncode != 0, r.stdout[:400])
 
+# ---------------------------------------------------------------------------
+# ...and nothing in the HISTORY either, which is a different question.
+#
+# The check above greps the working tree. It has been green for months over a
+# pack that contains two valid extended keys: a key committed once and deleted
+# in the next commit is still in the object graph, still handed to everyone who
+# clones, and still readable with one `git show`. Deleting the file does not
+# un-publish the key, and an extended public key cannot be rotated — moving the
+# funds is the only remedy. So the tree check is necessary and is not the gate.
+#
+# scripts/secret-scan.sh is the gate. Findings already known are registered in
+# scripts/secret-scan.known and reported every run as OUTSTANDING rather than
+# failing the build, because a permanently red gate gets switched off and then
+# the NEXT secret goes in unnoticed. A NEW one fails.
+SCAN = os.path.join(H.REPO, "scripts", "secret-scan.sh")
+check("scripts/secret-scan.sh exists and is executable",
+      os.access(SCAN, os.X_OK))
+
+r = subprocess.run([SCAN], capture_output=True, text=True, timeout=900,
+                   cwd=H.REPO)
+scan_out = r.stdout + r.stderr
+check("the repository carries no NEW secret, in tree or history",
+      r.returncode == 0, scan_out[-800:])
+check("and the scan really walked the object graph, not just the tree",
+      re.search(r'\d+ blobs scanned across \d+ commits', scan_out) is not None,
+      "a history gate that does not read history is the SKIP-as-a-pass "
+      "failure this repository keeps meeting")
+
+# The register is load-bearing: drop an entry and that exposure stops being
+# reported as outstanding, silently. Require the two known ones to still be
+# named, so removing one is a test failure and not a quiet edit.
+known_src = open(os.path.join(H.REPO, "scripts", "secret-scan.known")).read()
+known_digests = re.findall(r'^([0-9a-f]{16})\s\s', known_src, re.M)
+check("the known-exposure register still lists the two committed zpubs",
+      len(known_digests) >= 2, f"found {len(known_digests)}")
+check("and each is reported as outstanding on every run",
+      all(d in scan_out for d in known_digests),
+      "an entry nobody reprints is an exposure nobody acts on")
+check("the register holds digests, never the keys themselves",
+      not re.search(r'\b[xyz]pub[1-9A-HJ-NP-Za-km-z]{50,}', known_src))
+
+# MUTATION. Everything above passes just as well if the history scan is a
+# no-op, so break it on purpose and require it to go red — and show in the
+# same breath that the working-tree grep above does NOT catch this, which is
+# the entire reason this block exists.
+_mut = H.tempdir("0trust-histscan-")
+_planted = H.account_zpub_from_mnemonic(
+    " ".join(["abandon"] * 11 + ["about"]), account=7)
+_g = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+          GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+
+def _git(*a):
+    return subprocess.run(["git", *a], cwd=_mut, env=_g, capture_output=True,
+                          text=True, timeout=120)
+
+os.makedirs(os.path.join(_mut, "scripts"), exist_ok=True)
+_sh.copy(SCAN, os.path.join(_mut, "scripts", "secret-scan.sh"))
+# Empty register: the planted key must fail on its own merits, not be waved
+# through by an entry, and must not be hidden by one either.
+open(os.path.join(_mut, "scripts", "secret-scan.known"), "w").close()
+if os.path.exists(os.path.join(H.REPO, ".gitleaks.toml")):
+    _sh.copy(os.path.join(H.REPO, ".gitleaks.toml"),
+                os.path.join(_mut, ".gitleaks.toml"))
+_git("init", "-q", ".")
+open(os.path.join(_mut, "README.md"), "w").write("clean\n")
+_git("add", "-A"); _git("commit", "-qm", "init")
+
+_ctl = subprocess.run([os.path.join(_mut, "scripts", "secret-scan.sh")],
+                      cwd=_mut, env=_g, capture_output=True, text=True,
+                      timeout=900)
+check("[mutation control] a clean repository passes the scan",
+      _ctl.returncode == 0, (_ctl.stdout + _ctl.stderr)[-400:])
+
+# Commit a key, then delete it. The tree is clean; the pack is not.
+open(os.path.join(_mut, "wallet.md"), "w").write(f"WALLET={_planted}\n")
+_git("add", "-A"); _git("commit", "-qm", "oops")
+_git("rm", "-q", "wallet.md"); _git("commit", "-qm", "remove it")
+
+_tree_grep = _git("grep", "-nIE", r'\b[xyz]pub[1-9A-HJ-NP-Za-km-z]{60,}',
+                  "--", ".")
+check("[mutation] the working-tree grep does NOT see the deleted key",
+      _tree_grep.returncode != 0,
+      "if this ever starts catching it, the premise below is wrong")
+
+_mr = subprocess.run([os.path.join(_mut, "scripts", "secret-scan.sh")],
+                     cwd=_mut, env=_g, capture_output=True, text=True,
+                     timeout=900)
+_mout = _mr.stdout + _mr.stderr
+check("[mutation] but the history scan DOES, and fails",
+      _mr.returncode != 0 and "ztv-extended-key" in _mout, _mout[-500:])
+check("[mutation] and it reports a digest, never the key",
+      _planted not in _mout and "sha256:" in _mout,
+      "a scanner that prints the secret has copied it somewhere new")
+
+_tr = subprocess.run([os.path.join(_mut, "scripts", "secret-scan.sh"), "--tree"],
+                     cwd=_mut, env=_g, capture_output=True, text=True,
+                     timeout=900)
+check("[mutation] --tree is documented as tree-only and behaves that way",
+      _tr.returncode == 0,
+      "--tree is the fast pre-commit path; the full scan is the gate")
+
 tmp = H.tempdir("0trust-pin-")
 mine = os.path.join(tmp, "w.pin")
 r = subprocess.run([WAL, "--pin-file", mine, "--pin", SPEC_ZPUB],
