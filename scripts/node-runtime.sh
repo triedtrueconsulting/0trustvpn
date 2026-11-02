@@ -171,11 +171,27 @@ ztv_dnsmasq_conf() {
     cat <<EOF
 # 0trust mesh resolver. Managed by scripts/node-runtime.sh.
 
-# Answer ONLY on the mesh gateway. Without bind-interfaces dnsmasq would also
-# answer on the public address, turning the node into an open resolver — free
-# DNS amplification for whoever finds it, and an abuse report within the day.
+# Answer ONLY on the mesh gateway. Left to itself dnsmasq binds the wildcard
+# and would also answer on the public address, turning the node into an open
+# resolver — free DNS amplification for whoever finds it, and an abuse report
+# within the day.
+#
+# bind-dynamic rather than bind-interfaces, and the difference is the whole
+# resolver on this box. bind-interfaces binds the listed addresses ONCE, at
+# startup. The mesh gateway lives on wg0, which meshd creates AFTER enrolment
+# has configured and restarted dnsmasq, so that address never exists yet:
+# dnsmasq exits with "failed to create listening socket for 10.64.0.1: Cannot
+# assign requested address" and nothing ever starts it again. Customers then
+# connect to a tunnel whose only resolver is dead, and every name lookup
+# fails while the client reports itself connected.
+#
+# bind-dynamic watches for interfaces appearing and binds the address when
+# wg0 shows up. It still binds ONLY what listen-address names — verified on
+# a live kernel, where the socket table after the interface appears holds
+# 10.64.0.1:53 and nothing on 0.0.0.0 or the public address — so the
+# open-resolver property this comment exists for is unchanged.
 listen-address=$listen${listen6:+,$listen6}
-bind-interfaces
+bind-dynamic
 
 # Never consult /etc/resolv.conf (systemd-resolved's stub) or /etc/hosts:
 # the upstreams below are the whole story.

@@ -497,9 +497,31 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   four limits and `test_node.py` fails if any one of them goes missing.
 - **Clients are handed `DNS = 10.64.0.1` (plus the v6 gateway where v6 is
   carried), so something must answer there.**
-  `dnsmasq` on the mesh gateway, `bind-interfaces` (an open resolver on the
-  public IP is a DNS-amplification abuse report waiting to happen), forwarding
-  to `ZTV_DNS_UPSTREAM` (Quad9 by default). **Query logging must stay off** —
+  `dnsmasq` on the mesh gateway, **`bind-dynamic`** (an open resolver on the
+  public IP is a DNS-amplification abuse report waiting to happen; both bind
+  modes bind only what `listen-address` names, so this keeps that property),
+  forwarding to `ZTV_DNS_UPSTREAM` (Quad9 by default).
+  **It was `bind-interfaces`, and that bound nothing at all.** That mode binds
+  the listed addresses once, at startup — and the gateway lives on `wg0`,
+  which meshd creates AFTER enrolment has configured and restarted dnsmasq.
+  So the address never existed yet, dnsmasq exited with "failed to create
+  listening socket for 10.64.0.1: Cannot assign requested address", and
+  nothing restarted it. The customer's tunnel came up, reported connected,
+  and could not resolve a single name. `node-runtime-apply.sh` even logged
+  "dnsmasq will bind 10.64.0.1 once wg0 is up" on that failure, which nothing
+  in the tree implemented — the recovery was a sentence, not code. Found on a
+  real handset against a real node. The gate for it is
+  `audit-verify.sh`'s `node-dns-listening`, which reads the SOCKET TABLE on a
+  live node rather than the config: no grep of a config file can see a dead
+  daemon, and the config was never the part that looked wrong.
+  **The regression check in `test_install.py` first passed with the broken
+  directive in place**, because the explanatory comment sits inside the
+  heredoc and ships into the rendered config, so `"bind-dynamic" in dns`
+  matched the paragraph explaining why `bind-interfaces` is wrong. Both
+  resolver checks are anchored to a line start now. That is bug class #17
+  exactly, met while writing the guard against the bug the comment
+  describes — read directives, never prose.
+  **Query logging must stay off** —
   privacy.html §4d and `audit-verify.sh`'s `node-dns-no-query-log` both say so.
 - **One peer per config, never a list.** WireGuard's AllowedIPs is a routing
   table: a second peer claiming `0.0.0.0/0` takes that prefix off the first.

@@ -765,9 +765,39 @@ http {{
         dns = open(dnsp).read()
         check("resolver answers on the gateway the API hands out",
               "listen-address=10.64.0.1" in dns, dns[:200])
-        # Without this dnsmasq also answers on the public address, which is an
-        # open resolver: free DNS amplification and an abuse report by morning.
-        check("resolver is not open to the internet", "bind-interfaces" in dns, dns[:300])
+        # Read the DIRECTIVES, never the prose. The rendered file carries a
+        # long comment explaining why bind-interfaces is the wrong mode, and
+        # the first version of the two checks below matched "bind-dynamic"
+        # anywhere in the file — so it found that explanation and passed
+        # green with `bind-interfaces` as the live directive. That is exactly
+        # the shape CLAUDE.md's bug class #17 warns about (a check matching
+        # its own explanatory comment), met while writing the guard against
+        # the bug the comment describes. Anchored to a line start, the
+        # comments cannot satisfy either check.
+        binds = re.findall(r"^bind-(\w+)", dns, re.M)
+        listens = [a for line in re.findall(r"^listen-address=(.+)$", dns, re.M)
+                   for a in line.split(",")]
+        # Left to itself dnsmasq binds the wildcard and answers on the public
+        # address too: free DNS amplification and an abuse report by morning.
+        check("resolver is not open to the internet",
+              bool(binds) and set(binds) <= {"dynamic", "interfaces"},
+              f"bind directives in the rendered config: {binds or 'none'}")
+        check("resolver answers on nothing but the mesh network",
+              bool(listens) and all(a.startswith("10.64.") or a.startswith("fd0e:")
+                                    for a in listens),
+              f"listen-address names: {listens or 'none'}")
+        # The mesh gateway lives on wg0, which meshd creates AFTER enrolment
+        # has configured and restarted dnsmasq. bind-interfaces binds the
+        # listed addresses once, at startup, so that address never exists yet
+        # and dnsmasq dies with "Cannot assign requested address" — a
+        # customer connects, the client reports the tunnel up, and not one
+        # name resolves. Both modes bind only what listen-address names, so
+        # the open-resolver property above is identical; only one of them
+        # survives the ordering.
+        check("resolver survives wg0 appearing after dnsmasq starts",
+              binds == ["dynamic"],
+              "bind-interfaces binds once at startup and the gateway address "
+              f"does not exist yet at that point; directives found: {binds}")
         check("resolver ignores the host's own resolv.conf", "no-resolv" in dns)
         check("resolver does not log customer queries",
               not re.search(r"^\s*log-queries", dns, re.M), dns[:400])

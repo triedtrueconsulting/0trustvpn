@@ -30,10 +30,24 @@ import base64, json, os, re, socket, sqlite3, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
-FAIL, PASS = [], []
+FAIL, PASS, NOTRUN = [], [], []
 def check(n, ok, d=""):
     (PASS if ok else FAIL).append(n)
     print(("  PASS  " if ok else "  FAIL  ") + n + ("" if ok else f"\n          {d}"))
+
+def notrun(n, why):
+    """
+    A check that could not run, recorded so it cannot read as a pass.
+
+    Section [9] is the ONLY thing anywhere that executes the Android app's
+    own copy of the obfuscated transport, and it needs a Kotlin compiler it
+    has to fetch. When that fetch fails the honest outcome is neither PASS
+    nor FAIL — but a bare `69 passed, 0 failed` reads as the former, which
+    is precisely the SKIP-standing-in-for-a-pass shape CLAUDE.md warns
+    about. The summary names it instead.
+    """
+    NOTRUN.append(n)
+    print(f"  ----  {n}\n          NOT RUN: {why}")
 
 EMU = os.path.dirname(os.path.abspath(__file__))
 TMP = H.tempdir("0trust-obfs-")
@@ -580,27 +594,44 @@ func main() {
               "device, and the interop run below is the only thing that ever "
               "executes the app's copy of the transport")
 
+    # The toolchain for the one check that ever EXECUTES the Android copy
+    # of the transport.
+    #
+    # mobile/android/syntax-check.sh already provisions exactly the jar set
+    # the compiler needs in order to START — kotlin-compiler, stdlib,
+    # reflect, script-runtime, daemon-embeddable, trove4j and coroutines —
+    # into this same cache, and its fetch is idempotent. So ask it, rather
+    # than keeping a second copy of that list here.
+    #
+    # Nothing used to do that. The stdlib path was computed and handed to
+    # -cp, and whether the jar existed depended on what happened to be left
+    # in /tmp. With the cache half-populated the compiler died on its first
+    # instruction (`NoClassDefFoundError: kotlin/jvm/internal/Intrinsics`)
+    # and this reported "the app's transport compiles on a plain JVM: FAIL"
+    # with a Java stack trace attached — a missing jar in the harness
+    # presented as a defect in the product. That is the inversion of
+    # CLAUDE.md's bug class #17: not a SKIP standing in for a pass, but a
+    # harness gap standing in for a failure. Either way the check was not
+    # measuring the thing it is named after, and nobody could have told
+    # from the output.
     kt_cache = os.environ.get("KOTLIN_CACHE_DIR") or "/tmp/0trust-kotlinc-2.0.20"
     kotlinc = os.path.join(kt_cache, "kotlin-compiler-2.0.20.jar")
-    if not os.path.exists(kotlinc):
-        # A genuine "does not apply" only if the compiler cannot be had at
-        # all. Say which it is rather than passing quietly.
-        r = subprocess.run(["bash", os.path.join(H.REPO, "mobile", "android",
-                                                 "syntax-check.sh")],
-                           capture_output=True, text=True, timeout=900)
-        print(f"      (kotlinc absent and syntax-check.sh returned "
-              f"{r.returncode}; the Kotlin transport was NOT executed)")
+    stdlib = os.path.join(kt_cache, "kotlin-stdlib-2.0.20.jar")
+    prov = subprocess.run(
+        ["bash", os.path.join(H.REPO, "mobile", "android", "syntax-check.sh")],
+        capture_output=True, text=True, timeout=900,
+        env={**os.environ, "KOTLIN_CACHE_DIR": kt_cache})
+    if not (os.path.exists(kotlinc) and os.path.exists(stdlib)):
+        # A genuine "does not apply" only if the toolchain cannot be had at
+        # all — no network, or Maven Central rate-limiting the fetch. Say so
+        # specifically, and never attempt a compile that is certain to die
+        # for want of a jar.
+        notrun("the app's transport compiles on a plain JVM",
+               f"could not assemble the Kotlin toolchain in {kt_cache}; "
+               f"syntax-check.sh returned {prov.returncode}: "
+               f"{(prov.stdout + prov.stderr).strip()[-200:]}")
     else:
-        # annotations-13.0 is needed for codegen, not just parsing —
-        # syntax-check.sh never reaches codegen so it never noticed.
-        ann = os.path.join(kt_cache, "annotations-13.0.jar")
-        if not os.path.exists(ann):
-            subprocess.run(["curl", "-fsSL", "-o", ann,
-                            "https://repo1.maven.org/maven2/org/jetbrains/"
-                            "annotations/13.0/annotations-13.0.jar"],
-                           capture_output=True, timeout=180)
         work = os.path.join(TMP, "kt"); os.makedirs(work, exist_ok=True)
-        stdlib = os.path.join(kt_cache, "kotlin-stdlib-2.0.20.jar")
 
         # Driver: exercises the complement AND runs the relay against the Go
         # node binary already listening from section [4].
@@ -727,8 +758,24 @@ fun main(args: Array<String>) {
              "-cp", stdlib, "-d", os.path.join(work, "out"), "-nowarn"] + srcs,
             capture_output=True, text=True, timeout=900)
         compiled = os.path.isdir(os.path.join(work, "out"))
-        check("the app's transport compiles on a plain JVM", compiled,
-              (r.stdout + r.stderr)[-600:])
+        # Second line of defence on the same confusion. A compiler that
+        # cannot start does not produce Kotlin diagnostics — it produces a
+        # JVM stack trace, and attributing that to the app's sources is what
+        # sent the last person down a dead end. Distinguish the two by what
+        # the output actually looks like: `file.kt:12:5: error:` is a verdict
+        # on the code, `Exception in thread "main"` is not.
+        blew_up = re.search(r"(NoClassDefFoundError|ClassNotFoundException"
+                            r"|Exception in thread \"main\")",
+                            r.stdout + r.stderr)
+        if not compiled and blew_up:
+            notrun("the app's transport compiles on a plain JVM",
+                   f"the Kotlin compiler itself failed to start "
+                   f"({blew_up.group(1)}), which says nothing about the "
+                   f"app's sources: "
+                   f"{(r.stdout + r.stderr).strip()[-300:]}")
+        else:
+            check("the app's transport compiles on a plain JVM", compiled,
+                  (r.stdout + r.stderr)[-600:])
 
         if compiled:
             # Reuse the Go relay and WireGuard stub from section [4], both
@@ -833,7 +880,13 @@ finally:
             p.kill()
     H.shutdown()
 
-print(f"\n  {len(PASS)} passed, {len(FAIL)} failed")
+print(f"\n  {len(PASS)} passed, {len(FAIL)} failed"
+      + (f", {len(NOTRUN)} NOT RUN" if NOTRUN else ""))
 if FAIL:
     print("  failures: " + ", ".join(FAIL))
+if NOTRUN:
+    print("  not run:  " + ", ".join(NOTRUN))
+    print("  these are not passes — the app's copy of the transport is a")
+    print("  SECOND implementation of the wire format and this module is the")
+    print("  only thing that ever executes it.")
 sys.exit(1 if FAIL else 0)

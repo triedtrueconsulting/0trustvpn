@@ -446,10 +446,54 @@ check node-dns-no-query-log "In-tunnel resolver keeps no query log (mesh nodes)"
         echo 'log-queries is on - every hostname a customer resolves is recorded'
         exit 1
     fi
-    grep -q '^bind-interfaces' \$conf || {
+    grep -qE '^bind-(dynamic|interfaces)' \$conf || {
         echo 'resolver is not bound to the mesh gateway - open resolver on the public IP'
         exit 1
     }
+"
+
+check node-dns-listening "In-tunnel resolver is actually answering (mesh nodes)" -- bash -c "
+    # The config being right is not the same as the resolver running, and the
+    # difference was a real outage: dnsmasq was configured with
+    # bind-interfaces, which binds the listed addresses once at startup, and
+    # the mesh gateway lives on wg0 — created by meshd AFTER enrolment had
+    # already restarted dnsmasq. So dnsmasq died with 'Cannot assign
+    # requested address', nothing restarted it, and every customer on the
+    # node connected to a tunnel that resolved no names at all while the
+    # client reported itself up.
+    #
+    # Nothing in the config can show that. This reads the socket table, which
+    # is the only place the answer lives. Same standard the installer and
+    # '0trust connect' are already held to: a zero exit from systemctl is not
+    # evidence that anything is listening.
+    ip link show wg0 >/dev/null 2>&1 || exit 77
+    conf=/etc/dnsmasq.d/0trust.conf
+    [[ -f \$conf ]] || exit 77
+    command -v ss >/dev/null 2>&1 || { echo 'iproute2 ss not installed'; exit 77; }
+
+    # The addresses the config promises to answer on, read back out of it so
+    # this cannot drift from the gateway the API hands clients.
+    mapfile -t want < <(grep '^listen-address=' \$conf | cut -d= -f2- | tr ',' '\\n')
+    (( \${#want[@]} )) || { echo 'no listen-address in the resolver config'; exit 1; }
+
+    bound=\$(ss -lunHp 2>/dev/null | awk '\$1==\"UNCONN\"{print \$4}')
+    missing=()
+    for a in \"\${want[@]}\"; do
+        [[ -n \"\$a\" ]] || continue
+        # ss prints a v6 literal bare, a v4 one bare: match '<addr>:53' at
+        # the end of the local-address column.
+        grep -qxF \"\$a:53\" <<<\"\$bound\" || missing+=(\"\$a\")
+    done
+    if (( \${#missing[@]} )); then
+        echo \"resolver is NOT listening on: \${missing[*]}\"
+        echo 'clients are handed these addresses as their only DNS, so every'
+        echo 'lookup in the tunnel fails while the client reports connected'
+        systemctl is-active dnsmasq >/dev/null 2>&1 \
+            || echo 'dnsmasq is not running (journalctl -u dnsmasq)'
+        exit 1
+    fi
+    echo \"answering on \${want[*]}\"
+    exit 0
 "
 
 check node-dns-encrypted-upstream "Upstream DNS leaves the node over TLS (mesh nodes)" -- bash -c "

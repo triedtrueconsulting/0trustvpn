@@ -70,12 +70,25 @@ if [[ "${ZTV_DNS_ENCRYPTED:-1}" == "1" ]]; then
 fi
 
 # Clients are handed DNS = the mesh gateway, so something has to answer there.
-# bind-interfaces, and never on the public address: an open resolver is a
+# bind-dynamic, and never on the public address: an open resolver is a
 # DNS-amplification abuse report waiting to happen.
 mkdir -p "$DNSMASQ_DIR"
 ztv_dnsmasq_conf "${MESH_GATEWAY%%/*}" > "$DNSMASQ_DIR/0trust.conf"
 systemctl enable dnsmasq >/dev/null 2>&1 || true
-# dnsmasq cannot bind the gateway address until meshd has created wg0, and on
-# a fresh boot meshd starts after this. Its own restarts pick it up.
-systemctl restart dnsmasq >/dev/null 2>&1 \
-    || log "dnsmasq will bind ${MESH_GATEWAY%%/*} once wg0 is up"
+# This runs from 0trust-node-enroll, which is Before=0trust-meshd.service, so
+# wg0 and the gateway address do not exist yet. bind-dynamic is what makes
+# that survivable: dnsmasq starts now, binds nothing, and picks the address
+# up when meshd creates the interface. Under bind-interfaces it died here
+# with "Cannot assign requested address" and nothing restarted it — the
+# tunnel came up and resolved no names for the life of the boot.
+#
+# So a failure at this point is NOT the ordering and must not be reported as
+# something that resolves itself. The line here used to say "dnsmasq will
+# bind ... once wg0 is up", which was a sentence where a recovery should
+# have been.
+if ! systemctl restart dnsmasq >/dev/null 2>&1; then
+    log "WARNING: dnsmasq failed to start. Clients are handed"
+    log "         DNS = ${MESH_GATEWAY%%/*} and nothing is answering there,"
+    log "         so every lookup inside the tunnel will fail while the"
+    log "         client reports itself connected. journalctl -u dnsmasq"
+fi

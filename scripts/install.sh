@@ -2424,9 +2424,11 @@ if [[ $DRY_RUN -eq 0 ]]; then
             note "0trust-meshd@$niface did not start — journalctl -u 0trust-meshd@$niface"
     done
     systemctl enable dnsmasq >/dev/null 2>&1 || true
-    # dnsmasq cannot bind the gateway address until meshd has created wg0, and
-    # meshd only does that on its first poll. Retry briefly rather than leaving
-    # a dead resolver behind a "successful" install.
+    # bind-dynamic means dnsmasq no longer has to wait for meshd to create
+    # wg0 before it can start — it binds the gateway address when the
+    # interface appears. The retry stays as cheap insurance against an
+    # unrelated transient; it must never be the thing standing between a
+    # "successful" install and a dead resolver.
     for _ in 1 2 3 4 5 6 7 8 9 10; do
         systemctl restart dnsmasq >/dev/null 2>&1 && break
         sleep 2
