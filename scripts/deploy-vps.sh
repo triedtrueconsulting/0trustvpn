@@ -212,8 +212,10 @@ fi
 if [[ "$ROLE" == "control" && -x "$SRC/scripts/preflight.sh" ]]; then
     log "Launch gate — what is still outstanding"
     set +e
-    "$SRC/scripts/preflight.sh" 2>&1 | grep -E 'BLOCKED|PASS:|FAIL:' | head -20
+    pf="$("$SRC/scripts/preflight.sh" 2>&1)"
     set -e
+    printf '%s\n' "$pf" | sed 's/\x1b\[[0-9;]*m//g' \
+        | grep -E 'BLOCKED|PASS:|FAIL:' || true
 fi
 
 echo

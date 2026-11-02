@@ -46,8 +46,16 @@ def strip_comment(line: str) -> str:
     return "".join(out)
 
 
-files = subprocess.run(["git", "-C", REPO, "ls-files", "*.sh"],
-                       capture_output=True, text=True).stdout.split()
+# --cached --others --exclude-standard, not a bare `git ls-files`: that lists
+# TRACKED files only, so a script being written right now — the one case this
+# gate is most useful for — was the one case it could not see. It passed
+# against scripts/deploy-vps.sh while the file was untracked and failed on the
+# very next run, after the commit, with the hazard unchanged. Gitignored files
+# stay out: they are not going to be committed.
+files = subprocess.run(
+    ["git", "-C", REPO, "ls-files", "--cached", "--others",
+     "--exclude-standard", "*.sh"],
+    capture_output=True, text=True).stdout.split()
 bad = []
 for rel in files:
     path = os.path.join(REPO, rel)
