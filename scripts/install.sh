@@ -137,6 +137,22 @@ install_fail2ban_jail() {
     # status sshd` fails outright if the jail did not load, which is what a
     # typo in the file or a backend the host cannot use looks like — and the
     # unit would report active either way.
+    #
+    # But it also fails while the server is still coming up. `systemctl
+    # restart` returns when the UNIT is active, not when fail2ban's socket is
+    # listening and its jails are started: on a 1 vCPU VPS the daemon logged
+    # "Server ready" two seconds after the unit. Checking immediately reported
+    # "the sshd jail did NOT load — ssh is unprotected" against a jail that
+    # was simply still starting.
+    #
+    # A false alarm about a missing security control is its own defect. It
+    # sends the operator to debug a working jail, and it spends the credibility
+    # of the message for the day the jail really is broken.
+    local _i
+    for _i in $(seq 1 20); do
+        fail2ban-client status sshd >/dev/null 2>&1 && break
+        sleep 1
+    done
     if fail2ban-client status sshd >/dev/null 2>&1; then
         ok "fail2ban: sshd jail active (5 tries / 10m -> 1h ban)"
     else
