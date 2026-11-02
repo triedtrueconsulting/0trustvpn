@@ -556,6 +556,23 @@ try:
           "install.sh --mode node must create it; node-runtime-apply.sh cannot,"
           " because systemd blocks the very script that would")
 
+    print("\n[9d] the node's rulesets replace, they do not accumulate")
+    # A node that had restarted eleven times was carrying eleven identical
+    # masquerade pairs. `nft -f` with a bare `table ... { }` APPENDS to a table
+    # that already exists, and node-runtime-apply.sh runs on every enrolment —
+    # which on a RAM-only node means every boot, by design.
+    #
+    # meshd already got this right for its own DNAT table (`delete table` before
+    # re-adding); the two emitters in node-runtime.sh did not.
+    _rt = open(os.path.join(H.REPO, "scripts", "node-runtime.sh")).read()
+    for _tbl in ("ztv_nat", "ztv_egress"):
+        _m = re.search(r'^table inet ' + _tbl + r'\ndelete table inet ' + _tbl
+                       + r'\ntable inet ' + _tbl + r' \{', _rt, re.M)
+        check("[9d] " + _tbl + " is replaced rather than appended to",
+              _m is not None,
+              _tbl + " must emit the create/delete/create idiom, or every boot"
+              " adds another copy of its rules")
+
     print("\n[10] the installer renders a node without touching the box")
     r = subprocess.run(
         ["bash", INSTALL, "--mode", "node", "--dry-run",

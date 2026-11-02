@@ -93,6 +93,14 @@ EOF
 ztv_nat_ruleset() {
     local iface="$1"
     cat <<EOF
+# Replace the table, never add to it. \`nft -f\` with a bare \`table ... { }\`
+# APPENDS to one that already exists, and this runs on every enrolment — so a
+# node that had restarted eleven times was carrying eleven identical
+# masquerade pairs. Harmless to packets, unbounded over time, and a node is
+# built to reboot often. The no-op \`table\` line first is the standard idiom:
+# it creates the table when absent so the delete cannot fail on a fresh box.
+table inet ztv_nat
+delete table inet ztv_nat
 table inet ztv_nat {
   chain postrouting {
     type nat hook postrouting priority 100;
@@ -113,6 +121,9 @@ EOF
 # lose a VPS, and every rule here pre-empts one. See docs/ABUSE.md.
 ztv_egress_ruleset() {
     cat <<EOF
+# Replaced, not appended — see ztv_nat_ruleset above for why.
+table inet ztv_egress
+delete table inet ztv_egress
 table inet ztv_egress {
   chain forward {
     type filter hook forward priority 0; policy accept;
