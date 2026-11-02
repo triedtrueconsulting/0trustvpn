@@ -194,9 +194,18 @@ fi
 
 if [[ -x "$SRC/scripts/audit-verify.sh" ]]; then
     log "No-logs claims against THIS box"
+    # The FAILs and the tally, not the last six lines. `tail -6` printed the
+    # script's closing advice and cut off the PASS/FAIL/SKIP counts it exists
+    # to report — a summary that cannot show the summary.
     set +e
-    "$SRC/scripts/audit-verify.sh" 2>&1 | tail -6
+    av="$("$SRC/scripts/audit-verify.sh" 2>&1)"
     set -e
+    # Colour codes sit between "PASS:" and its number and around "FAIL", so
+    # anything matching the plain words misses every line. Strip them first.
+    av_plain="$(printf '%s\n' "$av" | sed 's/\x1b\[[0-9;]*m//g')"
+    printf '%s\n' "$av_plain" | grep -E '\.\.\. FAIL$' || true
+    printf '%s\n' "$av_plain" | grep -E '^[[:space:]]*PASS:[[:space:]]*[0-9]+' || \
+        printf '   %s(audit-verify produced no tally — run it by hand)%s\n' "$YLW" "$NC"
     note "a FAIL here is a claim this deployment does not keep — read it before launch"
 fi
 
