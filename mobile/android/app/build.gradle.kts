@@ -32,9 +32,17 @@ android {
         vectorDrawables { useSupportLibrary = true }
 
         // Default control plane. Customers running their own self-hosted
-        // 0trust deployment can override at runtime in Settings.
+        // 0trust deployment can override at runtime in Settings - and an
+        // operator building for their own deployment can bake it in here
+        // instead, so nobody has to type a URL into a phone:
+        //
+        //   ./gradlew assembleDebug -Pztv.apiBase=https://vpn.example.com
+        //
+        // A property rather than an edit, because editing this line is how a
+        // self-hoster's build ends up carrying a diff it can never merge.
         buildConfigField("String", "DEFAULT_API_BASE",
-                         "\"https://0trustvpn.com\"")
+                         "\"${(findProperty("ztv.apiBase") as String?)
+                               ?.trimEnd('/') ?: "https://0trustvpn.com"}\"")
     }
 
     signingConfigs {
