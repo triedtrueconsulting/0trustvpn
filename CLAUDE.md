@@ -343,6 +343,23 @@ docs/                             README, LAUNCH, AUDIT, ABUSE, DR
   accumulating a row per boot, and revocable (`revoked_at`). It lives in
   `/etc/0trust-node.env`, the one 0trust file deliberately on persistent disk.
   `scripts/node-enroll.sh` runs on every boot, before meshd.
+- **A node does not run the checkout, and `git pull` on one changes nothing.**
+  `install_node_files()` in `install.sh` copies the node-side scripts into
+  `/usr/local` and the units into `/etc/systemd/system`, because they run at
+  boot and a node should not depend on a working tree being there. Correct,
+  and for a long time there was no way to ship a node-side fix as a result.
+  A live node was found on install-time copies while its checkout was twelve
+  commits ahead: 24 masquerade rules (one pair per enrolment, exactly 12
+  enrolments of the pre-fix script) and the resolver bind mode that dies at
+  boot — both already fixed in the tree, both looking deployed because the
+  operator had pulled. Every other node check in `audit-verify.sh` reads the
+  INSTALLED files, so all of them reported faithfully on stale code.
+  `install.sh --refresh-node-files` re-runs that one function, restarts the
+  units and verifies the two observable symptoms; `node-code-current` is the
+  gate. The file list lives in that function and nowhere else — a second copy
+  in an update script is the whole bug again, and `test_install.py` [7d]
+  checks it BY POSITION, because a pasted duplicate is byte-identical to the
+  line it was copied from and a value comparison cannot see it.
 - **NAT and the egress filter are kernel state that nothing replays.**
   `/etc/nftables.conf` does not include `/etc/nftables.d`, so an exit node came
   back from a reboot doing no masquerading — customer traffic entered the

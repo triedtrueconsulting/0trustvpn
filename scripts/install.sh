@@ -88,6 +88,7 @@
 set -euo pipefail
 
 MODE="" DOMAIN="" EMAIL=""
+REFRESH_NODE_FILES=0
 # auto = ask only on a terminal. `never` = the flag-driven path, which is what
 # --non-interactive sets. `always` = ask even with no terminal, which exists so
 # the emulation suite can drive the questions with a pipe; without a seam like
@@ -344,6 +345,7 @@ while [[ $# -gt 0 ]]; do
         --no-obfs) OBFS_PORT=0; shift ;;
         --swap) SWAP_SIZE="${2:-}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
+        --refresh-node-files) REFRESH_NODE_FILES=1; shift ;;
         -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
         *) echo "unknown flag: $1" >&2; exit 64 ;;
     esac
@@ -740,10 +742,17 @@ confirm_plan() {
     printf '\n'
 }
 
-collect_missing
+# --refresh-node-files needs no mode, and must not be asked for one: it
+# updates a node that already exists and reads everything it needs back off
+# that node. Requiring --mode here would make shipping a one-line node fix
+# cost the same six answers as the original install. Every other check below
+# is already gated on $MODE, so an empty mode skips them.
+[[ $REFRESH_NODE_FILES -eq 1 ]] || collect_missing
 
-[[ "$MODE" == "test" || "$MODE" == "production" || "$MODE" == "node" ]] \
-    || die "--mode must be test, production or node (see --help)"
+if [[ $REFRESH_NODE_FILES -eq 0 ]]; then
+    [[ "$MODE" == "test" || "$MODE" == "production" || "$MODE" == "node" ]] \
+        || die "--mode must be test, production or node (see --help)"
+fi
 if [[ "$MODE" == "node" ]]; then
     [[ -n "$CONTROL_URL" ]] || die "node needs --control-url https://<control plane>"
     [[ -n "$PROVISION_TOKEN" ]] || die "node needs a provisioning token. Mint one on the control plane
@@ -789,11 +798,206 @@ fi
 [[ $DRY_RUN -eq 1 || $EUID -eq 0 ]] || die "must run as root (try: sudo $0 ...)"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# ----------------------------------------------------------------------------
+# The node-side files that live OUTSIDE the checkout.
+#
+# These are copied into /usr/local and /etc/systemd/system rather than sourced
+# from the git tree, because they run at boot and a node should not depend on
+# a working tree still being there. The consequence, which nothing handled for
+# a long time: `git pull` in the checkout changes NOTHING a node executes.
+# A real node sat on install-time copies for weeks while the tree it was
+# pulled into had moved on — its nftables rules accumulated a masquerade pair
+# per enrolment (24 of them) and its resolver still carried the bind mode that
+# dies at boot, both already fixed upstream. Both looked fixed, because the
+# checkout said so.
+#
+# So the list lives here once, and `--refresh-node-files` re-runs exactly this
+# function. A second copy of the list in an update script is the drift this
+# function exists to end.
+install_node_files() {
+# ------------------------------------------------------------------
+log "Installing meshd and the enrolment unit"
+# ------------------------------------------------------------------
+if [[ $DRY_RUN -eq 0 ]]; then
+    install -d "$LIBDIR"
+    install -m 0755 "$REPO_DIR/wireguard/0trust-meshd.py" /usr/local/bin/0trust-meshd
+    # Copied rather than sourced from the checkout: this runs at boot, and
+    # a node should not depend on a git working tree still being there.
+    install -m 0644 "$REPO_DIR/scripts/node-runtime.sh" "$LIBDIR/node-runtime.sh"
+    install -m 0755 "$REPO_DIR/scripts/node-runtime-apply.sh" \
+            "$LIBDIR/node-runtime-apply.sh"
+    install -m 0755 "$REPO_DIR/scripts/node-enroll.sh" /usr/local/bin/0trust-node-enroll
+    # The enrolment unit runs ProtectSystem=strict and names this in
+    # ReadWritePaths, so systemd bind-mounts it before the script starts.
+    # A path that does not exist fails the whole unit with 226/NAMESPACE
+    # and the script never runs at all — and node-runtime-apply.sh's own
+    # `mkdir -p` is inside that script, so it can never create the
+    # directory it is blocked on. Nothing else in node mode makes it:
+    # test mode and bootstrap-node.sh each created their own, which is
+    # why this only ever broke the one-command node deploy.
+    install -d -m 0755 /etc/nftables.d
+    # Same reason, and the stubby package may not have unpacked yet
+    # when this runs. ProtectSystem=strict makes the rest of /etc
+    # read-only, so a path the enrolment script writes but the unit
+    # does not name fails as "Read-only file system" — which is how
+    # /etc/stubby surfaced, one restart after /etc/nftables.d.
+    install -d -m 0755 /etc/stubby
+    install -m 0644 "$REPO_DIR/systemd/0trust-node-enroll.service" \
+            /etc/systemd/system/0trust-node-enroll.service
+    install -m 0644 "$REPO_DIR/systemd/0trust-meshd.service" \
+            /etc/systemd/system/0trust-meshd.service
+    if [[ "$OBFS_PORT" != "0" ]]; then
+        OBFS_ARCH="$(dpkg --print-architecture)"
+        OBFS_BIN="$REPO_DIR/client/dist/0trust-obfs-linux-$OBFS_ARCH"
+        # A release tarball ships this prebuilt. A git checkout does not,
+        # so build it here when the toolchain is present rather than
+        # sending the operator away mid-install — but never install a
+        # relay we could not produce, because the control plane would
+        # then advertise a transport this node cannot serve.
+        if [[ ! -x "$OBFS_BIN" ]] && command -v go >/dev/null 2>&1; then
+            log "  building 0trust-obfs for linux/$OBFS_ARCH"
+            ( cd "$REPO_DIR/client" && CGO_ENABLED=0 GOOS=linux GOARCH="$OBFS_ARCH" \
+                go build -trimpath -ldflags "-s -w" \
+                    -o "dist/0trust-obfs-linux-$OBFS_ARCH" ./cmd/0trust-obfs ) \
+                || die "0trust-obfs would not build — see the output above"
+        fi
+        [[ -x "$OBFS_BIN" ]] || die \
+"no 0trust-obfs binary for linux/$OBFS_ARCH and no Go toolchain to build one.
+   Either install golang-go and re-run, or build it elsewhere and drop it at
+     client/dist/0trust-obfs-linux-$OBFS_ARCH
+   Or re-run with --no-obfs: the node works fine without the relay, and
+   clients that land here simply connect directly."
+        install -m 0755 "$OBFS_BIN" /usr/local/bin/0trust-obfs
+        install -m 0644 "$REPO_DIR/systemd/0trust-obfs.service" \
+                /etc/systemd/system/0trust-obfs.service
+    fi
+    systemctl daemon-reload
+    systemctl enable 0trust-node-enroll.service >/dev/null 2>&1 || true
+    systemctl enable 0trust-meshd.service >/dev/null 2>&1 || true
+    [[ "$OBFS_PORT" != "0" ]] \
+        && { systemctl enable 0trust-obfs.service >/dev/null 2>&1 || true; }
+fi
+ok "0trust-node-enroll.service, 0trust-meshd.service"
+[[ "$OBFS_PORT" != "0" ]] && ok "0trust-obfs.service (udp/$OBFS_PORT)"
+# A trailing `[[ ... ]] && cmd` is the function's return value, so with obfs
+# off this returned 1 and `set -e` aborted the install at the call site —
+# silently, with no message, immediately after the files were copied. The
+# same shape as the PRIMARY_IF abort: a test used as the last statement of a
+# block becomes that block's exit status.
+return 0
+}
+
 PREFIX="${ZTV_PREFIX:-/opt/0trust}"
 ETC="${ZTV_ETC:-/etc/0trust}"
 VARLIB="${ZTV_VARLIB:-/var/lib/0trust}"
 WEBROOT="${ZTV_WEBROOT:-/var/www/0trust}"
 VENV="$PREFIX/api/.venv"
+
+# ============================================================================
+# --refresh-node-files: bring an ALREADY-INSTALLED node up to this checkout
+# ============================================================================
+#
+# `git pull` on a node changes nothing the node runs. install_node_files()
+# copies into /usr/local and /etc/systemd/system precisely so that boot does
+# not depend on a working tree still being there — a good decision with a
+# consequence nothing handled: there was no supported way to ship a node-side
+# fix at all. A real node ran install-time copies while the checkout it was
+# pulled into had moved on, so a masquerade pair accumulated per enrolment
+# (24 rules) and the resolver still carried the bind mode that dies at boot.
+# Both were already fixed upstream. Both looked fixed, because the operator
+# had pulled and the tree said so.
+#
+# This re-runs exactly install_node_files() — one definition of the list —
+# then restarts the units and CHECKS the result rather than announcing it.
+# Enrolment generates a fresh WireGuard key, so customers on this node
+# re-handshake: a brief interruption, by design, and the same thing a reboot
+# does.
+if [[ $REFRESH_NODE_FILES -eq 1 ]]; then
+    [[ $DRY_RUN -eq 1 || $EUID -eq 0 ]] || die "--refresh-node-files needs root"
+    ETC_NODE="${ZTV_ETC_NODE:-/etc/0trust-node.env}"
+    LIBDIR="${ZTV_LIBDIR:-/usr/local/lib/0trust}"
+    MESHD_ENV="${ZTV_MESHD_ENV:-/etc/0trust/meshd.env}"
+
+    [[ -f "$ETC_NODE" ]] || die \
+"$ETC_NODE is not there, so this box is not an installed 0trust node.
+       --refresh-node-files updates a node that already exists; it does not
+       install one. For a new node use --mode node."
+
+    # OBFS_PORT decides whether the relay binary and unit belong to this node,
+    # and the node recorded it at install time. Reading it back is what stops
+    # a refresh from quietly adding or removing the relay.
+    OBFS_PORT="$(grep -hoP '^OBFS_PORT=\K.*' "$ETC_NODE" 2>/dev/null || true)"
+    OBFS_PORT="${OBFS_PORT:-0}"
+    log "Refreshing node files from $REPO_DIR (obfs port: $OBFS_PORT)"
+
+    install_node_files
+
+    if [[ $DRY_RUN -eq 0 ]]; then
+        log "Restarting enrolment and meshd"
+        systemctl restart 0trust-node-enroll.service \
+            || die "enrolment failed after the refresh — journalctl -u 0trust-node-enroll"
+        systemctl restart 0trust-meshd.service \
+            || die "meshd failed after the refresh — journalctl -u 0trust-meshd"
+        [[ "$OBFS_PORT" != "0" ]] && { systemctl restart 0trust-obfs.service \
+            || die "the obfuscation relay failed after the refresh — journalctl -u 0trust-obfs"; }
+        sleep 3
+    fi
+
+    # ------------------------------------------------------------------
+    log "Verifying"
+    # ------------------------------------------------------------------
+    # Bug class #16: `systemctl restart` returning 0 is not evidence. Both
+    # things this refresh exists to fix are observable, so look at them.
+    REFRESH_BAD=0
+    if [[ $DRY_RUN -eq 1 ]]; then
+        note "dry run — nothing was copied, so there is nothing to verify"
+    else
+        # 1. NAT rules replaced, not appended. Two is correct: one v4
+        #    masquerade and one v6. More means the table is still being added
+        #    to on every enrolment.
+        NAT_N="$(nft list table inet ztv_nat 2>/dev/null | grep -c masquerade || true)"
+        if [[ "${NAT_N:-0}" == "2" ]]; then
+            ok "NAT: 1 v4 + 1 v6 masquerade rule, table replaced not appended"
+        else
+            note "NAT: $NAT_N masquerade rules in ztv_nat, expected 2."
+            note "     The table is still being appended to. Check that"
+            note "     $LIBDIR/node-runtime.sh is the copy you just installed."
+            REFRESH_BAD=1
+        fi
+
+        # 2. The resolver is answering on the mesh gateway. This is the one
+        #    that cannot be read off a config file: the config was never the
+        #    part that looked wrong — dnsmasq was simply dead.
+        MESH_GW="$(grep -hoP '^MESH_GATEWAY=\K[^/]*' "$MESHD_ENV" 2>/dev/null || true)"
+        MESH_GW="${MESH_GW:-10.64.0.1}"
+        if ss -lunH 2>/dev/null | awk '{print $4}' | grep -qxF "$MESH_GW:53"; then
+            ok "resolver: dnsmasq is answering on $MESH_GW"
+        else
+            note "resolver: nothing is listening on $MESH_GW:53."
+            note "     Clients are handed this as their only DNS, so every"
+            note "     lookup in the tunnel fails while the client reports"
+            note "     itself connected. journalctl -u dnsmasq"
+            REFRESH_BAD=1
+        fi
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        # Not "refreshed and verified": nothing was copied and nothing was
+        # checked. An installer claiming a verification it skipped is the
+        # defect this script already carries a fix for (bug class #16).
+        printf '\n%s  Refresh rendered (dry run). Nothing was copied or checked.%s\n\n' \
+               "$GRN" "$NC"
+        exit 0
+    fi
+    if [[ $REFRESH_BAD -eq 0 ]]; then
+        printf '\n%s  Node files refreshed and verified.%s\n\n' "$GRN" "$NC"
+        exit 0
+    fi
+    printf '\n%s  Files were copied, but the checks above did not pass.%s\n\n' "$YLW" "$NC"
+    exit 1
+fi
+
 NGINX_SITE="${ZTV_NGINX_SITE:-/etc/nginx/sites-available/0trust}"
 
 # Before anything is written: a bad --wallet must stop the install, not be
@@ -1042,67 +1246,7 @@ ENV
     # ------------------------------------------------------------------
     log "Installing meshd and the enrolment unit"
     # ------------------------------------------------------------------
-    if [[ $DRY_RUN -eq 0 ]]; then
-        install -d "$LIBDIR"
-        install -m 0755 "$REPO_DIR/wireguard/0trust-meshd.py" /usr/local/bin/0trust-meshd
-        # Copied rather than sourced from the checkout: this runs at boot, and
-        # a node should not depend on a git working tree still being there.
-        install -m 0644 "$REPO_DIR/scripts/node-runtime.sh" "$LIBDIR/node-runtime.sh"
-        install -m 0755 "$REPO_DIR/scripts/node-runtime-apply.sh" \
-                "$LIBDIR/node-runtime-apply.sh"
-        install -m 0755 "$REPO_DIR/scripts/node-enroll.sh" /usr/local/bin/0trust-node-enroll
-        # The enrolment unit runs ProtectSystem=strict and names this in
-        # ReadWritePaths, so systemd bind-mounts it before the script starts.
-        # A path that does not exist fails the whole unit with 226/NAMESPACE
-        # and the script never runs at all — and node-runtime-apply.sh's own
-        # `mkdir -p` is inside that script, so it can never create the
-        # directory it is blocked on. Nothing else in node mode makes it:
-        # test mode and bootstrap-node.sh each created their own, which is
-        # why this only ever broke the one-command node deploy.
-        install -d -m 0755 /etc/nftables.d
-        # Same reason, and the stubby package may not have unpacked yet
-        # when this runs. ProtectSystem=strict makes the rest of /etc
-        # read-only, so a path the enrolment script writes but the unit
-        # does not name fails as "Read-only file system" — which is how
-        # /etc/stubby surfaced, one restart after /etc/nftables.d.
-        install -d -m 0755 /etc/stubby
-        install -m 0644 "$REPO_DIR/systemd/0trust-node-enroll.service" \
-                /etc/systemd/system/0trust-node-enroll.service
-        install -m 0644 "$REPO_DIR/systemd/0trust-meshd.service" \
-                /etc/systemd/system/0trust-meshd.service
-        if [[ "$OBFS_PORT" != "0" ]]; then
-            OBFS_ARCH="$(dpkg --print-architecture)"
-            OBFS_BIN="$REPO_DIR/client/dist/0trust-obfs-linux-$OBFS_ARCH"
-            # A release tarball ships this prebuilt. A git checkout does not,
-            # so build it here when the toolchain is present rather than
-            # sending the operator away mid-install — but never install a
-            # relay we could not produce, because the control plane would
-            # then advertise a transport this node cannot serve.
-            if [[ ! -x "$OBFS_BIN" ]] && command -v go >/dev/null 2>&1; then
-                log "  building 0trust-obfs for linux/$OBFS_ARCH"
-                ( cd "$REPO_DIR/client" && CGO_ENABLED=0 GOOS=linux GOARCH="$OBFS_ARCH" \
-                    go build -trimpath -ldflags "-s -w" \
-                        -o "dist/0trust-obfs-linux-$OBFS_ARCH" ./cmd/0trust-obfs ) \
-                    || die "0trust-obfs would not build — see the output above"
-            fi
-            [[ -x "$OBFS_BIN" ]] || die \
-"no 0trust-obfs binary for linux/$OBFS_ARCH and no Go toolchain to build one.
-       Either install golang-go and re-run, or build it elsewhere and drop it at
-         client/dist/0trust-obfs-linux-$OBFS_ARCH
-       Or re-run with --no-obfs: the node works fine without the relay, and
-       clients that land here simply connect directly."
-            install -m 0755 "$OBFS_BIN" /usr/local/bin/0trust-obfs
-            install -m 0644 "$REPO_DIR/systemd/0trust-obfs.service" \
-                    /etc/systemd/system/0trust-obfs.service
-        fi
-        systemctl daemon-reload
-        systemctl enable 0trust-node-enroll.service >/dev/null 2>&1 || true
-        systemctl enable 0trust-meshd.service >/dev/null 2>&1 || true
-        [[ "$OBFS_PORT" != "0" ]] \
-            && { systemctl enable 0trust-obfs.service >/dev/null 2>&1 || true; }
-    fi
-    ok "0trust-node-enroll.service, 0trust-meshd.service"
-    [[ "$OBFS_PORT" != "0" ]] && ok "0trust-obfs.service (udp/$OBFS_PORT)"
+    install_node_files
 
     # ------------------------------------------------------------------
     log "Firewall"

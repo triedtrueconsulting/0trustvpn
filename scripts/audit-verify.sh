@@ -496,6 +496,61 @@ check node-dns-listening "In-tunnel resolver is actually answering (mesh nodes)"
     exit 0
 "
 
+check node-code-current "Node runs the code in the checkout, not an older copy (mesh nodes)" -- bash -c "
+    # install.sh copies the node-side scripts into /usr/local rather than
+    # sourcing them from the git tree, deliberately: they run at boot and a
+    # node should not depend on a working tree still being there. The
+    # consequence is that \\$(git pull) changes NOTHING a node executes, and
+    # for a long time nothing said so.
+    #
+    # A live node was found running install-time copies while the checkout it
+    # had been pulled into was twelve commits ahead. Its nftables table had
+    # accumulated one masquerade pair per enrolment — 24 rules, which is
+    # exactly 12 enrolments of the pre-fix script — and its resolver still
+    # carried the bind mode that dies at boot. Both fixes were present in the
+    # tree. Both looked deployed, because the operator had pulled.
+    #
+    # Nothing else can see this: every other check here reads the INSTALLED
+    # files, so it reports faithfully on code that is out of date. The fix is
+    # 'install.sh --refresh-node-files'.
+    ip link show wg0 >/dev/null 2>&1 || exit 77
+    lib=\${ZTV_LIBDIR:-/usr/local/lib/0trust}
+    [[ -d \$lib ]] || exit 77
+
+    # Find the checkout. With none there is genuinely nothing to compare
+    # against, which is the one honest SKIP here — a node installed from a
+    # release tarball that was then deleted is in that state by design.
+    src=\"\"
+    for c in \"\${ZTV_REPO_DIR:-}\" /opt/0trust-src /opt/0trust/src /root/0trustvpn; do
+        [[ -n \$c && -f \$c/scripts/node-runtime.sh ]] && { src=\$c; break; }
+    done
+    [[ -n \$src ]] || exit 77
+
+    stale=()
+    for pair in \
+        \"scripts/node-runtime.sh:\$lib/node-runtime.sh\" \
+        \"scripts/node-runtime-apply.sh:\$lib/node-runtime-apply.sh\" \
+        \"scripts/node-enroll.sh:/usr/local/bin/0trust-node-enroll\" \
+        \"wireguard/0trust-meshd.py:/usr/local/bin/0trust-meshd\"
+    do
+        want=\$src/\${pair%%:*}
+        have=\${pair#*:}
+        [[ -f \$want ]] || continue
+        [[ -f \$have ]] || { stale+=(\"\${have} MISSING\"); continue; }
+        cmp -s \"\$want\" \"\$have\" || stale+=(\"\$have\")
+    done
+
+    if (( \${#stale[@]} )); then
+        echo \"the node is NOT running the code in \$src:\"
+        for f in \"\${stale[@]}\"; do echo \"  \$f\"; done
+        echo \"every other node check here reads these installed copies, so\"
+        echo \"they report on out-of-date code. Fix: install.sh --refresh-node-files\"
+        exit 1
+    fi
+    echo \"installed node scripts match \$src\"
+    exit 0
+"
+
 check node-dns-encrypted-upstream "Upstream DNS leaves the node over TLS (mesh nodes)" -- bash -c "
     # privacy.html \u00a74d says lookups reach Quad9 encrypted and
     # authenticated, and that a failed TLS connection means no answer rather

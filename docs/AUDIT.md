@@ -799,6 +799,7 @@ document. If one fails, the claim above it is the one that needs answering.
 | `cdn-realip-not-wildcard` | The CDN trust list cannot be the whole internet |
 | `node-dns-no-query-log` | In-tunnel resolver keeps no query log (mesh nodes) |
 | `node-dns-listening` | In-tunnel resolver is actually answering (mesh nodes) |
+| `node-code-current` | Node runs the code in the checkout, not an older copy (mesh nodes) |
 | `node-dns-encrypted-upstream` | Upstream DNS leaves the node over TLS (mesh nodes) |
 
 **§3. CONTROL-PLANE DATABASE**

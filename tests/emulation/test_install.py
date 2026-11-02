@@ -836,6 +836,91 @@ http {{
         check(why, name in staged,
               f"install.sh never places api/{name} in $PREFIX/api/")
 
+    print("\n[7d] a node can be brought up to the checkout at all")
+    # install.sh copies the node-side scripts into /usr/local rather than
+    # sourcing them from the git tree — deliberately, because they run at boot.
+    # The consequence went unhandled: `git pull` on a node changed nothing the
+    # node ran, and there was no supported way to ship a node-side fix. A live
+    # node was found carrying 24 masquerade rules (one pair per enrolment,
+    # exactly 12 enrolments of the pre-fix script) and a resolver bind mode
+    # that dies at boot, with BOTH fixes sitting in the checkout it had been
+    # pulled into.
+    import tempfile as _tf
+    nodeenv = os.path.join(TMP, "node.env")
+    open(nodeenv, "w").write("CONTROL_URL=https://c.example\nREGION=zur\n"
+                             "NODE_ROLE=both\nWG_PORT=51820\nOBFS_PORT=0\n")
+
+    def refresh(*extra, env=None):
+        e = {**os.environ, "TERM": "dumb", "ZTV_ETC_NODE": nodeenv, **(env or {})}
+        r = subprocess.run(["bash", INSTALL, "--refresh-node-files", "--dry-run",
+                            *extra], capture_output=True, text=True,
+                           timeout=180, env=e)
+        return r.returncode, r.stdout + r.stderr
+
+    # It must not demand --mode. Requiring it would make shipping a one-line
+    # node fix cost the same answers as the original install, which is how an
+    # operator ends up hand-copying files instead.
+    rc, out = refresh()
+    check("a refresh needs no --mode", rc == 0 and "must be test, production" not in out,
+          out[-400:])
+    # And it must survive obfs being off. The function's last statement is a
+    # `[[ ... ]] && ok ...`, which becomes its return value — so with the relay
+    # off it returned 1 and `set -e` aborted the refresh silently, right after
+    # copying the files. rc==0 here is that guard.
+    check("a refresh with the relay off does not abort silently",
+          rc == 0 and "0trust-node-enroll.service" in out, out[-400:])
+    check("and it reads the obfs port back off the node",
+          "obfs port: 0" in out, out[-400:])
+
+    open(os.path.join(TMP, "node-obfs.env"), "w").write("OBFS_PORT=8443\n")
+    rc2, out2 = refresh(env={"ZTV_ETC_NODE": os.path.join(TMP, "node-obfs.env")})
+    check("a node built with the relay keeps it on a refresh",
+          rc2 == 0 and "0trust-obfs.service (udp/8443)" in out2, out2[-400:])
+
+    # Refusing a box that is not a node matters: --refresh-node-files must
+    # never be a way to half-install one.
+    rc3, out3 = refresh(env={"ZTV_ETC_NODE": os.path.join(TMP, "absent.env")})
+    check("a refresh refuses a box that is not an installed node", rc3 != 0, out3[-300:])
+    check("and says to use --mode node instead", "--mode node" in out3, out3[-300:])
+
+    # A dry run must not claim a verification it skipped — the same standard
+    # the installer's own summary is held to (bug class #16).
+    check("a dry-run refresh does not claim to have verified anything",
+          "refreshed and verified" not in out, out[-300:])
+
+    # One definition of the file list. A second copy — in an update script, or
+    # pasted next to the call — is the drift this whole section exists because
+    # of.
+    #
+    # By POSITION, not by value. The first version of this asked whether each
+    # `install ` line appeared anywhere in the function's text, and a pasted
+    # duplicate is byte-identical to the line it was copied from, so it
+    # matched and the check passed with the duplicate in place. Verified by
+    # injecting one. Bug class #17, in the check guarding against exactly the
+    # kind of duplication it could not see.
+    src_lines = open(INSTALL).read().splitlines()
+    fn_first = next(i for i, l in enumerate(src_lines)
+                    if l.startswith("install_node_files() {"))
+    fn_last = next(i for i in range(fn_first + 1, len(src_lines))
+                   if src_lines[i] == "}")
+    for f in ("node-runtime.sh", "node-runtime-apply.sh", "node-enroll.sh",
+              "0trust-meshd.py"):
+        outside = [f"line {i + 1}: {src_lines[i].strip()}"
+                   for i in range(len(src_lines))
+                   if f in src_lines[i]
+                   and src_lines[i].strip().startswith("install ")
+                   and not (fn_first <= i <= fn_last)]
+        check(f"{f} is installed from one place only", not outside, outside[:3])
+    # Both the node branch and --refresh-node-files call it; neither may
+    # grow its own copy of the list instead. Read from src_lines, not from a
+    # bare `src` — an earlier section of this module binds that name to the
+    # nginx reference config, so the first version of this check was matching
+    # install_node_files against a completely different file. It failed
+    # loudly rather than passing, which is the only reason it was noticed.
+    callers = [i + 1 for i, l in enumerate(src_lines)
+               if l.strip() == "install_node_files"]
+    check("install_node_files is called, not inlined", len(callers) >= 2, callers)
+
     print("\n[8] the summary tells the truth about a one-box deployment")
     rc, out = run_installer("--mode", "test")
     for want, why in (

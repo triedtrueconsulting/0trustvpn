@@ -248,6 +248,42 @@ cannot register again.
 If the provider changes the node's public IP, the pin stops matching — mint a
 new token and re-run the installer.
 
+### Updating a node
+
+`git pull` on a node changes nothing the node runs.
+
+The installer copies the node-side scripts into `/usr/local/lib/0trust` and
+`/usr/local/bin`, and the systemd units into `/etc/systemd/system`. That is
+deliberate: those run at boot, and a node should not depend on a git working
+tree still being there. It also means the checkout and the running code are
+two different things, and pulling moves only the first.
+
+```bash
+cd /opt/0trust-src && git pull
+sudo ./scripts/install.sh --refresh-node-files
+```
+
+That re-copies exactly what `--mode node` installs, restarts enrolment and
+meshd, and then checks two things rather than announcing them: that the
+nftables table holds one masquerade pair rather than an accumulated stack,
+and that dnsmasq is answering on the mesh gateway. It needs no `--mode`, no
+control URL and no token — everything it needs it reads back off the node.
+It refuses a box that is not already a node.
+
+Enrolment generates a fresh WireGuard key, so customers on the node
+re-handshake. That is a few seconds' interruption, and the same thing a
+reboot does.
+
+`scripts/audit-verify.sh node-code-current` is the check for this: it compares
+the installed scripts against the checkout and fails if they differ. Worth
+knowing why it exists. A live node was found running install-time copies while
+the tree it had been pulled into was twelve commits ahead — its nftables table
+had accumulated one masquerade pair per enrolment (24 rules, which is exactly
+12 enrolments of the older script) and its resolver still carried the bind
+mode that dies at boot. Both fixes were in the checkout. Both looked deployed,
+because the operator had pulled. Every other node check reads the installed
+files, so they all reported faithfully on code that was out of date.
+
 ### What the node does about being noticed
 
 Be precise about this, because it is the area where VPN marketing lies most.
