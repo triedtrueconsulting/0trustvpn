@@ -225,12 +225,36 @@ harden_sshd() {
     # Turning off password auth on a box you are holding open WITH a password
     # locks you out of your own server. Only ever do this when a key is
     # already trusted.
-    if [[ -s /root/.ssh/authorized_keys ]] || \
-       compgen -G "/home/*/.ssh/authorized_keys" >/dev/null; then
+    # A key that is PRESENT is not a key that WORKS, and the difference costs
+    # the operator their server. PuTTYgen's "Save public key" writes RFC4716 —
+    # multi-line, with BEGIN/END headers — which sshd ignores and which a
+    # non-empty test happily accepts. Paste that, harden on it, and the next
+    # login is refused with no way back in.
+    #
+    # The same rule this product already applies to WireGuard keys: validated
+    # as a real key, not merely by length. `ssh-keygen -l -f` parses the file
+    # and fails on anything sshd would not read.
+    local _k _usable=0 _present=0
+    for _k in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+        [[ -s "$_k" ]] || continue
+        _present=1
+        if ssh-keygen -l -f "$_k" >/dev/null 2>&1; then _usable=1; break; fi
+    done
+
+    if (( _usable )); then
         sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
         sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
         systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
         ok "ssh password auth disabled ($1)"
+    elif (( _present )); then
+        # "No key" is a step not taken; "a key that will not parse" is a step
+        # taken WRONG. Treating the second as the first is how an operator
+        # finds out by being locked out.
+        note "an authorized_keys file exists but no usable key could be read from
+       it — leaving password auth ON. From PuTTYgen, copy the one-line text
+       in its \"Public key for pasting into OpenSSH authorized_keys file\"
+       box, not the file its \"Save public key\" button writes.
+       Check with: ssh-keygen -l -f /root/.ssh/authorized_keys"
     else
         note "no authorized_keys found — leaving password auth ON so you keep access"
     fi
