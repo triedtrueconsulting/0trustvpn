@@ -1157,12 +1157,29 @@ service stops it in `disconnect()`'s `finally` and on a failed connect, and
 `MainActivity` stops it when rendering the config throws, because by then it
 is already running.
 
-**NOTHING HAS RUN THE ANDROID INTEGRATION ON A DEVICE.** The transport is
-executed by CI; the parts that need Android — the endpoint rewrite reaching
-GoBackend, the split AllowedIPs actually keeping the relay's socket out of the
-tun, the MTU — have never run anywhere. Treat the first `./gradlew
-assembleDebug` on a real handset as the gate, exactly as with the iOS app, and
-expect the routing exclusion to be the thing that needs looking at.
+**The PLAIN path has now run on a device; the OBFUSCATED path still has not.**
+Built with `./gradlew assembleDebug`, installed on an Android 9 handset
+(2026-11-02), signed in against a live control plane and a live `zur` node,
+and it connects, resolves and browses. So the APK builds, the wire contract
+matches, `GoBackend` brings the tunnel up, and the device keypair persists —
+on real hardware, not in CI.
+
+That says nothing about obfuscation, and the distinction is not academic. A
+node runs the relay only with `--obfs-port <n>` and the default is 0, so even
+with the DPI-protection switch on, `RelayActive` is false and the client
+produces a direct tunnel that says so. The three things that only exist on
+the obfuscated path — the endpoint rewrite to `127.0.0.1:<relay>` reaching
+GoBackend, `AllowedIps.excludingV4()` actually keeping the relay's upstream
+socket out of the tun, and `WG_MTU_OBFUSCATED` — have STILL never run
+anywhere but the JVM. Exercising them needs a node started with an obfs port
+AND the switch on, and the routing exclusion is still the thing to expect
+trouble from: too little excluded loops the tunnel loudly, too much routes a
+slice of the internet outside the VPN silently.
+
+The first on-device run is also what found the resolver bug above — a defect
+no parse, compile or emulation check could reach, because it was a systemd
+ordering interacting with a dnsmasq bind mode. Treat the handset as part of
+the gate, not a formality after it.
 
 ## Conventions
 
