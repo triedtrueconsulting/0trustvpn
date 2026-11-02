@@ -94,7 +94,13 @@
     <Property Id="ARPPRODUCTICON" Value="ZtvIcon" />
     <Property Id="ARPHELPLINK" Value="https://0trustvpn.com/help" />
     <Property Id="ARPURLINFOABOUT" Value="https://0trustvpn.com/" />
-    <Property Id="ARPNOMODIFY" Value="1" />
+    <!--
+      ARPNOMODIFY is deliberately NOT set here. WixUI_InstallDir already
+      declares it - its dialog set has no maintenance path, so there is
+      nothing for a Modify button to open - and defining it again is a
+      duplicate symbol that fails the build outright (WIX0091), not a
+      harmless override. Add/Remove Programs still shows no Modify option.
+    -->
 
     <Icon Id="ZtvIcon" SourceFile="resources\0trust.ico" />
 
