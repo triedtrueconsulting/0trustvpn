@@ -322,6 +322,32 @@ PYEOF
 # The GUI's favicon is generated from the same geometry as the MSI icon and
 # the .desktop SVG, then committed. A committed generated file drifts from its
 # generator the moment someone edits one of them.
+# A .ps1 with no BOM is read as Windows-1252 by Windows PowerShell 5.1, and a
+# UTF-8 em-dash becomes three CP1252 characters ending in 0x94 — a smart
+# double quote, which PowerShell accepts as a STRING DELIMITER. So every
+# non-ASCII character silently injects a quote. build.ps1 carried four and
+# parsed only because four is even; a fifth comment with an em-dash in it
+# broke the whole file, and the parse errors pointed at a correct line 80
+# lines further down. ASCII only, and the gate is what makes that stick.
+check ps1-ascii "PowerShell sources are ASCII, so CP1252 cannot inject quotes" -- \
+    "$PY" -c '
+import os, sys
+bad = []
+for f in open(os.environ["VALIDATE_FILES"]).read().splitlines():
+    if not f.endswith(".ps1"):
+        continue
+    raw = open(f, "rb").read()
+    if raw[:3] == b"\xef\xbb\xbf":
+        continue          # a BOM makes PowerShell read it as UTF-8
+    for n, line in enumerate(raw.split(b"\n"), 1):
+        if any(b > 127 for b in line):
+            bad.append("%s:%d: %s" % (f, n, line.decode("utf-8", "replace")[:70]))
+if bad:
+    print("non-ASCII in a BOM-less .ps1 (CP1252 turns these into quotes):")
+    print("\n".join(bad[:20]))
+    sys.exit(1)
+'
+
 check gui-favicon "the GUI favicon matches its generator" -- \
     ./scripts/gen-favicon.py --check
 

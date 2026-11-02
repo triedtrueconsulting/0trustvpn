@@ -5,13 +5,13 @@
 .DESCRIPTION
     Cross-compiles the Go client, then builds one MSI per architecture. Signing
     is opt-in: pass -SignWith with the certificate subject name. Without it you
-    get unsigned MSIs, which are fine for testing and NOT fine for release —
+    get unsigned MSIs, which are fine for testing and NOT fine for release  - 
     SmartScreen will block them and the publisher field will read "Unknown".
 
     The README used to carry this script as a code block with "drop that in
     installer/windows/build.ps1". Instructions to create a file are not the
     same as the file, and the version in the prose drifted from the wix command
-    above it — it was missing the extension flags the build needs.
+    above it - it was missing the extension flags the build needs.
 
 .EXAMPLE
     .\build.ps1 -Version 0.1.0
@@ -50,7 +50,7 @@ if ($SignWith) {
 #
 # Pinned to the toolset's own version. Unversioned, `wix extension add`
 # resolves the newest published build, which on a WiX 7 CLI can leave the
-# extension unusable — the add appears to work and `wix build` then fails
+# extension unusable - the add appears to work and `wix build` then fails
 # with WIX0144 "could not be found", thirty seconds later and pointing at
 # the wrong thing.
 #
@@ -65,7 +65,7 @@ $wixVersion = ((wix --version) -split '\+')[0].Trim()
 # v6 the toolset carries the Open Source Maintenance Fee: revenue-generating
 # use requires paying it, and v7 refuses to run at all until the EULA is
 # accepted (WIX7015). That is a commercial decision about THIS product's
-# revenue, not something a build script may take on the operator's behalf —
+# revenue, not something a build script may take on the operator's behalf  - 
 # so it stops and explains rather than quietly running `wix eula accept`.
 $wixMajor = [int]($wixVersion -split '\.')[0]
 if ($wixMajor -ge 6) {
@@ -90,7 +90,7 @@ foreach ($ext in @("WixToolset.UI.wixext", "WixToolset.Util.wixext")) {
     if ($LASTEXITCODE -ne 0) {
         # An older toolset may not publish a matching build; try unversioned
         # before giving up, but say which one actually landed.
-        Write-Host "    $ext/$wixVersion unavailable — trying unversioned" `
+        Write-Host "    $ext/$wixVersion unavailable - trying unversioned" `
                    -ForegroundColor Yellow
         wix extension add -g $ext 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
@@ -187,14 +187,14 @@ if (-not $SignWith) {
         Write-Host "  ever IS signed, that page must stop apologising for it." `
                    -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "  Still sign SHA256SUMS with the release PGP key —" -ForegroundColor Yellow
+        Write-Host "  Still sign SHA256SUMS with the release PGP key  - " -ForegroundColor Yellow
         Write-Host "  scripts/release.sh does it, and it is the only integrity" `
                    -ForegroundColor Yellow
         Write-Host "  check a customer has left." -ForegroundColor Yellow
     } else {
         Write-Host "UNSIGNED. Do not ship these unless that is a decision you have" `
                    -ForegroundColor Red
-        Write-Host "made on purpose — re-run with -SignWith '<cert subject>', or" `
+        Write-Host "made on purpose - re-run with -SignWith '<cert subject>', or" `
                    -ForegroundColor Red
         Write-Host "with -UnsignedOnPurpose if you know what it costs the customer." `
                    -ForegroundColor Red
