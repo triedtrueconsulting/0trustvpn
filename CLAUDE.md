@@ -841,9 +841,24 @@ make -C client linux 2>/dev/null || (cd client && for a in amd64 arm64; do \
 ./installer/linux/deb/build.sh
 ```
 
-The Android app needs Android Studio Hedgehog+ and SDK 34 to build an APK
-(`./gradlew assembleDebug`) — no NDK: `com.wireguard.android:tunnel` ships the
-Go data plane prebuilt. The Windows MSI needs a Windows host with **WiX v4
+**The APK builds headless on Linux — this was tried and it works**, which
+contradicts the older assumption recorded here that Google's Maven is
+unreachable from such an environment. It is reachable, and so are
+dl.google.com's SDK repository, services.gradle.org and Maven Central. What
+is needed is the SDK, not Android Studio: unpack the Linux command-line
+tools, `sdkmanager --licenses`, then
+`sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"`,
+set `ANDROID_HOME`, and `./gradlew assembleDebug`. JDK 17+ (21 works).
+The one obstacle is rate limiting rather than reachability: a shared egress
+gets HTTP 429 from Maven Central partway through dependency resolution.
+Gradle caches what it got, so retries converge, and pointing an init script
+at Google's GCS mirror of Maven Central
+(`https://maven-central.storage-download.googleapis.com/maven2`) finishes it
+in one pass. That is a build-environment workaround and belongs in no
+committed Gradle file.
+Android Studio Hedgehog+ with SDK 34 is still the comfortable path — no NDK
+either way: `com.wireguard.android:tunnel` ships the Go data plane
+prebuilt. The Windows MSI needs a Windows host with **WiX v4
 or v5, NOT v6+** — starting at v6 the toolset carries the Open Source
 Maintenance Fee, which revenue-generating use has to pay, and v7 refuses to
 run until the EULA is accepted (WIX7015). `dotnet tool install -g wix`
