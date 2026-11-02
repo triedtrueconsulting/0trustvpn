@@ -91,12 +91,12 @@
     <ui:WixUI Id="WixUI_InstallDir" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
-    <Property Id="ARPPRODUCTICON" Value="0trustIcon" />
+    <Property Id="ARPPRODUCTICON" Value="ZtvIcon" />
     <Property Id="ARPHELPLINK" Value="https://0trustvpn.com/help" />
     <Property Id="ARPURLINFOABOUT" Value="https://0trustvpn.com/" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
-    <Icon Id="0trustIcon" SourceFile="resources\0trust.ico" />
+    <Icon Id="ZtvIcon" SourceFile="resources\0trust.ico" />
 
     <!--
       The WireGuard-missing notice, on the installer's final page.
@@ -119,7 +119,7 @@
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="0trust">
         <Component Id="MainBinary" Guid="*">
-          <File Id="0trustExe"
+          <File Id="ZtvExe"
                 Source="$(BinaryDir)\0trust-windows-$(Arch).exe"
                 Name="0trust.exe"
                 KeyPath="yes" />
@@ -142,7 +142,12 @@
     <!-- Holds the wg-quick config when a tunnel is active -->
     <StandardDirectory Id="CommonAppDataFolder">
       <Directory Id="DATADIR" Name="0trust">
-        <Component Id="DataFolder" Guid="*" KeyPath="yes">
+        <!-- An explicit GUID, not "*": a component whose KeyPath is a
+             DIRECTORY has nothing stable for WiX to hash, so it refuses
+             to generate one (WIX0230). Fixed here so the component keeps
+             its identity across builds; changing it would orphan the
+             folder on upgrade. -->
+        <Component Id="DataFolder" Guid="AEFCF595-E932-46F1-9C67-850C83728E62" KeyPath="yes">
           <CreateFolder>
             <!-- LocalSystem owns it (the WireGuard tunnel service reads from here) -->
             <util:PermissionEx User="SYSTEM" GenericAll="yes" />
@@ -162,20 +167,20 @@
 
     <!-- ===== Start Menu shortcut ===== -->
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="StartMenuFolder" Name="0trustvpn">
+      <Directory Id="ZtvMenuFolder" Name="0trustvpn">
         <Component Id="StartMenuShortcut" Guid="*">
-          <Shortcut Id="0trustGuiShortcut"
+          <Shortcut Id="ZtvGuiShortcut"
                     Name="0trustvpn"
                     Description="Open the 0trustvpn client"
                     Target="[INSTALLFOLDER]0trust.exe"
                     Arguments="gui"
                     WorkingDirectory="INSTALLFOLDER"
-                    Icon="0trustIcon" />
-          <Shortcut Id="0trustHelpShortcut"
+                    Icon="ZtvIcon" />
+          <Shortcut Id="ZtvHelpShortcut"
                     Name="Help"
                     Description="Open 0trustvpn help &amp; FAQ"
                     Target="https://0trustvpn.com/help" />
-          <Shortcut Id="0trustUninstall"
+          <Shortcut Id="ZtvUninstall"
                     Name="Uninstall 0trustvpn"
                     Target="[SystemFolder]msiexec.exe"
                     Arguments="/x [ProductCode]" />
@@ -199,13 +204,13 @@
     <!-- ===== Desktop shortcut (optional via Feature) ===== -->
     <StandardDirectory Id="DesktopFolder">
       <Component Id="DesktopShortcut" Guid="*">
-        <Shortcut Id="0trustDesktopShortcut"
+        <Shortcut Id="ZtvDesktopShortcut"
                   Name="0trustvpn"
                   Description="Open the 0trustvpn client"
                   Target="[INSTALLFOLDER]0trust.exe"
                   Arguments="gui"
                   WorkingDirectory="INSTALLFOLDER"
-                  Icon="0trustIcon" />
+                  Icon="ZtvIcon" />
         <RegistryValue Root="HKLM"
                        Key="Software\0trust"
                        Name="DesktopShortcutInstalled"

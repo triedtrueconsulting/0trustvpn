@@ -329,6 +329,40 @@ PYEOF
 # parsed only because four is even; a fifth comment with an em-dash in it
 # broke the whole file, and the parse errors pointed at a correct line 80
 # lines further down. ASCII only, and the gate is what makes that stick.
+# xml-parse proves the .wxs is well-formed XML. It says nothing about whether
+# WiX will accept it, and WiX has rules XML does not: an identifier must begin
+# with a letter or an underscore. This product's name begins with a digit, so
+# every Id derived from it - 0trustIcon, 0trustExe, 0trustGuiShortcut - was
+# illegal, and the file had never been compiled, because compiling it needs a
+# Windows host. Eight errors on the operator's first real build.
+check wix-identifiers "MSI identifiers are ones WiX will accept" -- \
+    "$PY" -c '
+import os, re, sys
+import xml.etree.ElementTree as ET
+LEGAL = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+# Media/@Id is a numeric DiskId, not an identifier.
+SKIP_ID_ON = {"Media"}
+# Attributes that hold or reference an identifier.
+REF_ATTRS = ("Icon", "Directory")
+bad = []
+for f in open(os.environ["VALIDATE_FILES"]).read().splitlines():
+    if not f.endswith(".wxs"):
+        continue
+    for el in ET.parse(f).iter():
+        tag = el.tag.rsplit("}", 1)[-1]
+        v = el.get("Id")
+        if v is not None and tag not in SKIP_ID_ON and not LEGAL.match(v):
+            bad.append("%s: <%s Id=\"%s\">" % (f, tag, v))
+        for a in REF_ATTRS:
+            v = el.get(a)
+            if v is not None and not v.startswith("[") and not LEGAL.match(v):
+                bad.append("%s: <%s %s=\"%s\">" % (f, tag, a, v))
+if bad:
+    print("WiX identifiers must start with a letter or underscore:")
+    print("\n".join(bad))
+    sys.exit(1)
+'
+
 check ps1-ascii "PowerShell sources are ASCII, so CP1252 cannot inject quotes" -- \
     "$PY" -c '
 import os, sys
