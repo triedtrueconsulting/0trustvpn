@@ -47,10 +47,42 @@ if ($SignWith) {
 }
 
 # Both extensions are needed by 0trust.wxs (ui:WixUI, util:PermissionEx).
-# Adding one that is already present is a no-op, so just make sure.
+#
+# Pinned to the toolset's own version. Unversioned, `wix extension add`
+# resolves the newest published build, which on a WiX 7 CLI can leave the
+# extension unusable — the add appears to work and `wix build` then fails
+# with WIX0144 "could not be found", thirty seconds later and pointing at
+# the wrong thing.
+#
+# And the result is CHECKED. These two lines ended in `| Out-Null`, which
+# discards stdout and does nothing about the exit code, so a failed add was
+# silent and the build died further on with a message that described a
+# missing extension rather than a failed install of one.
 Write-Host "[+] WiX extensions" -ForegroundColor Yellow
-wix extension add -g WixToolset.UI.wixext   | Out-Null
-wix extension add -g WixToolset.Util.wixext | Out-Null
+$wixVersion = ((wix --version) -split '\+')[0].Trim()
+foreach ($ext in @("WixToolset.UI.wixext", "WixToolset.Util.wixext")) {
+    wix extension add -g "$ext/$wixVersion" 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        # An older toolset may not publish a matching build; try unversioned
+        # before giving up, but say which one actually landed.
+        Write-Host "    $ext/$wixVersion unavailable — trying unversioned" `
+                   -ForegroundColor Yellow
+        wix extension add -g $ext 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "could not add $ext. Try manually: wix extension add -g $ext/$wixVersion"
+        }
+    }
+}
+# Prove they are there, rather than assuming the add did what it said.
+$installed = (wix extension list -g 2>&1 | Out-String)
+foreach ($ext in @("WixToolset.UI.wixext", "WixToolset.Util.wixext")) {
+    if ($installed -notmatch [regex]::Escape($ext)) {
+        throw ("$ext is still not installed after adding it. " +
+               "'wix extension list -g' does not show it, and 0trust.wxs " +
+               "cannot build without it.")
+    }
+    Write-Host "    $ext" -ForegroundColor DarkGray
+}
 
 if (-not (Test-Path "resources\0trust.ico")) {
     Write-Host "[+] Generating the icon" -ForegroundColor Yellow
