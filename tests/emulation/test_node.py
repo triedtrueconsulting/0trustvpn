@@ -512,10 +512,11 @@ try:
     _unit = open(os.path.join(H.REPO, "systemd",
                               "0trust-node-enroll.service")).read()
     _inst = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
-    _rwp = re.search(r'^ReadWritePaths=(.*)$', _unit, re.M)
-    check("[9c] the unit declares ReadWritePaths", _rwp is not None)
-    if _rwp:
-        for _p in _rwp.group(1).split():
+    _rwp_lines = re.findall(r'^ReadWritePaths=(.*)$', _unit, re.M)
+    _rwp_all = " ".join(_rwp_lines)
+    check("[9c] the unit declares ReadWritePaths", bool(_rwp_lines))
+    if _rwp_lines:
+        for _p in _rwp_all.split():
             # A leading '-' marks the path optional to systemd: it cannot fail
             # the unit. Anything else must exist before ExecStart.
             _optional = _p.startswith("-")
@@ -531,6 +532,24 @@ try:
                   bool(_made) or _optional,
                   _path + " is mandatory in ReadWritePaths and nothing creates it"
                   " — the unit fails 226/NAMESPACE on a fresh box")
+
+    # The check above asks whether every path NAMED can be mounted. The bug
+    # came back one restart later from the other direction: /etc/stubby is a
+    # path the script WRITES and the unit never named, so ProtectSystem=strict
+    # left it read-only and enrolment died after it had already joined the
+    # mesh. Both directions matter, so both are checked.
+    _apply = open(os.path.join(H.REPO, "scripts",
+                               "node-runtime-apply.sh")).read()
+    _targets = re.findall(r'^[A-Z_]+_DIR="\$\{[A-Z_]+:-\$ROOT(/[^}"]+)\}"',
+                          _apply, re.M)
+    check("[9c] found the directories node-runtime-apply.sh writes",
+          len(_targets) >= 3, _targets)
+    _named = {q.lstrip("-") for q in _rwp_all.split()}
+    for _t in _targets:
+        check("[9c] " + _t + ": writable under ProtectSystem=strict",
+              _t in _named,
+              _t + " is written during enrolment but is not in the unit's"
+              " ReadWritePaths — writes there fail 'Read-only file system'")
 
     check("[9c] node mode creates /etc/nftables.d before the unit runs",
           re.search(r'install -d[^\n]*/etc/nftables\.d', _inst) is not None,

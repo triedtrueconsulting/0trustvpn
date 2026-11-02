@@ -31,6 +31,7 @@ ProtectSystem=strict
 # would have created it never starts. install.sh makes these; the '-'
 # is so a missing one degrades instead of bricking enrolment.
 ReadWritePaths=/etc/wireguard /etc/0trust /var/0trust -/etc/dnsmasq.d -/etc/nftables.d
+ReadWritePaths=-/etc/stubby
 PrivateTmp=true
 
 [Install]

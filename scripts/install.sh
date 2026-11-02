@@ -1060,6 +1060,12 @@ ENV
         # test mode and bootstrap-node.sh each created their own, which is
         # why this only ever broke the one-command node deploy.
         install -d -m 0755 /etc/nftables.d
+        # Same reason, and the stubby package may not have unpacked yet
+        # when this runs. ProtectSystem=strict makes the rest of /etc
+        # read-only, so a path the enrolment script writes but the unit
+        # does not name fails as "Read-only file system" — which is how
+        # /etc/stubby surfaced, one restart after /etc/nftables.d.
+        install -d -m 0755 /etc/stubby
         install -m 0644 "$REPO_DIR/systemd/0trust-node-enroll.service" \
                 /etc/systemd/system/0trust-node-enroll.service
         install -m 0644 "$REPO_DIR/systemd/0trust-meshd.service" \
