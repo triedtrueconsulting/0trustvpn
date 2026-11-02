@@ -60,6 +60,31 @@ if ($SignWith) {
 # missing extension rather than a failed install of one.
 Write-Host "[+] WiX extensions" -ForegroundColor Yellow
 $wixVersion = ((wix --version) -split '\+')[0].Trim()
+
+# 0trust.wxs targets WiX v4, and v4/v5 are MIT with no strings. Starting at
+# v6 the toolset carries the Open Source Maintenance Fee: revenue-generating
+# use requires paying it, and v7 refuses to run at all until the EULA is
+# accepted (WIX7015). That is a commercial decision about THIS product's
+# revenue, not something a build script may take on the operator's behalf —
+# so it stops and explains rather than quietly running `wix eula accept`.
+$wixMajor = [int]($wixVersion -split '\.')[0]
+if ($wixMajor -ge 6) {
+    Write-Host ""
+    Write-Host "  WiX $wixVersion carries the Open Source Maintenance Fee." -ForegroundColor Yellow
+    Write-Host "  0trust is a commercial product, so that is a licensing" -ForegroundColor Yellow
+    Write-Host "  question, not a build flag. Two honest ways forward:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "    1. Use the version 0trust.wxs was written for, which is" -ForegroundColor Yellow
+    Write-Host "       outside the fee entirely:" -ForegroundColor Yellow
+    Write-Host "         dotnet tool uninstall -g wix" -ForegroundColor Gray
+    Write-Host "         dotnet tool install -g wix --version 5.*" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "    2. Pay the fee, then accept it on this machine:" -ForegroundColor Yellow
+    Write-Host "         wix eula accept wix$wixMajor" -ForegroundColor Gray
+    Write-Host "       https://docs.firegiant.com/wix/osmf/" -ForegroundColor Gray
+    Write-Host ""
+    throw "refusing to build against WiX $wixVersion without that decision being made"
+}
 foreach ($ext in @("WixToolset.UI.wixext", "WixToolset.Util.wixext")) {
     wix extension add -g "$ext/$wixVersion" 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {

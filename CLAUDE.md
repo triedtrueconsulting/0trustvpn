@@ -843,7 +843,17 @@ make -C client linux 2>/dev/null || (cd client && for a in amd64 arm64; do \
 
 The Android app needs Android Studio Hedgehog+ and SDK 34 to build an APK
 (`./gradlew assembleDebug`) — no NDK: `com.wireguard.android:tunnel` ships the
-Go data plane prebuilt. The Windows MSI needs a Windows host with WiX
+Go data plane prebuilt. The Windows MSI needs a Windows host with **WiX v4
+or v5, NOT v6+** — starting at v6 the toolset carries the Open Source
+Maintenance Fee, which revenue-generating use has to pay, and v7 refuses to
+run until the EULA is accepted (WIX7015). `dotnet tool install -g wix`
+installs the newest, so it has to be pinned: `--version 5.*`. build.ps1
+stops with both options spelled out rather than running `wix eula accept`
+for you, because that is a commercial decision about this product's revenue.
+Extensions are requested as `<id>/<toolset version>`; unversioned they
+resolve to a build the toolset may not be able to load, and the failure
+surfaces much later as WIX0144 "extension could not be found". The MSI
+needs a Windows host with WiX
 (`installer/windows/build.ps1`). Neither can be built in a headless Linux-only
 environment, and Google's Maven repo is usually unreachable from one too, so:
 
