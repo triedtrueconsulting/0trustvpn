@@ -413,7 +413,26 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	st.Token = token
 	c := api.New(st.APIBase, token)
 	if _, err := c.Status(); err != nil {
-		writeErr(w, 401, "token rejected by server")
+		// "Rejected" is a claim about what the server decided, so only say it
+		// when a server actually decided something. Every error used to land
+		// here as a 401 — a control plane that does not resolve, refuses the
+		// connection or times out was reported as a bad token, which sends
+		// the customer to re-read a token that was fine and says nothing
+		// about the address the client is really talking to.
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) {
+			if apiErr.Status == http.StatusUnauthorized ||
+				apiErr.Status == http.StatusForbidden {
+				writeErr(w, 401, "token rejected by server")
+			} else {
+				writeErr(w, 502, fmt.Sprintf(
+					"control plane at %s answered HTTP %d",
+					st.APIBase, apiErr.Status))
+			}
+			return
+		}
+		writeErr(w, 502, fmt.Sprintf(
+			"could not reach the control plane at %s (%v)", st.APIBase, err))
 		return
 	}
 	if err := st.Save(); err != nil {
