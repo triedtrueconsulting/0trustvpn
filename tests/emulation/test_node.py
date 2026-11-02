@@ -498,6 +498,45 @@ try:
     check("and the node can still rejoin after a sweep",
           st == 200 and again.get("node_id") == live_node, (st, again))
 
+    print("\n[9c] every ReadWritePaths the enrolment unit names can be mounted")
+    # A real node install died here. 0trust-node-enroll.service runs
+    # ProtectSystem=strict, so systemd bind-mounts each ReadWritePaths entry
+    # BEFORE ExecStart. A path that does not exist fails the unit with
+    # 226/NAMESPACE and the script never runs — and node-runtime-apply.sh's own
+    # `mkdir -p /etc/nftables.d` lives inside that script, so it could never
+    # create the directory it was blocked on. The node retried every 15s forever.
+    #
+    # Nothing caught it because the directory DOES get made on the other two
+    # paths: install.sh's test mode makes its own and bootstrap-node.sh makes its
+    # own. Only `--mode node`, the documented one-command deploy, did not.
+    _unit = open(os.path.join(H.REPO, "systemd",
+                              "0trust-node-enroll.service")).read()
+    _inst = open(os.path.join(H.REPO, "scripts", "install.sh")).read()
+    _rwp = re.search(r'^ReadWritePaths=(.*)$', _unit, re.M)
+    check("[9c] the unit declares ReadWritePaths", _rwp is not None)
+    if _rwp:
+        for _p in _rwp.group(1).split():
+            # A leading '-' marks the path optional to systemd: it cannot fail
+            # the unit. Anything else must exist before ExecStart.
+            _optional = _p.startswith("-")
+            _path = _p.lstrip("-")
+            _made = (re.search(r'install -d[^\n]*' + re.escape(_path) + r'(?:\s|$)', _inst)
+                     or re.search(r'mkdir -p[^\n]*' + re.escape(_path) + r'(?:\s|$)', _inst)
+                     # The tmpfs paths are made by `mkdir -p "$path"` looping
+                     # over a heredoc mount table, so the literal never appears
+                     # next to a mkdir. Missing that reported two false failures.
+                     or re.search(r'^' + re.escape(_path) + r'\s+\d+[MG]\s*$',
+                                  _inst, re.M))
+            check("[9c] " + _path + ": created by install.sh, or optional to systemd",
+                  bool(_made) or _optional,
+                  _path + " is mandatory in ReadWritePaths and nothing creates it"
+                  " — the unit fails 226/NAMESPACE on a fresh box")
+
+    check("[9c] node mode creates /etc/nftables.d before the unit runs",
+          re.search(r'install -d[^\n]*/etc/nftables\.d', _inst) is not None,
+          "install.sh --mode node must create it; node-runtime-apply.sh cannot,"
+          " because systemd blocks the very script that would")
+
     print("\n[10] the installer renders a node without touching the box")
     r = subprocess.run(
         ["bash", INSTALL, "--mode", "node", "--dry-run",

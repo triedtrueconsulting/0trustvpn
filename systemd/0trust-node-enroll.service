@@ -25,7 +25,12 @@ TimeoutStartSec=120s
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/etc/wireguard /etc/0trust /var/0trust /etc/dnsmasq.d /etc/nftables.d
+# The leading '-' marks a path as optional. Without it a directory that
+# does not exist yet fails the unit with 226/NAMESPACE before ExecStart
+# runs, so the node cannot enrol and cannot say why — the script that
+# would have created it never starts. install.sh makes these; the '-'
+# is so a missing one degrades instead of bricking enrolment.
+ReadWritePaths=/etc/wireguard /etc/0trust /var/0trust -/etc/dnsmasq.d -/etc/nftables.d
 PrivateTmp=true
 
 [Install]

@@ -1051,6 +1051,15 @@ ENV
         install -m 0755 "$REPO_DIR/scripts/node-runtime-apply.sh" \
                 "$LIBDIR/node-runtime-apply.sh"
         install -m 0755 "$REPO_DIR/scripts/node-enroll.sh" /usr/local/bin/0trust-node-enroll
+        # The enrolment unit runs ProtectSystem=strict and names this in
+        # ReadWritePaths, so systemd bind-mounts it before the script starts.
+        # A path that does not exist fails the whole unit with 226/NAMESPACE
+        # and the script never runs at all — and node-runtime-apply.sh's own
+        # `mkdir -p` is inside that script, so it can never create the
+        # directory it is blocked on. Nothing else in node mode makes it:
+        # test mode and bootstrap-node.sh each created their own, which is
+        # why this only ever broke the one-command node deploy.
+        install -d -m 0755 /etc/nftables.d
         install -m 0644 "$REPO_DIR/systemd/0trust-node-enroll.service" \
                 /etc/systemd/system/0trust-node-enroll.service
         install -m 0644 "$REPO_DIR/systemd/0trust-meshd.service" \
