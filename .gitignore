@@ -18,6 +18,14 @@ backup-recipients.txt
 
 # ─── Go build artifacts ───
 client/dist/
+# tests/emulation/test_obfs.py [5] writes a probe command into the MODULE —
+# it has to, because it imports internal/obfs and Go forbids importing an
+# internal package across module boundaries, so it cannot live in /tmp. It is
+# removed in a finally, but a run that is killed (Ctrl-C, a timeout, a stopped
+# CI job) leaves it behind, and then `go vet ./...` compiles a test artefact
+# and `git status` is dirty for a reason nobody remembers. Ignored by pattern
+# so the per-run suffix is covered too.
+client/cmd/obfsproxyprobe*/
 *.exe
 *.test
 *.out

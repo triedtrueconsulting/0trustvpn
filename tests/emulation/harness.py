@@ -370,3 +370,48 @@ def paid_account(months=1):
     assert st == 200, (st, b)
     settle(b["invoice_id"])
     return b["token"], b["invoice_id"]
+
+
+def rendered_text(page, selector, timeout=20000, until=None):
+    """
+    The text a human would actually see in `selector`, once there is any.
+
+    Playwright's click() and wait_for_selector() auto-wait; inner_text() does
+    NOT. It reads whatever is in the DOM at that instant. And both UIs
+    deliberately un-hide a container BEFORE the fetch that fills it, so the
+    customer sees the panel open immediately rather than staring at a dead
+    button:
+
+        terms.textContent = '';
+        panel.classList.remove('hidden');        <- the test's wait returns here
+        const cfg = await (await fetch('/api/config')).json();
+        ... append a button per term                <- content arrives here
+
+    So a test that waits for the container to stop being hidden and then
+    reads it is racing one HTTP round trip against one Playwright call. That
+    passed on an idle machine and failed on a loaded runner, with a failure
+    detail reading `absent from ''` and nothing saying why — the same family
+    as bug classes #10 and #13: green locally, red on a runner, for a reason
+    the test never states. It cost two red CI-equivalent runs and an hour of
+    looking in the wrong place, at the product, which was behaving correctly.
+
+    `until` is for a caller that needs more than "something rendered" — e.g.
+    three healthy nodes, not the first one to arrive. It receives the current
+    text and returns True when the state is the one about to be asserted on.
+
+    On timeout this RETURNS whatever is there rather than raising, so a
+    genuine product failure surfaces as the caller's own check, with the
+    caller's own message, instead of as a Playwright TimeoutError that says
+    only that a selector never settled.
+    """
+    deadline = time.monotonic() + timeout / 1000.0
+    text = ""
+    while True:
+        try:
+            text = page.inner_text(selector)
+        except Exception:
+            text = ""
+        done = bool(until(text)) if until else bool(text.strip())
+        if done or time.monotonic() >= deadline:
+            return text
+        page.wait_for_timeout(100)

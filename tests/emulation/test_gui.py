@@ -179,9 +179,9 @@ try:
         page.click("#trial-btn")
         page.wait_for_selector("#view-main:not(.hidden)", timeout=90000)
         check("main view appears after the trial", page.is_visible("#view-main"))
-        sub = page.inner_text("#kv-sub").strip()
+        sub = H.rendered_text(page, "#kv-sub").strip()
         check("subscription row marks it a trial", "trial" in sub.lower(), sub)
-        dev = page.inner_text("#kv-dev").strip()
+        dev = H.rendered_text(page, "#kv-dev").strip()
         check("device cap shows the trial limit of 2", dev.endswith("/ 2"), dev)
         check("no JS errors so far", not errors, errors)
         check("and none in the console either", not console_errors,
@@ -261,11 +261,36 @@ try:
                 check("and it says the running tunnel is not covered yet",
                       "next time you connect" in page.inner_text("#ks-hint"),
                       page.inner_text("#ks-hint"))
-                # The message has to survive the 3s poll repainting the panel.
-                page.wait_for_timeout(3500)
-                check("and keeps saying so after the next poll",
-                      "next time you connect" in page.inner_text("#ks-hint"),
-                      page.inner_text("#ks-hint"))
+                # The hint has to survive a REPAINT. This slept 3500ms
+                # against a 3000ms poll and hoped, which fails in the
+                # direction that never shows up as a failure: on a loaded box
+                # the repaint lands after the sleep, so nothing has repainted
+                # yet and the check passes without testing what it is named
+                # after (bug class #17).
+                #
+                # Counting fetches of /api/state was the first replacement
+                # and was no better — the kill-switch toggle itself fetches
+                # it, so the counter was satisfied before any repaint and the
+                # check passed WITH a planted bug that drops the hint on the
+                # second render. Verified by planting exactly that.
+                #
+                # Count RENDERS, which is the event the property is about.
+                # app.js is a classic script, so render() resolves through
+                # the global binding and wrapping it intercepts the real one.
+                # This is also independent of the poll interval: any repaint
+                # exercises the property, whatever triggered it.
+                page.evaluate("""() => {
+                    window.__renders = 0;
+                    const r = window.render;
+                    window.render = function () {
+                        window.__renders++;
+                        return r.apply(this, arguments);
+                    };
+                }""")
+                page.wait_for_function("() => window.__renders >= 1", timeout=25000)
+                hint = H.rendered_text(page, "#ks-hint")
+                check("and keeps saying so after a repaint",
+                      "next time you connect" in hint, hint)
             else:
                 # Nothing is running, so nothing is uncovered. Saying a change
                 # is "not in force yet" with no tunnel up would be the same
@@ -365,7 +390,7 @@ try:
         page.wait_for_function(
             "() => !document.getElementById('devices-list').textContent.includes('Loading')",
             timeout=20000)
-        listed = page.inner_text("#devices-list")
+        listed = H.rendered_text(page, "#devices-list")
         if CONNECTED:
             check("this device is listed", "this device" in listed, listed[:300])
         else:
@@ -530,7 +555,16 @@ try:
               page.is_visible("#notices"))
 
         page.click("#notices .dismiss")
-        page.wait_for_timeout(1200)
+        # Wait for the condition, not for a guessed duration: dismissal is a
+        # POST and a re-render, so a fixed sleep is a bet on how fast the box
+        # is. If it never clears, this times out and the check below fails
+        # with the banner's own text, which is the honest outcome.
+        try:
+            page.wait_for_function(
+                "() => document.querySelectorAll('#notices .notice').length === 0",
+                timeout=15000)
+        except Exception:
+            pass
         check("dismissing clears it",
               page.eval_on_selector_all("#notices .notice", "e => e.length") == 0,
               page.inner_text("#notices"))
@@ -543,7 +577,7 @@ try:
         # surface it appears on is half a feature.
         page.click("#topup-btn")
         page.wait_for_selector("#topup-panel:not(.hidden)", timeout=15000)
-        terms = page.inner_text("#topup-terms")
+        terms = H.rendered_text(page, "#topup-terms")
         # inner_text returns what is RENDERED, and the stylesheet uppercases
         # buttons — so this compares case-insensitively rather than against
         # the case in the source.
@@ -560,7 +594,12 @@ try:
         check("every term the API sells is offered, at the API's price",
               not missing,
               f"{missing} absent from {terms!r} — a price written into a "
-              "client is bug class #11, and here it is money")
+              "client is bug class #11, and here it is money"
+              # The panel's own error path is the other way this ends, and
+              # without it an empty #topup-terms says nothing about which
+              # happened.
+              + (f"; #topup-err says {page.inner_text('#topup-err')!r}"
+                 if page.is_visible("#topup-err") else ""))
 
         n_before = int(sqlite3.connect(DB).execute(
             "SELECT COUNT(*) FROM invoices").fetchone()[0])
@@ -568,8 +607,8 @@ try:
         page.wait_for_selector("#topup-detail:not(.hidden)", timeout=20000)
         addr = page.input_value("#topup-address")
         check("an address to pay is shown", len(addr) > 10, addr)
-        check("with the amount to send", "$" in page.inner_text("#topup-amount"),
-              page.inner_text("#topup-amount"))
+        amount = H.rendered_text(page, "#topup-amount")
+        check("with the amount to send", "$" in amount, amount)
         n_after = int(sqlite3.connect(DB).execute(
             "SELECT COUNT(*) FROM invoices").fetchone()[0])
         check("exactly one invoice was opened", n_after == n_before + 1,

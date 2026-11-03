@@ -119,16 +119,21 @@ try:
         page.click("#setup-form button[type=submit]")
         page.wait_for_selector("#app:not(.hidden)", timeout=30000)
         check("creating the operator signs you straight in", True)
-        check("the operator name is shown", page.inner_text("#who-name").strip() == "ops")
+        check("the operator name is shown",
+              H.rendered_text(page, "#who-name").strip() == "ops")
 
         print("\n[2] overview")
         page.wait_for_selector("#stat-row .stat", timeout=15000)
         # .stat .k and th are uppercased by CSS on purpose, so fold the case.
-        stats = page.inner_text("#stat-row").lower()
+        stats = H.rendered_text(page, "#stat-row").lower()
         check("stat tiles render", "active" in stats and "devices" in stats, stats[:200])
+        # Not just "something rendered": the assertion is about all three
+        # nodes, so wait for all three. Settling for the first row to arrive
+        # would make this pass or fail on how fast the box is.
+        health = H.rendered_text(page, "#node-health",
+                                 until=lambda t: t.count("healthy") >= 3)
         check("the three seeded nodes are listed",
-              page.inner_text("#node-health").count("healthy") >= 3,
-              page.inner_text("#node-health")[:300])
+              health.count("healthy") >= 3, health[:300])
 
         print("\n[3] accounts: find, ban, extend")
         tok, _ = H.paid_account()
@@ -145,7 +150,7 @@ try:
         check("searching by token finds exactly one account", True)
         page.click("#acct-list tbody tr button")
         page.wait_for_selector("#acct-detail:not(.hidden)", timeout=15000)
-        detail = page.inner_text("#acct-detail")
+        detail = H.rendered_text(page, "#acct-detail")
         check("account detail opens", "Devices" in detail and "laptop" in detail,
               detail[:300])
 
