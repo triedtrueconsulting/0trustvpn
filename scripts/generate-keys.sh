@@ -39,7 +39,21 @@ log()  { printf '%s[+] %s%s\n' "$YLW" "$*" "$NC"; }
 ok()   { printf '%s[✓] %s%s\n' "$GRN" "$*" "$NC"; }
 die()  { printf '%s[!] %s%s\n' "$RED" "$*" "$NC" >&2; exit 1; }
 
-WANT=("$@")
+# --publish chains set-fingerprints.sh onto the end, so generating the keys
+# and publishing them is ONE command instead of two with three fingerprints
+# retyped between them. Only fingerprints and public keys move; the private
+# halves stay in the gpg home on this machine, which is the whole point of
+# the refusals above.
+PUBLISH=0
+WANT=()
+for a in "$@"; do
+    case "$a" in
+        --publish) PUBLISH=1 ;;
+        -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+        -*) die "unknown flag: $a" ;;
+        *) WANT+=("$a") ;;
+    esac
+done
 (( ${#WANT[@]} )) || WANT=(release canary support backup)
 
 # --- Refuse the obviously wrong machine -------------------------------------
@@ -112,6 +126,35 @@ rel="$(cat "$OUT/release.fpr" 2>/dev/null || echo '<release-fpr>')"
 can="$(cat "$OUT/canary.fpr"  2>/dev/null || echo '<canary-fpr>')"
 sup="$(cat "$OUT/support.fpr" 2>/dev/null || echo '<support-fpr>')"
 agp="$(cat "$OUT/backup-age.pub" 2>/dev/null || echo '<age1...>')"
+
+# --- --publish: do step 1 and 2 instead of printing them --------------------
+# set-fingerprints.sh does the work and keeps its own refusals: a malformed
+# fingerprint, the DEADBEEF placeholder, and — unless --no-verify-key — any
+# key this machine does not actually hold. Chaining it does not weaken any of
+# that; it removes three fingerprints being retyped by hand, which is where
+# the release key and the support key get swapped. They are not
+# interchangeable: security-policy.html publishes the key people ENCRYPT to,
+# and a signing key has no encryption subkey, so reporters simply cannot use
+# it and nothing reports an error.
+if (( PUBLISH )); then
+    for f in release canary support; do
+        [[ -s "$OUT/$f.fpr" ]] || die "--publish needs all three PGP keys, and
+    $OUT/$f.fpr is missing. Run without a key list to generate all of them."
+    done
+    log "publishing fingerprints into the tree"
+    "$REPO_DIR/scripts/set-fingerprints.sh" \
+        --release "$rel" --canary "$can" --support "$sup" \
+        || die "set-fingerprints.sh refused — nothing in the tree was changed"
+    ok "release, canary and support fingerprints are in the tree"
+    printf '\n%s  Done. Remaining steps need a passphrase or the server:%s\n' "$BLD" "$NC"
+    printf '    - sign security.txt:   %s\n' \
+        "gpg --clearsign --default-key $rel web/.well-known/security.txt"
+    printf '    - the age PUBLIC key goes to the server as --backup-key:\n      %s\n' "$agp"
+    printf '    - commit the tree, then: ./scripts/preflight.sh --repo\n\n'
+    printf '  %sThe private keys stay in %s on this machine. Nothing above\n' "$DIM" "$OUT"
+    printf '  copies them anywhere, and the server never needs them.%s\n\n' "$NC"
+    exit 0
+fi
 
 cat <<EOF
 

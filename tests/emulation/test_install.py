@@ -1281,6 +1281,103 @@ http {{
               f"{unit} is named in install.sh but exists in none of "
               + ", ".join(UNIT_DIRS))
 
+    # ------------------------------------------------------------------
+    # [3d] The operations dashboard is not on the open internet.
+    #
+    # This block exists because the restriction used to be COMMENTED OUT in
+    # the rendered config, beneath a comment reading "Restricted by default",
+    # with no flag that uncommented it. So every real deployment served
+    # /admin AND /api/v1/admin/ to anyone — and admin_setup() is guarded on
+    # nothing but "no operator exists yet", so on a box nobody had signed
+    # into, whoever found the URL first owned the control plane: ban
+    # accounts, refund invoices (revoking the days they bought), add nodes,
+    # read the node roster.
+    #
+    # Asserted on the RENDERED bytes, like [3b], because the rendered bytes
+    # are the thing that was wrong while the reference text read fine.
+    # ------------------------------------------------------------------
+    print("\n[3e] the operations dashboard is not open to the internet")
+    ADMIN_LOCS = {"location = /admin {": "/admin",
+                  "location = /admin.css {": "/admin.css",
+                  "location = /admin.js {": "/admin.js",
+                  "location /api/v1/admin/ {": "/api/v1/admin/"}
+
+    def admin_blocks(conf):
+        """Each admin location's body, so a guard can be checked per block."""
+        out = {}
+        for loc, label in ADMIN_LOCS.items():
+            if loc not in conf:
+                continue
+            i = conf.index(loc) + len(loc)
+            out[label] = conf[i:conf.index("\n    }", i)]
+        return out
+
+    d = os.path.join(TMP, "render-admin")
+    rc, out = run_installer("--mode", "production", "--domain", "example.com",
+                            "--email", "a@b.c", render_to=d)
+    check("default render succeeded", rc == 0 and os.path.exists(f"{d}/site.conf"),
+          out[-300:])
+    conf = open(f"{d}/site.conf").read()
+    blocks = admin_blocks(conf)
+    check("every admin location is rendered", len(blocks) == len(ADMIN_LOCS),
+          sorted(blocks))
+    for label, body in blocks.items():
+        # An `allow` with no `deny all` permits everything: nginx falls
+        # through to allowing what no rule matched.
+        check(f"{label} denies by default",
+              re.search(r"^\s*deny all;", body, re.M) is not None, body[:200])
+        check(f"{label} is reachable over an ssh tunnel",
+              re.search(r"^\s*allow 127\.0\.0\.1;", body, re.M) is not None, body[:200])
+    # Not a single commented-out guard anywhere: that is what shipped before.
+    check("no admin guard is left commented out",
+          not re.search(r"^\s*#\s*(allow|deny)\b", conf, re.M),
+          [l for l in conf.splitlines() if re.match(r"^\s*#\s*(allow|deny)\b", l)][:3])
+
+    d2 = os.path.join(TMP, "render-admin-allow")
+    rc, out = run_installer("--mode", "production", "--domain", "example.com",
+                            "--email", "a@b.c", "--admin-allow", "203.0.113.7",
+                            "--admin-allow", "198.51.100.0/24", render_to=d2)
+    conf2 = open(f"{d2}/site.conf").read()
+    for label, body in admin_blocks(conf2).items():
+        check(f"{label} honours --admin-allow",
+              "allow 203.0.113.7;" in body and "allow 198.51.100.0/24;" in body,
+              body[:240])
+        check(f"{label} still denies everything else",
+              re.search(r"^\s*deny all;", body, re.M) is not None, body[:240])
+
+    # A wildcard allowlist reads like protection and is none. Same fail-closed
+    # rule as cloudflare-ips.sh refusing a list it could not verify.
+    for bad, why in (("0.0.0.0/0", "the whole v4 internet"),
+                     ("::/0", "the whole v6 internet"),
+                     ("*", "a glob, which nginx does not take"),
+                     ("not-an-ip", "not an address at all"),
+                     ("203.0.113.7/99/9", "a malformed CIDR")):
+        rc, out = run_installer("--mode", "production", "--domain", "example.com",
+                                "--email", "a@b.c", "--admin-allow", bad)
+        check(f"--admin-allow refuses {bad!r} ({why})", rc != 0, out[-200:])
+    # And the refusal has to name the way out, or an operator just deletes
+    # the flag and ships the open dashboard again.
+    rc, out = run_installer("--mode", "production", "--domain", "example.com",
+                            "--email", "a@b.c", "--admin-allow", "0.0.0.0/0")
+    check("and tells the operator how to reach it instead",
+          "ssh -L" in out and "/admin" in out, out[-300:])
+
+    # The summary is where the operator learns this, so it has to say which
+    # of the two states the box is in. Backups set the precedent: OFF is said
+    # out loud.
+    rc, out = run_installer("--mode", "production", "--domain", "example.com",
+                            "--email", "a@b.c")
+    check("the summary says the dashboard is loopback-only",
+          "Loopback only" in out and "ssh -L 8443:127.0.0.1:443" in out, out[-900:])
+    rc, out = run_installer("--mode", "production", "--domain", "example.com",
+                            "--email", "a@b.c", "--admin-allow", "203.0.113.7")
+    check("and names the addresses when one was given",
+          "203.0.113.7" in out and "403" in out, out[-900:])
+    # The CDN interaction is not optional detail: behind Cloudflare an
+    # allowlisted client address matches nothing unless realip restored it.
+    check("and warns that a CDN hides the client address",
+          "Cloudflare" in out, out[-900:])
+
     print("\n[3c] fail2ban, and the jail we deliberately do NOT ship")
     import configparser
     jail_src = os.path.join(H.REPO, "config", "fail2ban", "0trust.local")

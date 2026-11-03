@@ -106,6 +106,9 @@ DO_FIREWALL=1 DO_SSH=1 DRY_RUN=0 DO_VPN=1 SKIP_PREFLIGHT=0
 # that is not Cloudflare's, and the script refuses to write a list it could
 # not fetch, so the wrong answer here fails loudly rather than quietly.
 BEHIND_CLOUDFLARE=0 CF_LOCK_ORIGIN=0
+# Addresses allowed to reach the operations dashboard. Empty means
+# loopback only, i.e. reachable through an ssh tunnel and nowhere else.
+ADMIN_ALLOW=()
 # Set when a post-install check found the box not actually serving.
 INSTALL_DEGRADED=0
 # Set when the mesh step could not bring the WireGuard interfaces up, so the
@@ -324,6 +327,7 @@ while [[ $# -gt 0 ]]; do
         --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         --no-ssh-hardening) DO_SSH=0; shift ;;
         --no-vpn) DO_VPN=0; shift ;;
+        --admin-allow) ADMIN_ALLOW+=("${2:-}"); shift 2 ;;
         --cloudflare) BEHIND_CLOUDFLARE=1; shift ;;
         --cloudflare-lock-origin) BEHIND_CLOUDFLARE=1; CF_LOCK_ORIGIN=1; shift ;;
         --wallet) WALLET_BTC="${2:-}"; shift 2 ;;
@@ -795,6 +799,37 @@ if [[ "$MODE" == "production" ]]; then
     [[ "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && "$DOMAIN" == *.* ]] \
         || die "--domain must be a bare FQDN, e.g. 0trustvpn.com (no scheme, no path)"
 fi
+
+# --- who may reach the operations dashboard --------------------------------
+# The dashboard can ban a customer, refund an invoice (revoking the days it
+# bought), add a mesh node, and read the node roster. And /api/v1/admin/setup
+# is guarded on nothing but "no operator exists yet", so on a deployment
+# nobody has signed into, whoever reaches it first OWNS the control plane.
+#
+# The rendered config used to carry the restriction commented out, under a
+# comment that said "Restricted by default" — so every deployment served the
+# dashboard and the setup endpoint to the open internet while the config read
+# as though it did not. Same shape as the access-log defect: the property was
+# in the reference text and not in the bytes.
+#
+# A wildcard is refused rather than honoured. "allow 0.0.0.0/0; deny all;" is
+# an allowlist that permits everything, which is worse than no allowlist
+# because it reads like protection — the same fail-closed reasoning as
+# cloudflare-ips.sh refusing to write a list it could not verify.
+for _a in ${ADMIN_ALLOW[@]+"${ADMIN_ALLOW[@]}"}; do
+    case "$_a" in
+        0.0.0.0/0|::/0|0.0.0.0|"*")
+            die "--admin-allow $_a allows the whole internet, which is what
+       this flag exists to prevent. Leave it off to keep the dashboard on
+       loopback and reach it over an ssh tunnel:
+         ssh -L 8443:127.0.0.1:443 root@<host>   then https://localhost:8443/admin" ;;
+    esac
+    # An address or a CIDR, v4 or v6. nginx would reject anything else at
+    # reload time, which is after the install has finished changing the box.
+    [[ "$_a" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ ]] \
+        || [[ "$_a" =~ ^[0-9a-fA-F:]+(/[0-9]{1,3})?$ ]] \
+        || die "--admin-allow $_a is not an address or a CIDR (e.g. 203.0.113.7 or 203.0.113.0/24)"
+done
 [[ $DRY_RUN -eq 1 || $EUID -eq 0 ]] || die "must run as root (try: sudo $0 ...)"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -1747,6 +1782,71 @@ ok "$WEBROOT"
 # ----------------------------------------------------------------------------
 log "Configuring nginx"
 # ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# The access guard for the operations dashboard, built once.
+#
+# Empty --admin-allow means loopback only: the dashboard is then reachable
+# over an ssh tunnel and from nowhere else. That is the documented path and
+# now the default, because the alternative this replaced was shipping the
+# restriction commented out under a comment claiming it was on.
+#
+# Behind a CDN, $remote_addr is the edge, so an allowlisted customer address
+# only matches once the realip config maps CF-Connecting-IP back — which is
+# what --cloudflare installs. Without it, allowlisting your own address
+# behind Cloudflare matches nothing and locks you out instead of in.
+# ----------------------------------------------------------------------------
+admin_guard() {
+    local a
+    for a in ${ADMIN_ALLOW[@]+"${ADMIN_ALLOW[@]}"}; do
+        printf '        allow %s;\n' "$a"
+    done
+    printf '        allow 127.0.0.1;\n        allow ::1;\n        deny all;\n'
+}
+
+render_admin_locations() {
+    local ADMIN_GUARD
+    ADMIN_GUARD="$(admin_guard)"
+    cat <<EOF
+    # --- Operations dashboard ---
+    # RESTRICTED, and in the bytes rather than in a comment. The page can ban
+    # a customer, refund an invoice (revoking the days it bought), add a mesh
+    # node and read the node roster — and /api/v1/admin/setup is guarded on
+    # nothing but "no operator exists yet", so on a deployment nobody has
+    # signed into, whoever reaches it first owns the control plane.
+    #
+    # This shipped with allow/deny COMMENTED OUT beneath a comment reading
+    # "Restricted by default", and no flag uncommented them, so every real
+    # deployment published the dashboard and the setup endpoint to the open
+    # internet. Same shape as the access-log defect: the property was in the
+    # reference text and not in the rendered bytes.
+    #
+    # The assets carry the same guard — serving admin.css and admin.js openly
+    # advertises the dashboard to anyone scanning, and an allowlisted
+    # operator reaches them either way.
+    location = /admin {
+$ADMIN_GUARD
+        try_files /admin.html =404;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-store" always;
+    }
+    location = /admin.css {
+$ADMIN_GUARD
+        try_files /admin.css =404;
+    }
+    location = /admin.js {
+$ADMIN_GUARD
+        try_files /admin.js =404;
+    }
+    location /api/v1/admin/ {
+$ADMIN_GUARD
+        limit_req zone=admin burst=20 nodelay;
+        proxy_pass http://127.0.0.1:8080;
+        include /etc/nginx/snippets/0trust-proxy.conf;
+        add_header Cache-Control "no-store" always;
+    }
+EOF
+}
+
 render_common_locations() {
     cat <<'LOCEOF'
     # --- Warrant canary: never cached, ever ---
@@ -1842,28 +1942,9 @@ render_common_locations() {
     error_page 404 /404.html;
     error_page 500 502 503 504 /50x.html;
 
-    # --- Operations dashboard ---
-    # Restricted by default. This page can ban customers and move money, so it
-    # is the one part of the site that should not be reachable from the open
-    # internet. Replace the allow lines with your own address, or front it with
-    # a VPN or an SSH tunnel and leave it on 127.0.0.1.
-    location = /admin {
-        # allow 203.0.113.7;    # <- your address
-        # deny all;
-        try_files /admin.html =404;
-        add_header X-Robots-Tag "noindex, nofollow" always;
-        add_header Cache-Control "no-store" always;
-    }
-    location = /admin.css { try_files /admin.css =404; }
-    location = /admin.js  { try_files /admin.js  =404; }
-    location /api/v1/admin/ {
-        # allow 203.0.113.7;    # <- same restriction as the page itself
-        # deny all;
-        limit_req zone=admin burst=20 nodelay;
-        proxy_pass http://127.0.0.1:8080;
-        include /etc/nginx/snippets/0trust-proxy.conf;
-        add_header Cache-Control "no-store" always;
-    }
+LOCEOF
+    render_admin_locations
+    cat <<'LOCEOF'
 
     location = /status  { try_files /status.html =404; }
     location = /download{ try_files /download.html =404; }
@@ -2763,15 +2844,30 @@ EOF
   DB     sqlite3 $VARLIB/0trust.db
 EOF
 else
+    # The dashboard's reachability is a security property the operator has to
+    # know, so it is stated rather than left to be inferred. Backups already
+    # work this way: OFF is said out loud.
+    if (( ${#ADMIN_ALLOW[@]} )); then
+        ADMIN_ACCESS_SUMMARY="    Reachable from: ${ADMIN_ALLOW[*]} (plus loopback). Everything else gets 403.
+    Open it and create the first operator account now. Until you do,
+    anyone who can reach that URL can create it instead of you.
+    If you are behind Cloudflare, those addresses only match because
+    --cloudflare restored the real client IP; without it, nothing matches."
+    else
+        ADMIN_ACCESS_SUMMARY="    ${YLW}Loopback only${NC} — the open internet gets 403, which is the default.
+    Reach it over an ssh tunnel:
+      ssh -L 8443:127.0.0.1:443 root@$DOMAIN
+    then https://localhost:8443/admin  (expect a certificate-name warning:
+    the cert is for $DOMAIN and you asked for localhost).
+    Open it and create the first operator account now — /api/v1/admin/setup
+    is guarded on nothing but \"no operator exists yet\".
+    To reach it from a fixed address instead, re-run with --admin-allow <ip>."
+    fi
     cat <<EOF
 ${GRN}  Production deployment is up at https://$DOMAIN${NC}
 
   Operations dashboard: https://$DOMAIN/admin
-    Open it and create the first operator account. Until you do, anyone who
-    finds that URL can — so do it now, before anything else.
-    ${YLW}Restrict it.${NC} The nginx config has commented-out allow/deny lines
-    for /admin and /api/v1/admin/; put your own address in them, or keep the
-    dashboard behind a VPN. It can ban customers and change where money goes.
+$ADMIN_ACCESS_SUMMARY
 
   Still to do before customers arrive:
     1. Payments — set them from the dashboard, or $ETC/api.env then
