@@ -58,6 +58,20 @@ installer/windows/obj/
 installer/windows/bin/
 *.AppImage
 *.deb
+# The release pipeline's two output directories, ignored WHOLESALE.
+#
+# release.sh documents staging/ as where artifacts built on other hosts get
+# dropped (the MSI from a Windows box, the APK from a build machine) and
+# releases/<version>/ as its own output. Both are build products, neither
+# belongs in git — and the partial state was worse than no rule at all:
+# *.deb, *.AppImage and *.exe above meant a staged .deb was ignored while
+# the APK and the bare Linux/macOS binaries sitting beside it were not. An
+# operator following the runbook committed a 40MB APK into a public repo and
+# git said nothing, because the file types nobody thought to list were
+# exactly the ones that got through. Found by doing it: a `git add -A`
+# committed two APKs, 53MB, and pushed them.
+staging/
+releases/
 
 # ─── Test emulation scratch (logs from a live stack run) ───
 tests/emulation/run/

@@ -71,6 +71,33 @@ ENV["RELEASE_SIGNER_KEY"] = fpr
 # <pre> block and invents artifacts like "0trust-0.1.0-linux-amd64</pre>". The
 # same greediness was in release.sh's own extraction and would have made it
 # refuse every release.
+print("\n[0] the release pipeline's own output directories stay out of git")
+# release.sh documents staging/ as where artifacts built on OTHER hosts get
+# dropped — the MSI from a Windows box, the APK from a build machine — and
+# releases/<version>/ as its own output. Following that runbook must not
+# commit binaries.
+#
+# The rule used to be per-extension (*.deb, *.AppImage, *.exe), which is the
+# worst possible state: a staged .deb was ignored while the APK and the bare
+# Linux/macOS binaries beside it were not, so the file types nobody had
+# thought to list were exactly the ones that got through, silently, into a
+# public repo. Found by doing it — a `git add -A` committed two APKs, 53MB,
+# and pushed them.
+#
+# Checked with git itself rather than by reading .gitignore, because what
+# matters is the decision git actually makes.
+for d, why in (("staging", "artifacts built on other hosts are dropped here"),
+               ("releases", "release.sh writes its output here")):
+    probes = [f"{d}/0trust-0.1.0.apk", f"{d}/0trust-0.1.0-linux-amd64",
+              f"{d}/0trust-0.1.0-x64.msi", f"{d}/SHA256SUMS",
+              f"{d}/0.1.0/0trust-0.1.0-linux-arm64"]
+    missed = [p for p in probes
+              if subprocess.run(["git", "check-ignore", "-q", p],
+                                cwd=H.REPO).returncode != 0]
+    check(f"{d}/ is ignored wholesale ({why})", not missed,
+          f"git would commit: {missed} — an extension-by-extension rule lets "
+          f"through whatever nobody listed")
+
 page = open(os.path.join(H.REPO, "web", "download.html")).read()
 MANIFEST = {"SHA256SUMS", "SHA256SUMS.asc", "pubkey.asc", "build-info.txt"}
 offered = sorted(set(re.findall(r'/releases/[\d.]+/([A-Za-z0-9._+-]+)', page))
