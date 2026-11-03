@@ -34,6 +34,9 @@ client/cmd/obfsprobe-*/
 mobile/android/build/
 mobile/android/app/build/
 mobile/android/.gradle/
+# Kotlin 2.x writes a build cache here; same class of artefact as
+# .gradle/ and app/build/, and gradle creates it on every run.
+mobile/android/.kotlin/
 mobile/android/local.properties
 mobile/android/captures/
 
