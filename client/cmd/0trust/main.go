@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/0trust/cli/internal/config"
 	"github.com/0trust/cli/internal/export"
 	"github.com/0trust/cli/internal/gui"
+	"github.com/0trust/cli/internal/netcheck"
 	"github.com/0trust/cli/internal/transport"
 	"github.com/0trust/cli/internal/wg"
 )
@@ -58,12 +60,33 @@ func main() {
 		// Same tri-state, same reason: --obfuscate is sticky, so someone
 		// behind a filter does not lose it by forgetting the flag once.
 		var obfuscate *bool
+		var mtuOverride *int
+		var mtuErr error
 		for i := 0; i < len(args); i++ {
 			a := args[i]
 			switch {
 			case a == "--exit" && i+1 < len(args):
 				exitRegion = args[i+1]
 				i++
+			case a == "--mtu":
+				// This loop runs in the dispatcher, where a bad flag becomes
+				// the command's error rather than a return.
+				if i+1 >= len(args) {
+					mtuErr = fmt.Errorf("--mtu needs a value, e.g. --mtu 1280")
+					break
+				}
+				i++
+				n, e := strconv.Atoi(args[i])
+				if e != nil || n < 576 || n > 9000 {
+					mtuErr = fmt.Errorf("--mtu %q is not a plausible MTU "+
+						"(576-9000; 1280 is the IPv6 minimum, which every "+
+						"network must carry, and the safe choice)", args[i])
+					break
+				}
+				mtuOverride = &n
+			case a == "--no-mtu":
+				zero := 0
+				mtuOverride = &zero
 			case a == "--kill-switch":
 				t := true
 				killSwitch = &t
@@ -80,7 +103,11 @@ func main() {
 				region = a
 			}
 		}
-		err = cmdConnect(region, exitRegion, killSwitch, obfuscate)
+		if mtuErr != nil {
+			err = mtuErr
+		} else {
+			err = cmdConnect(region, exitRegion, killSwitch, obfuscate, mtuOverride)
+		}
 	case "topup":
 		// --status takes an invoice id and only reports; it must never open
 		// a second invoice, which is what a customer checking on a payment
@@ -149,6 +176,9 @@ COMMANDS
   status                         Show subscription + tunnel state
   regions                        List available mesh regions
   connect [region] [--exit r]    Bring up the tunnel
+        [--mtu <n>]              Pin the tunnel MTU (sticky). Use 1280 if large
+                                 packets are being dropped by this network
+        [--no-mtu]               Go back to the published MTU
         [--kill-switch]          Block any traffic outside the tunnel (sticky)
         [--no-kill-switch]       Turn that back off
         [--obfuscate]            Hide that this is WireGuard, at a cost in
@@ -491,9 +521,32 @@ func wrap(text string, width int) []string {
 // How long to wait for a peer to answer before telling the user the tunnel is
 // not working. WireGuard retries a handshake every 5s, so 15s is three
 // attempts — long enough for a slow link, short enough not to feel hung.
-const handshakeTimeout = 15 * time.Second
+const (
+	handshakeTimeout = 15 * time.Second
+	// The probe is two UDP round trips to the mesh gateway through a
+	// tunnel that has already handshaked, so it is quick when it works.
+	// When it does not, the large query is being dropped and waiting
+	// longer tells us nothing extra.
+	pathProbeTimeout = 3 * time.Second
+)
 
-func cmdConnect(region, exitRegion string, killSwitch *bool, obfuscate *bool) error {
+// effectiveMTU picks the MTU the interface gets.
+//
+// The control plane publishes one per transport and a client must not invent
+// its own (bug class #11, and getting it wrong is invisible until full-size
+// packets vanish). The override exists for the one case the control plane
+// cannot know about: the customer's current network cannot carry that size.
+// Connect and rotate both call this, because rotate rewrites the config and
+// an override it dropped would read as "it worked until I changed region" —
+// the same reason the direct-vs-obfuscated decision lives in one place.
+func effectiveMTU(published, override int) int {
+	if override > 0 {
+		return override
+	}
+	return published
+}
+
+func cmdConnect(region, exitRegion string, killSwitch *bool, obfuscate *bool, mtuOverride *int) error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
@@ -545,6 +598,14 @@ func cmdConnect(region, exitRegion string, killSwitch *bool, obfuscate *bool) er
 		}
 	}
 
+	if mtuOverride != nil && *mtuOverride != st.MTUOverride {
+		st.MTUOverride = *mtuOverride
+		if *mtuOverride == 0 {
+			fmt.Println("→ MTU override cleared — using what the control plane publishes")
+		} else {
+			fmt.Printf("→ MTU pinned to %d for this device (sticky)\n", *mtuOverride)
+		}
+	}
 	if killSwitch != nil && *killSwitch != st.KillSwitch {
 		st.KillSwitch = *killSwitch
 		if err := st.Save(); err != nil {
@@ -577,7 +638,7 @@ func cmdConnect(region, exitRegion string, killSwitch *bool, obfuscate *bool) er
 		for _, n := range tr.Notes {
 			fmt.Printf("→ %s\n", n)
 		}
-		mtu := tr.MTU
+		mtu := effectiveMTU(tr.MTU, st.MTUOverride)
 		if err := st.Save(); err != nil {
 			return err
 		}
@@ -665,6 +726,50 @@ func cmdConnect(region, exitRegion string, killSwitch *bool, obfuscate *bool) er
 	}
 	fmt.Printf("✓ tunnel up — handshake %s ago\n",
 		time.Since(hs).Round(time.Second))
+
+	// A handshake is 148 bytes and fits through almost anything, including a
+	// path that cannot carry a full-size packet. So a tunnel whose MTU is too
+	// high for this network handshakes, reports itself up, and then silently
+	// drops every large packet — which reaches the customer as "some sites
+	// load and some hang forever" and is unattributable: nothing logs it and
+	// the obvious suspects are all innocent. wg.go's comment on WithMTU has
+	// named this failure all along and nothing checked for it.
+	//
+	// Same standard as the handshake check itself, and as the installer
+	// probing `ip link` instead of trusting systemctl: verify, then report.
+	// A failure here does NOT tear the tunnel down — the interface still
+	// holds the default route, and dropping large packets beats leaking
+	// everything in the clear.
+	if len(resp.DNS) > 0 {
+		pr := netcheck.Probe(resp.DNS[0], effectiveMTU(resp.MTU, st.MTUOverride), pathProbeTimeout)
+		switch pr.Verdict {
+		case netcheck.OK:
+			fmt.Printf("✓ path verified — %s\n", pr.Detail)
+		case netcheck.MTUTooHigh:
+			fmt.Println()
+			fmt.Printf("⚠ this network cannot carry the tunnel's full packet size\n")
+			fmt.Printf("  %s\n", pr.Detail)
+			fmt.Println()
+			fmt.Println("  Small requests will work and large ones will hang:")
+			fmt.Println("  pages half-loading, downloads stalling, video buffering.")
+			fmt.Println()
+			fmt.Printf("  Fix it by lowering the tunnel MTU below %d:\n", pr.MTU)
+			fmt.Printf("    sudo 0trust connect --mtu 1280\n")
+			fmt.Println("  1280 is the IPv6 minimum every network must carry, so it")
+			fmt.Println("  is the value that works when nothing else does. It costs")
+			fmt.Println("  a little throughput and nothing else.")
+		case netcheck.NoResolver:
+			fmt.Println()
+			fmt.Printf("⚠ the tunnel carries traffic but its resolver is not answering\n")
+			fmt.Printf("  %s\n", pr.Detail)
+			fmt.Println("  Names will not resolve, so the browser will say it cannot")
+			fmt.Println("  find hosts even though the tunnel is up. This is the exit")
+			fmt.Println("  node's resolver, not your machine — report it.")
+		case netcheck.Unknown:
+			// Nothing to say: the probe could not run, which is not evidence
+			// either way and must not be dressed up as either.
+		}
+	}
 	return nil
 }
 
@@ -711,7 +816,7 @@ func cmdRotate() error {
 	for _, n := range tr.Notes {
 		fmt.Printf("  %s\n", n)
 	}
-	mtu := tr.MTU
+	mtu := effectiveMTU(tr.MTU, st.MTUOverride)
 	if err := st.Save(); err != nil {
 		return err
 	}

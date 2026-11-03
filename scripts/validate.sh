@@ -427,6 +427,13 @@ check regions-current "only zur/rey/buc appear as regions" -- bash -c '
 check pipefail-head "no pipeline can die of SIGPIPE under pipefail" -- \
     "$PY" "$REPO_DIR/tests/lint/no-sigpipe-head.py"
 
+# A diagnosis that names a command the CLI does not have is worse than no
+# diagnosis: it reads as a fix. sweep.py shipped `0trust topup` before the
+# subcommand existed, and the path-MTU probe nearly shipped `--mtu` the same
+# way, within minutes of being written.
+check advice-resolves "every command the CLI advises actually exists" -- \
+    "$PY" "$REPO_DIR/tests/lint/advice-resolves.py"
+
 # Our API clients authenticate with X-Account-Token; the token IS the
 # credential and there is no OAuth anywhere in this product. Scoped to
 # client/ and mobile/ on purpose: api/payments.py legitimately sends

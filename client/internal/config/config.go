@@ -35,6 +35,20 @@ type State struct {
 	SameHost  bool  `json:"same_host,omitempty"`
 	ExpiresAt int64 `json:"expires_at,omitempty"` // hop pair expiry (epoch s)
 
+	// MTUOverride: the tunnel MTU this device was told to use, instead of the
+	// one the control plane publishes.
+	//
+	// Sticky, for the same reason the kill switch is: the customer who needs
+	// it is on a network that cannot carry a full-size packet, and a setting
+	// they have to remember on every connect is a setting that silently stops
+	// applying. Rotate honours it too — rotate rewrites the config, so a
+	// value it dropped would come back as "it worked until I changed region".
+	//
+	// Zero means "use what the control plane publishes", which is the normal
+	// case and the right default: a client that picks its own MTU is bug
+	// class #11, and getting it wrong is invisible until large packets vanish.
+	MTUOverride int `json:"mtu_override,omitempty"`
+
 	// KillSwitch: block traffic that is not going through the tunnel.
 	// Sticky, because a kill switch you have to remember to re-enable on
 	// every connect is not a kill switch.
