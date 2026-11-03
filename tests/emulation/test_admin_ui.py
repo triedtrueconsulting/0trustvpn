@@ -380,7 +380,23 @@ try:
         # Each child of a flex container is its own item, so the leading space
         # of the " — secret" marker collapsed and labels read "API KEY— secret".
         page.click("#tabs button[data-tab=settings]")
-        page.wait_for_selector("#settings-groups label", timeout=15000)
+        page.wait_for_selector("#settings-groups label:has(.dim)", timeout=15000)
+        # The rule is `gap: .5ch`, and `ch` is the advance of the font's "0"
+        # glyph — so until the webfont's metrics exist the gap computes to
+        # ZERO and this check measures 0px against a product that is correct.
+        # That is what it had been doing: an identical probe run a few
+        # milliseconds later measured 3.45px, and document.fonts.status was
+        # only 'loaded' by then.
+        #
+        # The comment below already recorded "0px on a loaded runner and
+        # 3.47px locally" and attributed it to where a line happened to
+        # break. Removing the line-break dependency was right and did not fix
+        # it, because the dependency that mattered was font loading. Same
+        # family as the #topup-terms race: assert after the thing you are
+        # measuring exists, not after something adjacent to it does.
+        page.wait_for_function(
+            "() => document.fonts && document.fonts.status === 'loaded'",
+            timeout=20000)
         # Measured, not read off a property — getComputedStyle().columnGap
         # comes back as the empty string in some headless builds, which is not
         # in ("normal", "0px") and so passed with the rule deleted.
