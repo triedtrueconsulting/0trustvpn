@@ -191,9 +191,7 @@ try:
     # Drive the client half through a tiny Go program that imports the very
     # package the CLI uses — not a reimplementation of the protocol, which
     # would only prove the test agrees with itself.
-    probe_dir = os.path.join(H.REPO, "client", "cmd", "obfsprobe")
-    os.makedirs(probe_dir, exist_ok=True)
-    open(os.path.join(probe_dir, "main.go"), "w").write('''package main
+    probe_dir, probe_pkg = H.go_probe("roundtrip", '''package main
 
 import (
 	"encoding/hex"
@@ -240,7 +238,7 @@ func main() {
 }
 ''')
     try:
-        pr = subprocess.run(["go", "run", "./cmd/obfsprobe",
+        pr = subprocess.run(["go", "run", probe_pkg,
                              f"127.0.0.1:{relay_port}", f"127.0.0.1:{wg_port}"],
                             cwd=os.path.join(H.REPO, "client"),
                             env={**env, "KEY": OBFS_KEY},
@@ -266,9 +264,7 @@ func main() {
     # host on the internet a customer would like us to relay to".
     elsewhere_port = free_udp_port()
     elsewhere = wg_echo(elsewhere_port)
-    probe_dir = os.path.join(H.REPO, "client", "cmd", "obfsproxyprobe")
-    os.makedirs(probe_dir, exist_ok=True)
-    open(os.path.join(probe_dir, "main.go"), "w").write('''package main
+    proxy_dir, proxy_pkg = H.go_probe("allowlist", '''package main
 
 import (
 	"fmt"
@@ -307,7 +303,7 @@ func main() {
 }
 ''')
     try:
-        pr = subprocess.run(["go", "run", "./cmd/obfsproxyprobe",
+        pr = subprocess.run(["go", "run", proxy_pkg,
                              f"127.0.0.1:{relay_port}",
                              f"127.0.0.1:{wg_port}",
                              f"127.0.0.1:{elsewhere_port}"],
@@ -324,7 +320,7 @@ func main() {
               (pr.stdout + pr.stderr)[-300:] + "\n  every customer holds this "
               "key — a relay that forwards anywhere is an open proxy")
     finally:
-        import shutil as _sh; _sh.rmtree(probe_dir, ignore_errors=True)
+        import shutil as _sh; _sh.rmtree(proxy_dir, ignore_errors=True)
         elsewhere.close()
 
     print("\n[6] a wrong key gets nothing, and says nothing")

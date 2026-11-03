@@ -415,3 +415,34 @@ def rendered_text(page, selector, timeout=20000, until=None):
         if done or time.monotonic() >= deadline:
             return text
         page.wait_for_timeout(100)
+
+
+def go_probe(name, source):
+    """
+    Write a throwaway Go command inside the CLI module; return (dir, pkg).
+
+    It has to live in the module. These probes import internal/obfs so that
+    the test drives the SAME implementation of the wire format the product
+    uses — a second copy in the test would be the one thing CLAUDE.md says
+    never to write — and Go refuses to import an internal package across
+    module boundaries, so a directory in /tmp cannot work.
+
+    The path is unique per process, which the two call sites were not: both
+    used a FIXED path under client/cmd/, so two suite runs at once raced on
+    the same file. One run's cleanup rmtree'd the other's main.go while
+    `go run` was reading it, and that surfaced as the relay checks failing
+    with a Go build error and nothing saying why. Running a single module by
+    hand while CI, or preflight.sh's own internal validate.sh, runs the whole
+    suite is enough to hit it.
+
+    Cleanup is registered with atexit as well as being the caller's to do, so
+    an ordinary interrupt clears it too. A SIGKILL still cannot, which is why
+    .gitignore carries the pattern: otherwise a killed run leaves a file in
+    client/cmd/ that `go vet ./...` then compiles.
+    """
+    d = os.path.join(REPO, "client", "cmd", f"obfsprobe-{name}-{os.getpid()}")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "main.go"), "w") as fh:
+        fh.write(source)
+    atexit.register(shutil.rmtree, d, True)
+    return d, "./cmd/" + os.path.basename(d)

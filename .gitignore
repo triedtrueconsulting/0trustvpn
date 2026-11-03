@@ -25,7 +25,7 @@ client/dist/
 # CI job) leaves it behind, and then `go vet ./...` compiles a test artefact
 # and `git status` is dirty for a reason nobody remembers. Ignored by pattern
 # so the per-run suffix is covered too.
-client/cmd/obfsproxyprobe*/
+client/cmd/obfsprobe-*/
 *.exe
 *.test
 *.out
